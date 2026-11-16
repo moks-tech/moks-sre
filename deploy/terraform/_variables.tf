@@ -34,7 +34,7 @@ variable "ecr_pull_principal_arns" {
 variable "github_repository" {
   description = "owner/name of the repository whose CI may push images."
   type        = string
-  default     = "mrjithendar/moks"
+  default     = "moks-tech/moks-sre"
 }
 
 variable "github_oidc_subject_prefix" {

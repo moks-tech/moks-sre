@@ -29,7 +29,7 @@ DNS_ERROR = (f"Failed to load target state: failed to get cluster info for \"htt
 
 def argo_app(name, namespace, message=DNS_ERROR, server=f"https://{EKS}", path=None):
     return {"metadata": {"name": name}, "spec": {"project": "default", "destination": {"namespace": namespace, "server": server},
-                                                 "source": {"repoURL": "https://github.com/mrjithendar/roboshop-ai.git", "path": path or f"eks/{name}", "targetRevision": "master"}},
+                                                 "source": {"repoURL": "https://github.com/moks-tech/roboshop-ai.git", "path": path or f"eks/{name}", "targetRevision": "master"}},
             "status": {"sync": {"status": "Unknown"}, "health": {"status": "Healthy"}, "resources": [{}],
                        "conditions": [{"type": "ComparisonError", "message": message}]}}
 
@@ -105,7 +105,7 @@ It pins the image digest in `kustomization.yaml`, server dry-runs, applies, wait
 
 class Repos:
     type = "git"
-    repositories = ["mrjithendar/jithendar.com", "mrjithendar/roboshop-ai", "mrjithendar/tools"]
+    repositories = ["moks-tech/jithendar.com", "moks-tech/roboshop-ai", "moks-tech/tools"]
     files: dict[str, dict[str, str]] = {}
     calls: list[tuple] = []
     fail_reads = False
@@ -154,7 +154,7 @@ class Prometheus:
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch):
     Cluster.scenarios, Cluster.argocd = scenarios(), list(ROBOSHOP_APPS)
-    Repos.files, Repos.calls, Repos.fail_reads = {"mrjithendar/jithendar.com": dict(JITHENDAR_FILES), "mrjithendar/roboshop-ai": {"README.md": "# RoboShop\n"}, "mrjithendar/tools": {}}, [], False
+    Repos.files, Repos.calls, Repos.fail_reads = {"moks-tech/jithendar.com": dict(JITHENDAR_FILES), "moks-tech/roboshop-ai": {"README.md": "# RoboShop\n"}, "moks-tech/tools": {}}, [], False
     Prometheus.calls = []
     FakeKubernetes.calls = []
     monkeypatch.setitem(registry.CONNECTOR_TYPES, "kubernetes", Cluster)
@@ -197,7 +197,7 @@ def tools(events: list[dict]) -> list[tuple[str, dict]]:
     return [(e["tool"], e["args"]) for e in events if e["type"] == "tool_call"]
 
 
-async def _runbook(env: str, path: str, text: str, repository="mrjithendar/jithendar.com") -> None:
+async def _runbook(env: str, path: str, text: str, repository="moks-tech/jithendar.com") -> None:
     async with session_scope() as db:
         src = KnowledgeSource(name=f"docs-{uuid.uuid4().hex[:6]}", type="upload", scope_environment=env, scope_namespace="*", config={"repository": repository})
         db.add(src)
@@ -217,7 +217,7 @@ async def test_how_do_i_deploy_returns_grounded_guidance_not_an_incident_report(
     assert rep["response_type"] == "deployment_guidance" and rep["request"]["primary"] == "deployment_guidance"
     # Target resolved from configuration and the repository, each with its provenance
     res = {r["field"]: r for r in rep["request"]["resolutions"]}
-    assert res["repository"]["value"] == "mrjithendar/jithendar.com" and "allowlist" in res["repository"]["source"]
+    assert res["repository"]["value"] == "moks-tech/jithendar.com" and "allowlist" in res["repository"]["source"]
     assert res["namespace"]["value"] == "jithendar" and ("manifests declare" in res["namespace"]["source"] or "Ingress" in res["namespace"]["source"])
     # Steps, prerequisites and rollback come from k8s/README.md, quoted, with placeholders labeled
     a = rep["answer"]
@@ -251,13 +251,13 @@ async def test_how_do_i_deploy_returns_grounded_guidance_not_an_incident_report(
 
 
 async def test_missing_runbook_is_named_as_a_gap_and_no_steps_are_invented(client):
-    Repos.files["mrjithendar/jithendar.com"] = {"src/main.py": "print('hi')\n"}
+    Repos.files["moks-tech/jithendar.com"] = {"src/main.py": "print('hi')\n"}
     env = await _env()
     inv, events = await _ask(client, env, "How do I deploy jithendar.com?")
     a = inv.report["answer"]
     assert inv.report["response_type"] == "deployment_guidance"
     assert a["steps"] == [] and a["rollback"] == []
-    assert any(g["kind"] == "missing_source" and "mrjithendar/jithendar.com" in g["detail"] for g in a["gaps"])
+    assert any(g["kind"] == "missing_source" and "moks-tech/jithendar.com" in g["detail"] for g in a["gaps"])
     assert inv.report["relevance"]["status"] in ("passed", "corrected")
     assert "roboshop" not in json.dumps(inv.report).lower()
 
@@ -275,7 +275,7 @@ async def test_retrieval_and_tool_failures_are_not_reported_as_missing_documenta
     gaps = inv.report["answer"]["gaps"]
     kinds = {g["kind"] for g in gaps}
     assert "retrieval_failure" in kinds
-    assert any("Knowledge search failed" in g["detail"] for g in gaps) and any("Could not read mrjithendar/jithendar.com:" in g["detail"] for g in gaps)
+    assert any("Knowledge search failed" in g["detail"] for g in gaps) and any("Could not read moks-tech/jithendar.com:" in g["detail"] for g in gaps)
     assert not any(g["kind"] == "missing_source" for g in gaps)  # a failure is not proof that nothing is written down
     assert inv.report["answer"]["steps"] == []
 
@@ -307,7 +307,7 @@ async def test_ambiguous_target_asks_one_focused_question(client):
         assert "target" in inv.report["request"]["unresolved"] and inv.report["answer"]["question_for_user"].startswith("Which application")
         assert not any(t.startswith(("k8s_", "prom_", "git_")) for t, _ in tools(events))
     finally:
-        Repos.repositories = ["mrjithendar/jithendar.com", "mrjithendar/roboshop-ai", "mrjithendar/tools"]
+        Repos.repositories = ["moks-tech/jithendar.com", "moks-tech/roboshop-ai", "moks-tech/tools"]
 
 
 async def test_an_unrelated_critical_alert_does_not_hijack_deployment_guidance(client):
@@ -495,7 +495,7 @@ async def test_a_planner_cannot_wander_into_other_applications(client, monkeypat
     ("Explain Argo CD.", "conceptual", None),
     ("Deploy jithendar.com to production.", "execution", None),
     ("Can you restart the checkout deployment?", "execution", None),
-    ("How do I roll back mrjithendar/jithendar.com?", "deployment_guidance", None),
+    ("How do I roll back moks-tech/jithendar.com?", "deployment_guidance", None),
     ("How do I deploy jithendar.com? It is returning 502", "deployment_guidance", "troubleshooting"),
     ("what is wrong", "troubleshooting", None),
     ("Show pods restarting in the last 30 minutes.", "troubleshooting", None),
@@ -521,7 +521,7 @@ def test_file_names_are_not_targets_and_nothing_is_mapped_by_resemblance():
     assert [t.mention for t in intent.extract_targets("why does values.yaml in k8s/README.md differ for jithendar.com")] == ["jithendar.com"]
     t = intent.extract_targets("deploy jithendar.com")[0]
     assert intent.namespace_candidates(t, ["jithendar", "roboshop-ai"]) == ([], ["jithendar"])  # a candidate, not a resolution
-    assert intent.match_repositories(t, ["mrjithendar/jithendar.com", "mrjithendar/tools"]) == (["mrjithendar/jithendar.com"], [])
+    assert intent.match_repositories(t, ["moks-tech/jithendar.com", "moks-tech/tools"]) == (["moks-tech/jithendar.com"], [])
 
 
 def _ledger(*rows):

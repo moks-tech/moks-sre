@@ -14,7 +14,7 @@ metadata:
 spec:
   project: moks-root
   source:
-    repoURL: https://github.com/mrjithendar/moks.git
+    repoURL: https://github.com/moks-tech/moks-sre.git
     targetRevision: master
     path: deploy/argocd/eks/apps
   destination:

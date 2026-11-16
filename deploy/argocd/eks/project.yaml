@@ -10,7 +10,8 @@ metadata:
 spec:
   description: MOKS SRE portal on the roboshop-demo EKS cluster, managed from Argo CD on mk4
   sourceRepos:
-    - https://github.com/mrjithendar/moks.git
+    - https://github.com/moks-tech/moks-sre.git
+    - https://github.com/mrjithendar/moks.git  # until every Application names moks-tech (2026-11-16 org move)
   destinations:
     - name: roboshop-demo
       namespace: moks

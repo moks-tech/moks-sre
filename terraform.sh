@@ -11,7 +11,7 @@ read -r -p "Apply this plan? [y/N] " ok
 [[ "$ok" == "y" ]] || { echo "Not applied."; exit 0; }
 $TF apply moks.tfplan
 
-gh variable set AWS_ROLE_ARN --repo mrjithendar/moks --body "$($TF output -raw ci_role_arn)"
+gh variable set AWS_ROLE_ARN --repo moks-tech/moks-sre --body "$($TF output -raw ci_role_arn)"
 
 # After scripts/create-secrets.sh has created moks/moks-secrets:
 #   scripts/create-runtime-key.sh mk4
