@@ -59,8 +59,8 @@ jobs:
           pip install -r requirements.txt pytest pytest-asyncio pytest-cov
           pip install --no-deps -e .
           if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
-            # Measuring line coverage doubles the suite's time (4m42s to 9m33s on 2026-11-16), so it is measured where
-            # it is read, on pull requests, and a release does not wait for it.
+            # Measuring line coverage slows the suite: 6m06s and 9m33s against 4m49s and 4m42s without it, on the two
+            # runs of 2026-11-16. So it is measured where it is read, on pull requests, and a release does not wait for it.
             python -m pytest -q --cov=moks --cov-report=term:skip-covered
             echo "Backend line coverage: $(python -m coverage report --format=total)%" >> "$GITHUB_STEP_SUMMARY"
           else
