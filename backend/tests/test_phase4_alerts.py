@@ -134,3 +134,38 @@ async def test_poller_only_resolves_incidents_it_opened(client, token, monkeypat
         incs = {i.title.split(":")[0]: i.source for i in (await db.execute(select(Incident).where(Incident.environment_id == env_id))).scalars()}
         resolved = (await db.execute(select(AlertEvent.alertname).where(AlertEvent.environment_id == env_id, AlertEvent.decision == "resolved"))).scalars().all()
     assert incs == {"FromWebhook": "alert-webhook", "FromPoll": "alert-poll"} and resolved == ["FromPoll"]
+
+
+def _alert(name: str) -> dict:
+    from moks import alerts
+
+    labels = {"alertname": name, "severity": "critical", "namespace": "shop"}
+    return {"status": "firing", "labels": labels, "annotations": {"summary": "5xx above 10%"}, "starts_at": None, "fingerprint": alerts.fingerprint(labels)}
+
+
+async def test_one_alert_delivered_at_once_by_webhook_and_poller_opens_one_incident():
+    """Two API replicas and the poller can all hold the same alert at the same moment."""
+    import asyncio
+
+    from moks import alerts
+
+    _, env_id = await _env()
+    results = await asyncio.gather(*(alerts.process(env_id, [_alert("Burst")], source) for source in ("webhook", "prometheus-poll", "webhook", "prometheus-poll")))
+    decisions = sorted(r[0]["decision"] for r in results)
+    assert decisions == ["deduplicated", "deduplicated", "deduplicated", "investigated"], decisions
+    assert len({r[0]["incident_id"] for r in results}) == 1
+    async with session_scope() as db:
+        incidents = (await db.execute(select(Incident.id).where(Incident.environment_id == env_id))).scalars().all()
+        investigations = (await db.execute(select(Investigation.id).where(Investigation.environment_id == env_id))).scalars().all()
+    assert len(incidents) == 1 and len(investigations) == 1
+
+
+async def test_alerts_arriving_together_stay_within_the_hourly_cap():
+    import asyncio
+
+    from moks import alerts
+
+    _, env_id = await _env()
+    results = await asyncio.gather(*(alerts.process(env_id, [_alert(f"Together{i}")], "webhook") for i in range(alerts.MAX_AUTO_PER_HOUR + 2)))
+    decisions = [r[0]["decision"] for r in results]
+    assert decisions.count("investigated") == alerts.MAX_AUTO_PER_HOUR and decisions.count("rate_limited") == 2, decisions

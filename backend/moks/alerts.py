@@ -8,6 +8,10 @@ fingerprinted (alertname + identifying labels). Per environment:
 - otherwise, if the fingerprint was investigated within alert_cooldown_minutes -> cooldown;
 - otherwise a new incident opens; with auto_investigate, MOKS investigates as the automation
   principal, capped at MOKS_AUTO_INVESTIGATIONS_PER_HOUR per environment (rate_limited beyond that).
+
+Each alert is decided in its own transaction, under a lock per environment. The webhook (any API replica)
+and the poller (a worker) can deliver the same alert at the same moment; without the lock both would find
+no open incident and each would open one and start an investigation.
 """
 from __future__ import annotations
 
@@ -18,7 +22,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import audit
@@ -82,6 +86,9 @@ async def process(env_id: uuid.UUID, alerts: list[dict[str, Any]], source: str) 
 
 
 async def _process_one(db: AsyncSession, env_id: uuid.UUID, a: dict[str, Any], source: str) -> dict[str, Any]:
+    # Held until this transaction commits. The checks below (open incident, cooldown, hourly cap) and the rows
+    # they lead to are then one step per environment, whoever delivers the alert.
+    await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"alert:{env_id}"})
     env = await db.get(Environment, env_id)
     now = datetime.now(timezone.utc)
     fp, labels = a["fingerprint"], a["labels"]

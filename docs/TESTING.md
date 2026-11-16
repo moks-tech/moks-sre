@@ -1,5 +1,56 @@
 # Testing
 
+## End to end on kind (2026-11-16)
+
+CI's `e2e` job runs `scripts/e2e-kind.sh` on every pull request and on every push to `master`. It is the first
+place MOKS reads from and writes to a real API server in an automated test. Nothing in it is faked, and it needs
+no credentials: no LLM is configured, so the investigation is rule-based.
+
+What one run does, on a single-node kind cluster:
+
+1. Installs the chart with `values-kind.yaml`, which leaves the chart's defaults alone: the NetworkPolicy, the
+   `moks-reader` ClusterRole, the executor's Role in `moks-lab`, the bundled PostgreSQL, one Secret from
+   `scripts/create-secrets.sh`, and migrations, seed and skills in the init containers. `config.env` is
+   `production` and sign-in is `local`.
+2. Creates one administrator with `moks create-user --password-stdin`, signs in with the password and uses the
+   session cookie and CSRF token like the portal does.
+3. Asks "Why is payments crashing?" about `lab/02-crashloop-config.yaml`. It passes when the run completes and is
+   stored as rule-based, Kubernetes reads succeeded, the report names the `payments` CrashLoopBackOff, every
+   observed fact cites evidence that was collected, and the container's own log line (`invalid PAYMENT_MODE`) is
+   in the evidence.
+4. Creates a `restart_deployment` plan for `lab/e2e-phase3.yaml`'s `moks-e2e` and executes it. It passes when the
+   executor reports `succeeded` with a validated rollout and a second execute of the same plan is refused (409).
+5. Asks the cluster, not MOKS: the Deployment's revision went up by exactly one and carries `restartedAt`.
+6. Runs `moks verify-audit` over the audit records all of that wrote.
+
+First run: [43816682077](https://github.com/mrjithendar/moks-sre/actions/runs/43816682077), passed in 2m47s, with 16
+tool calls, 10 successful Kubernetes reads, 16 cited facts, revision 1 to 2 and 27 audit records verified. It also
+found a defect the unit suite had not: `investigations.mode` was never written, so the API reported that rule-based
+run as `llm`. The column is now stored with the result, and the job checks it.
+
+What it does not show:
+
+- Anything about mk4, or about an LLM: no model plans, reads or writes a report here.
+- Any action other than `restart_deployment`. Scale, rollback, resource and config patches, pod deletion and pull
+  requests, recovery after a failed validation, approval by a second person and the production rule still run
+  against the in-memory writer only.
+- That the NetworkPolicy blocks anything. The job passing shows that what the policy allows is enough for MOKS to
+  work; `scripts/terminal-isolation-test.sh` is the test that proves blocking, for terminal sessions.
+- Prometheus, Loki, Grafana, Git or AWS connectors: the kind environment has a Kubernetes connector only.
+
+Run it locally against a kind cluster of your own (it refuses any other context):
+
+```sh
+kind create cluster
+docker buildx build --load -t moks:e2e . && IMAGE=moks:e2e scripts/e2e-kind.sh
+```
+
+The same pull request added the `image` job, which builds the default image as `release` does, smoke-tests it and
+scans it. Its first scan failed on two fixable HIGH findings in the base image's `zlib1g` (CVE-2026-76844,
+CVE-2026-85091); the image now upgrades its OS packages when it is built. Backend line coverage, reported on pull
+requests, was 77% on that run. Among the least covered files are the two that talk to a cluster, which the fakes
+replace: `connectors/kubernetes.py` at 35% and `actions/writer.py` at 40%.
+
 ## Secret sync with AWS Secrets Manager (2026-11-07)
 
 Local only: PostgreSQL 17, Python 3.15 venv, Node 26, Helm. No real cluster, AWS account, KMS key or IAM policy was
@@ -91,7 +142,7 @@ Results from 2026-10-31. Nothing here ran on mk4, on AWS, or in a container.
 - Read-only RBAC and IAM have not been tested against a real API server or AWS.
 - Pod-bound token expiry has not been tested.
 
-The `terminal` CI job covers the first four on arm64 and amd64, on kind, when a pull request runs. That job and `scripts/terminal-isolation-test.sh` have never run either. `moks-verify-isolation` repeats the checks on the real cluster; see [TERMINAL.md](TERMINAL.md#enabling-it).
+The `terminal` CI job covers the first four on arm64 and amd64, on kind, on every pull request and push. It has run since this list was written, and passed on both architectures on 2026-11-16 (run 43816682077). `moks-verify-isolation` repeats the checks on the real cluster; see [TERMINAL.md](TERMINAL.md#enabling-it).
 
 ## Results (2026-10-30, Phases 1–4, FinOps, skills)
 

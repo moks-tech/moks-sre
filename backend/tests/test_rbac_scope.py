@@ -72,3 +72,15 @@ def test_denied_namespaces_keep_environment_wide_reads_but_force_logql_pinning()
     s = effective_scope(p, env(denied=("kube-system",)), P.INVESTIGATION_RUN)
     assert s.cluster_wide and not s.unrestricted
     assert not s.allows("kube-system") and s.allows("shop")
+
+
+def test_security_doc_lists_every_role():
+    """docs/SECURITY.md is where people look up what a role grants. Its table once covered 5 of 15 roles."""
+    import pathlib
+    import re
+
+    from moks.rbac import ROLES
+
+    doc = (pathlib.Path(__file__).resolve().parents[2] / "docs" / "SECURITY.md").read_text()
+    listed = set(re.findall(r"^\| ([a-z_]+) \|", doc, re.M))
+    assert set(ROLES) <= listed, sorted(set(ROLES) - listed)

@@ -16,16 +16,17 @@ its evidence), **suspected causes with confidence**, **missing evidence**, **nex
 
 Phases 1–4 are implemented, plus FinOps and SRE skills. Not all of it has been proven against live
 services yet: [docs/LIMITATIONS.md](docs/LIMITATIONS.md) has the status of each phase and
-[docs/TESTING.md](docs/TESTING.md) the evidence. In particular, the executor has never run against a
-real API server.
+[docs/TESTING.md](docs/TESTING.md) the evidence. In particular, the executor's only runs against a real API
+server are in CI, on a kind cluster: one restart plan per run ([End to end on kind](docs/TESTING.md#end-to-end-on-kind-2026-11-16)).
+It has not acted on mk4.
 
 | | |
 |---|---|
 | Backend | Python 3.12 · FastAPI · SQLAlchemy/asyncpg · Alembic · kubernetes_asyncio · httpx |
 | Frontend | React 19 · TypeScript · Vite · React Router (basename `/moks`) |
 | Data | PostgreSQL (users, RBAC, sessions, environments, connectors, LLM configs, investigations, evidence, hash-chained audit) |
-| LLM | Provider-neutral: OpenAI(-compatible), Gemini, Amazon Bedrock, Ollama; rule-based fallback |
-| Deploy | One image, Helm chart, Argo CD (a root and one Application per component, [docs/ARGOCD_APP_SPLIT.md](docs/ARGOCD_APP_SPLIT.md)), Traefik Prefix `/moks` without stripping |
+| LLM | Provider-neutral: OpenAI(-compatible), Azure OpenAI, Anthropic, Gemini, Amazon Bedrock, Ollama; rule-based fallback |
+| Deploy | One image, Helm chart, Argo CD (a root and one Application per component, [docs/ARGOCD_APP_SPLIT.md](docs/ARGOCD_APP_SPLIT.md)), served under `/moks` by the app itself, so the edge gateway must not strip the prefix (the Istio ingress gateway on mk4) |
 | Observability | Prometheus metrics on `:9464`, JSON logs for Alloy/Loki, OTel traces, Grafana dashboard |
 
 ## Layout
@@ -34,7 +35,8 @@ real API server.
 backend/          FastAPI app, worker, connectors, tools, orchestrator, migrations, tests
 frontend/         React portal
 reranker/         Optional internal PyTorch reranking service (docs/RERANKING.md)
-deploy/helm/moks  Helm chart (values-hetzner.yaml for mk4, the Hetzner k3s cluster; values-eks.yaml is unused since roboshop-demo was deleted)
+deploy/helm/moks  Helm chart (values-hetzner.yaml for mk4, the Hetzner k3s cluster; values-eks.yaml is unused since roboshop-demo was deleted;
+                  values-kind.yaml is the throwaway cluster of CI's e2e job)
 deploy/argocd     AppProjects, root and child Applications per environment
 deploy/secrets    Secret templates (no real values)
 deploy/terraform  AWS: ECR repo, GitHub OIDC CI role, MOKS runtime IAM user (Bedrock)
@@ -42,7 +44,7 @@ deploy/rbac, iam  Kubernetes RBAC and AWS IAM examples
 deploy/grafana    Dashboard JSON and Prometheus scrape job
 lab/              Four reproducible incidents with expected evidence and fixes
 dev/              Local run script and seed
-scripts/          create-secrets(-hetzner), backup, deploy-hetzner
+scripts/          create-secrets(-hetzner), backup, deploy-hetzner, e2e-kind (MOKS end to end on a kind cluster)
 docs/             Architecture, security/RBAC, connectors, operator guide, testing, limitations
 ```
 

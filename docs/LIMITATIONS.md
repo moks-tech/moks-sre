@@ -6,7 +6,7 @@
 |---|---|---|
 | 1 | Login + RBAC, `/moks` portal, Kubernetes/Prometheus/Loki, cited investigations, streaming, audit, Helm/Argo | Verified live, except streaming through the ingress, which has not been checked |
 | 2 | EKS (remote), CloudWatch, Grafana, Git connectors; RAG (Postgres/pgvector/OpenSearch); incident workspaces | Git and keyword RAG verified live. Vector search, Grafana, CloudWatch and EKS are not: see below |
-| 3 | Approvals, allowlisted remediation with pre/post validation and recovery, diagnostic sessions | Tested with fakes only. No plan has run against a real API server |
+| 3 | Approvals, allowlisted remediation with pre/post validation and recovery, diagnostic sessions | Tested with fakes, and one `restart_deployment` plan per run on a kind cluster in CI ([TESTING.md](TESTING.md#end-to-end-on-kind-2026-11-16)). No plan has run on mk4 |
 | 4 | Alert-triggered investigations (webhook + poller) with dedup/cooldowns, incident reports and postmortems, evaluation datasets | Tested with fakes. Not exercised on mk4 since the rewrite |
 | + | FinOps (AWS cost, anomalies, budgets, Kubernetes allocation and rightsizing, LLM spend) | Kubernetes allocation runs live but reports 0 until a price is set. AWS side tested with fakes only |
 | + | SRE skills (`SKILL.md`) | 51 built-in skills; custom skills via ConfigMap |
@@ -76,8 +76,9 @@ backends does not move vectors: run a reindex afterwards, which pays to embed ev
 - **Alerts:** the poller reads Prometheus rule state only (no Alertmanager silences or inhibition).
   The automatic-investigation cap is one number for every environment (`config.autoInvestigationsPerHour`, default 6
   per hour); there is no per-environment setting.
-- **Executor:** the write path has only been tested with an in-memory writer. No plan has run against a
-  real API server.
+- **Executor:** one action, `restart_deployment`, runs against a real API server: a kind cluster in CI's `e2e`
+  job. Every other action, recovery after a failed validation and approval by a second person have only been
+  tested with an in-memory writer, and no plan has run on mk4.
 - **FinOps:** allocation covers current pods only; Cost Explorer lags up to 24 h and costs $0.01/request (cached and capped).
 - **Multi-environment views:** each environment queries at most 40 namespaces (the view says so
   when it stops), 6 at a time. Log results are merged and cut to the line limit, so a busy

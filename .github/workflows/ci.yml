@@ -1,17 +1,24 @@
 name: moks
 
-# check   -> pull requests only: backend tests against PostgreSQL, frontend typecheck/build,
-#            Helm lint/render, Argo CD child Applications against the chart
+# check   -> pull requests and pushes: backend tests against PostgreSQL (with line coverage on pull requests),
+#            frontend typecheck/build, Helm lint/render, Argo CD child Applications against the chart
+# image   -> pull requests and pushes: the default image built as release builds it, smoke-tested and scanned
+# e2e     -> pull requests and pushes: the chart on a kind cluster; one lab incident investigated and one Deployment
+#            restarted by the executor through an action plan (scripts/e2e-kind.sh)
 # terminal -> pull requests and pushes: diagnostic image build, scan and isolation test on kind
-# crewai  -> pull requests: the backend suite again on the CrewAI dependency set (pydantic 2.12.5 + crewai,
+# crewai  -> pull requests and pushes: the backend suite again on the CrewAI dependency set (pydantic 2.12.5 + crewai,
 #            backend/requirements-crewai.txt), which is what an image built with MOKS_CREWAI=true runs
-# release -> default branch: build the arm64 image once and push it as latest, the only tag. The commit is baked in.
-# release-crewai -> the same image with the CrewAI extra (MOKS_CREWAI=true), pushed as moks-crewai:latest. mk4 runs
-#            it only when values-hetzner.yaml points image.repository there (docs/crewai-investigation.md).
+# release -> default branch, after check passed on that commit: build the arm64 image once and push it as latest,
+#            the only tag. The commit is baked in.
+# release-crewai -> the same image with the CrewAI extra (MOKS_CREWAI=true), pushed as moks-crewai:latest, after
+#            check and crewai passed. mk4 runs it only when values-hetzner.yaml points image.repository there
+#            (docs/crewai-investigation.md).
 # deploy  -> after release, only when repository variable MK4_DEPLOY is "true": Argo CD deploys. CI asks it to
 #            sync the MOKS Applications from master in order, then to restart the Deployments that run
 #            moks:latest, and checks the site reports the new commit. CI has no Kubernetes credentials: only an
 #            Argo CD token for project role moks/ci (get, sync, restart; scripts/setup-argocd-ci.sh).
+#
+# Actions that are not GitHub's own are pinned to a commit, with the release in a comment; Dependabot moves both.
 
 on:
   workflow_dispatch:
@@ -27,10 +34,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # On a pull request this is the gate before merging. On a push to the default branch it runs again on the commit
+  # that will be released, because that commit (a merge, or a direct push) is not the one the pull request tested.
   check:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17-alpine
@@ -48,9 +56,16 @@ jobs:
         env:
           MOKS_TEST_DATABASE_URL: postgresql://moks:moks@localhost:5432/postgres
         run: |
-          pip install -r requirements.txt pytest pytest-asyncio
+          pip install -r requirements.txt pytest pytest-asyncio pytest-cov
           pip install --no-deps -e .
-          python -m pytest -q
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            # Measuring line coverage slows the suite: 6m06s and 9m33s against 4m49s and 4m42s without it, on the two
+            # runs of 2026-11-16. So it is measured where it is read, on pull requests, and a release does not wait for it.
+            python -m pytest -q --cov=moks --cov-report=term:skip-covered
+            echo "Backend line coverage: $(python -m coverage report --format=total)%" >> "$GITHUB_STEP_SUMMARY"
+          else
+            python -m pytest -q
+          fi
       # Undefined names and syntax errors only: the cheap class of bug the tests can miss in an unexercised branch.
       - name: Backend lint (undefined names, syntax)
         run: |
@@ -64,7 +79,7 @@ jobs:
           npm ci --no-audit --no-fund
           npm run build
           npm test
-      - uses: azure/setup-helm@v5
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e   # v5.1.0
       - name: Helm
         run: |
           helm lint deploy/helm/moks -f deploy/helm/moks/values-hetzner.yaml
@@ -72,17 +87,62 @@ jobs:
           helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-hetzner.yaml > /dev/null
           helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-hetzner.yaml --set secrets.split=true,backup.enabled=true,backup.bucket=ci,velero.enabled=true > /dev/null
           helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-eks.yaml --set image.tag=ci,secrets.split=true > /dev/null
+          helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-kind.yaml > /dev/null
       - name: Argo CD Applications add up to the chart
         run: |
           pip install pyyaml
           python scripts/validate-argocd-split.py
-      - uses: hashicorp/setup-terraform@v4
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e   # v4.0.1
       - name: Terraform
         working-directory: deploy/terraform
         run: |
           terraform fmt -check -recursive
           terraform init -backend=false -input=false
           terraform validate
+
+  # The default image, built on the architecture and with the commands release uses, so a Dockerfile or dependency
+  # change that cannot build, start or pass the scan is found on the pull request and not after the merge.
+  image:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - name: Build and smoke-test
+        run: |
+          docker build --build-arg GIT_COMMIT=${{ github.sha }} -t moks:scan .
+          docker run -d --name smoke -e MOKS_ENV=development -e MOKS_AUTH_MODE=local -p 8080:8080 moks:scan
+          for i in $(seq 1 30); do curl -fsS localhost:8080/healthz && break; sleep 1; done
+          curl -fsS localhost:8080/moks/ | grep -q '<div id="root">'
+          curl -fsS localhost:8080/moks/api/health | grep -q '${{ github.sha }}'
+          docker rm -f smoke
+      - name: Scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25   # v0.36.0
+        with:
+          image-ref: moks:scan
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # MOKS on a real API server (docs/TESTING.md). The unit suite runs the investigation and the executor against
+  # fakes; this installs the chart on kind with its NetworkPolicy, RBAC and bundled PostgreSQL, has MOKS investigate
+  # a crash-looping lab workload without a model, and has the executor restart a Deployment through an action plan.
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with: {persist-credentials: false}
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e   # v5.1.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
+      - name: Build
+        run: docker buildx build --load --build-arg GIT_COMMIT=${{ github.sha }} -t moks:e2e .
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc   # v1.14.0
+        with: {cluster_name: kind}
+      - name: Investigate and remediate on a real cluster
+        env:
+          IMAGE: moks:e2e
+        run: scripts/e2e-kind.sh
 
   # The diagnostic image on both architectures, its vulnerability scan, and real isolation checks on
   # kind, which runs the same network plugin as mk4. Runs when something the terminal depends on changes.
@@ -99,8 +159,8 @@ jobs:
         with: {persist-credentials: false}
       - uses: actions/setup-python@v7
         with: {python-version: "3.12"}
-      - uses: azure/setup-helm@v5
-      - uses: docker/setup-buildx-action@v4
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e   # v5.1.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
       - name: Build
         run: docker buildx build --load -t moks-terminal:test deploy/terminal
       - name: Runs read-only, unprivileged, with every tool present
@@ -120,7 +180,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: deploy/terminal/.trivyignore
-      - uses: helm/kind-action@v1
+      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc   # v1.14.0
         with: {cluster_name: kind, config: deploy/terminal/kind-isolation.yaml}
       - name: Isolation on a real cluster
         env:
@@ -131,9 +191,8 @@ jobs:
           scripts/terminal-isolation-test.sh
 
   release:
-    needs: check
-    # check is skipped on a push, and a skipped need would skip this job too, so that case is allowed here.
-    if: ${{ !cancelled() && needs.check.result == 'skipped' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: check   # must have passed on this commit: nothing untested is pushed as latest
+    if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     permissions:
@@ -174,8 +233,8 @@ jobs:
           retention-days: 400
 
   release-crewai:
-    needs: check
-    if: ${{ !cancelled() && needs.check.result == 'skipped' && github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: [check, crewai]   # the suite on both dependency sets
+    if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
@@ -236,6 +295,9 @@ jobs:
       # sent as two headers on every call. Unset = no headers (before Access is switched on).
       CF_ACCESS_CLIENT_ID: ${{ secrets.CF_ACCESS_CLIENT_ID }}
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
+      # The CLI holds the token above, so it is checked against the release's cli_checksums.txt. Change both together.
+      ARGOCD_VERSION: v3.5.6
+      ARGOCD_SHA256: db9d17b70593d3f86a4dcf08d9ebbb85a42e995426ac5f928b737260656102d3
     steps:
       - name: Install the argocd CLI
         run: |
@@ -244,7 +306,8 @@ jobs:
             # argocd splits each --header at its first ":" and keeps the rest as is: no space after the colon.
             echo "ARGOCD_OPTS=$ARGOCD_OPTS --header CF-Access-Client-Id:$CF_ACCESS_CLIENT_ID --header CF-Access-Client-Secret:$CF_ACCESS_CLIENT_SECRET" >> "$GITHUB_ENV"
           fi
-          curl -fsSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/download/v3.5.6/argocd-linux-amd64
+          curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/download/$ARGOCD_VERSION/argocd-linux-amd64"
+          echo "$ARGOCD_SHA256  /usr/local/bin/argocd" | sha256sum --check --strict
           chmod +x /usr/local/bin/argocd
           argocd version --client --short
       # Git first: sync every child in the order docs/ARGOCD_APP_SPLIT.md section 6 sets, so the ConfigMap
@@ -293,7 +356,6 @@ jobs:
           echo "::error::https://jithendar.com/moks/api/health does not report ${{ github.sha }}"; exit 1
 
   crewai:
-    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     services:
@@ -403,7 +465,7 @@ jobs:
           HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
         run: printf '%s' "$HARBOR_PASSWORD" | docker login registry.jithendar.com --username "$HARBOR_USERNAME" --password-stdin
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
       - name: Build, smoke-test and push for arm64 and amd64
         working-directory: deploy/opensearch
         run: |
@@ -433,7 +495,7 @@ jobs:
           HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
           HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
         run: printf '%s' "$HARBOR_PASSWORD" | docker login registry.jithendar.com --username "$HARBOR_USERNAME" --password-stdin
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
       - name: Build and push for arm64 and amd64
         run: |
           IMAGE="$REGISTRY/$REPOSITORY:latest"

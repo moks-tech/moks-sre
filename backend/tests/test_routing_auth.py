@@ -160,3 +160,134 @@ async def test_health_reports_the_build_and_mixed_versions_are_detected(client):
     async with session_scope() as db:
         await db.execute(text("INSERT INTO component_versions (instance, component, commit_sha, version) VALUES ('executor:old', 'executor', 'abc', '0.1.0')"))
     assert (await client.get("/moks/api/system/versions")).json()["mixed"] is True
+
+
+async def test_password_check_does_not_run_on_the_event_loop(client, monkeypatch):
+    """argon2id takes tens of milliseconds and 64 MiB by design. On the loop it would stall every other request."""
+    import threading
+
+    from moks.auth import routes
+    from moks.cli import _create_user
+    from moks.config import get_settings
+
+    class Spy:
+        def __init__(self, real):
+            self.real, self.threads = real, []
+
+        def verify(self, hashed, password):
+            self.threads.append(threading.current_thread())
+            return self.real.verify(hashed, password)
+
+        def __getattr__(self, name):
+            return getattr(self.real, name)
+
+    monkeypatch.setattr(get_settings(), "auth_mode", "local")
+    monkeypatch.setattr(get_settings(), "rate_login_per_minute", 1000)  # the rate-limit test above used this address's allowance
+    await _create_user("threaded@example.com", "a-very-long-password", ["viewer"])
+    spy = Spy(routes.hasher)
+    monkeypatch.setattr(routes, "hasher", spy)
+    bad = await client.post("/moks/api/auth/login", json={"email": "threaded@example.com", "password": "not-the-password"})
+    ok = await client.post("/moks/api/auth/login", json={"email": "threaded@example.com", "password": "a-very-long-password"})
+    assert (bad.status_code, ok.status_code) == (401, 200), (bad.text, ok.text)
+    assert len(spy.threads) == 2 and all(t is not threading.current_thread() for t in spy.threads)
+
+
+async def _oidc_sign_in(client, monkeypatch, *, sub: str, email: str):
+    """One sign-in through /auth/oidc/login and /auth/oidc/callback against a stand-in identity provider.
+    The provider's side (discovery, the token endpoint, the ID token's signature) is replaced; MOKS's side runs."""
+    import types
+    from urllib.parse import parse_qs, urlsplit
+
+    import httpx
+
+    from moks.auth import routes
+    from moks.config import get_settings
+
+    s = get_settings()
+    for name, value in {"auth_mode": "oidc", "oidc_issuer": "https://idp.example", "oidc_client_id": "moks", "rate_login_per_minute": 1000}.items():
+        monkeypatch.setattr(s, name, value)
+
+    async def discovery():
+        return {"issuer": "https://idp.example", "authorization_endpoint": "https://idp.example/authorize", "token_endpoint": "https://idp.example/token", "_jwks": {"keys": []}}
+
+    class TokenEndpoint:
+        def __init__(self, **_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return False
+
+        async def post(self, url, **_):
+            return httpx.Response(200, json={"id_token": "verified-by-the-stand-in"}, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(routes, "_discovery", discovery)
+    monkeypatch.setattr(routes, "httpx", types.SimpleNamespace(AsyncClient=TokenEndpoint))
+    monkeypatch.setattr(routes, "_validate_id_token", lambda id_token, meta, nonce: {"sub": sub, "email": email, "email_verified": True, "name": "Pat"})
+    client.cookies.clear()
+    start = await client.get("/moks/api/auth/oidc/login", follow_redirects=False)
+    assert start.status_code == 302 and start.headers["location"].startswith("https://idp.example/authorize?"), start.text
+    state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+    return await client.get("/moks/api/auth/oidc/callback", params={"code": "one-time-code", "state": state}, follow_redirects=False)
+
+
+async def _subject_of(email: str):
+    from sqlalchemy import select
+
+    from moks.db import session_scope
+    from moks.models import User
+
+    async with session_scope() as db:
+        return (await db.execute(select(User.subject).where(User.email == email))).scalar_one()
+
+
+async def test_oidc_account_belongs_to_the_subject_that_created_it(client, monkeypatch):
+    """An email claim is not an identity. A second subject presenting an existing account's email used to be
+    signed in as that account, with its roles."""
+    email = "pat@oidc.example"
+    first = await _oidc_sign_in(client, monkeypatch, sub="subject-a", email=email)
+    assert first.status_code == 302 and first.headers["location"] == "/moks/", first.headers.get("location")
+    assert (await client.get("/moks/api/auth/me")).json()["email"] == email
+    assert await _subject_of(email) == "subject-a"
+
+    other = await _oidc_sign_in(client, monkeypatch, sub="subject-b", email=email)
+    assert other.status_code == 302 and other.headers["location"] == "/moks/login?error=identity_conflict", other.headers.get("location")
+    assert (await client.get("/moks/api/auth/me")).status_code == 401
+    assert await _subject_of(email) == "subject-a"
+
+    again = await _oidc_sign_in(client, monkeypatch, sub="subject-a", email=email)
+    assert again.headers["location"] == "/moks/" and (await client.get("/moks/api/auth/me")).json()["email"] == email
+
+
+async def test_unlinked_oidc_account_takes_the_next_subject_that_signs_in(client, monkeypatch):
+    """`moks unlink-identity` is the way back for a person whose subject changed at the provider."""
+    from sqlalchemy import select
+
+    from moks.cli import _unlink_identity
+    from moks.db import session_scope
+    from moks.models import AuditEvent
+
+    email = "moved@oidc.example"
+    assert (await _oidc_sign_in(client, monkeypatch, sub="before-the-move", email=email)).headers["location"] == "/moks/"
+    signed_in = dict(client.cookies)
+    await _unlink_identity(email)
+    assert await _subject_of(email) is None
+    client.cookies.update(signed_in)
+    assert (await client.get("/moks/api/auth/me")).status_code == 401  # unlinking ended the sessions it had
+
+    assert (await _oidc_sign_in(client, monkeypatch, sub="after-the-move", email=email)).headers["location"] == "/moks/"
+    assert await _subject_of(email) == "after-the-move"
+    async with session_scope() as db:
+        actions = (await db.execute(select(AuditEvent.action).where(AuditEvent.actor_email.in_([email, "cli"]), AuditEvent.action.in_(["user.unlink_identity", "user.link_identity"])))).scalars().all()
+    assert "user.unlink_identity" in actions and "user.link_identity" in actions
+
+
+async def test_oidc_refuses_an_email_that_belongs_to_a_password_account(client, monkeypatch):
+    from moks.cli import _create_user
+
+    await _create_user("local-first@oidc.example", "a-very-long-password", ["viewer"])  # created in the suite's own mode, not oidc
+    r = await _oidc_sign_in(client, monkeypatch, sub="subject-c", email="local-first@oidc.example")
+    assert r.headers["location"] == "/moks/login?error=account_conflict"
+    assert (await client.get("/moks/api/auth/me")).status_code == 401

@@ -237,6 +237,7 @@ async def test_prompt_injection_cannot_widen_tools_or_scope(client, monkeypatch)
                 c.is_active = False
 
     assert done.status == "completed", done.error
+    assert done.mode == "llm"
     # The injected log text reached the model only inside an untrusted block, with the secret redacted
     planner_prompt = llm.requests[1]["messages"][1]["content"] if len(llm.requests) > 1 else llm.requests[0]["messages"][1]["content"]
     assert "hunter2hunter2" not in json.dumps(llm.requests)
@@ -258,3 +259,19 @@ async def test_prompt_injection_cannot_widen_tools_or_scope(client, monkeypatch)
     assert "resolved" not in rep["summary"].lower() and rep["validation"]["summary_sentences_removed"]
     assert rep["proposed_remediation"][0]["executable"] is False
     assert done.tokens_in >= 2000 and float(done.cost_usd) > 0
+
+
+async def test_the_stored_mode_says_whether_a_model_answered(client):
+    """The mode column kept its default, "llm", for every run, so the API reported a rule-based answer as a
+    model's. CI's e2e job on kind showed it: no LLM was configured there."""
+    async with session_scope() as db:
+        for other in (await db.execute(select(LLMConfig).where(LLMConfig.is_active.is_(True)))).scalars():
+            other.is_active = False
+    env = await _env("mode")
+    await make_user("mode@example.com", [f"investigator:{env}:*"])
+    h = await login(client, "mode@example.com")
+    inv = (await client.post("/moks/api/investigations", json={"question": "what is wrong in shop?", "environment": env, "namespace": "shop"}, headers=h)).json()
+    done = await _run(inv["id"])
+    assert done.status == "completed", done.error
+    assert done.report["generated_by"] == "rules" and done.mode == "deterministic"
+    assert (await client.get(f"/moks/api/investigations/{inv['id']}")).json()["mode"] == "deterministic"
