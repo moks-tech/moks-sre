@@ -121,6 +121,7 @@ class Investigator:
         self.guard: AccessGuard | None = None
         self.owner: uuid.UUID | None = None
         self.revoked: str | None = None
+        self.mode: str | None = None  # llm | deterministic | llm_fallback: stored with the result (_finish)
         self.connectors_override = connectors_override  # evaluation runs supply fixture connectors
         self.use_llm = use_llm
         self.id = investigation_id
@@ -333,6 +334,8 @@ class Investigator:
                 status=status, report=report, error=error, finished_at=datetime.now(timezone.utc),
                 tool_calls=self.tool_calls, tokens_in=self.tokens_in, tokens_out=self.tokens_out, cost_usd=self.cost,
                 skill_generation=self.skill_generation, skill_pins=self.skill_runs,
+                # The column defaults to "llm", so a run that never set it was listed as a model's answer.
+                **({"mode": self.mode} if self.mode else {}),
             ).returning(Investigation.id))).first()
             if won is None:
                 self.lost = True
@@ -504,7 +507,7 @@ class Investigator:
 
         for ctype, msg in conn_errors.items():
             self.notes.append(f"{ctype} connector unavailable: {msg}")
-        mode = "llm" if llm_cfg else "deterministic"
+        mode = self.mode = "llm" if llm_cfg else "deterministic"
         if not llm_cfg:
             self.notes.append("No active chat LLM is configured; the report is rule-based.")
         scope_info = {
@@ -534,7 +537,7 @@ class Investigator:
                 final = await graph.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, (LLMError, BudgetExceeded), resumed)
             await db.commit()
         namespace, report = final["namespace"], final["report"]
-        mode = final.get("mode") or mode
+        mode = self.mode = final.get("mode") or mode
         req = self.request or build_request(question)
         await self._emit("phase", {"phase": "verification", "label": "Verifying causes against direct evidence"})
         ledger = self._ledger(namespace)

@@ -114,7 +114,9 @@ def investigate(s: Session) -> None:
     live = [e for e in evidence if e["ok"] and e["tool"].startswith("k8s_")]
     if not live:
         fail("no Kubernetes evidence was collected from the API server")
-    ok(f"investigation completed ({inv['mode']}, {inv['tool_calls']} tool calls, {len(live)} successful Kubernetes reads)")
+    if inv["mode"] != "deterministic" or report.get("generated_by") != "rules":
+        fail(f"no LLM is configured, so this run should be stored as rule-based, not {inv['mode']}/{report.get('generated_by')}")
+    ok(f"investigation completed without a model ({inv['tool_calls']} tool calls, {len(live)} successful Kubernetes reads)")
 
     text = json.dumps(report).lower()
     if "payments" not in text or "crashloopbackoff" not in text:
@@ -130,10 +132,9 @@ def investigate(s: Session) -> None:
         fail("observed facts cite evidence that was not collected", uncited)
     ok(f"every observed fact ({len(facts)}) cites evidence that was collected")
 
-    if "PAYMENT_MODE" in json.dumps(evidence):
-        ok("the crash's own log line (invalid PAYMENT_MODE) is in the evidence")
-    else:
-        print("note  the container's log line (invalid PAYMENT_MODE) is not in the evidence", flush=True)
+    if "PAYMENT_MODE" not in json.dumps(evidence):  # only the container's log names it: the pod spec uses envFrom, and MOKS cannot read ConfigMaps
+        fail("the container's own log line (invalid PAYMENT_MODE=lve), which is the cause, is not in the evidence")
+    ok("the crash's own log line (invalid PAYMENT_MODE) is in the evidence")
 
 
 def restart_through_a_plan(s: Session) -> None:
