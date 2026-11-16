@@ -1,0 +1,42 @@
+# The throwaway kind cluster that CI's e2e job installs MOKS on (scripts/e2e-kind.sh). Not a deployment target.
+# Everything not set here is the chart default, NetworkPolicy included, so the job tests the chart as it ships:
+# the bundled PostgreSQL, one Secret, migrations in the init containers, the reader ClusterRole and the executor's
+# per-namespace Role.
+image:
+  repository: moks
+  tag: e2e                 # the script sets both from IMAGE; the image is side-loaded with `kind load`, never pulled
+  pullPolicy: IfNotPresent
+
+publicUrl: http://127.0.0.1:18080/moks   # where the script's port-forward listens
+
+config:
+  env: production          # the settings validation a real install passes: a session secret, no dev sign-in
+  authMode: local          # the script creates one administrator with `moks create-user`
+
+# No LLM provider is seeded, so investigations are rule-based: the job needs no credentials and no network
+# beyond the cluster, and its result does not depend on a model.
+seed:
+  environments:
+    - name: kind
+      display_name: kind (CI)
+      kind: kubernetes
+      is_default: true
+      is_production: false
+      allowed_namespaces: ["*"]
+      denied_namespaces: ["kube-system"]
+      max_query_window_minutes: 360
+      connectors:
+        - type: kubernetes
+          name: in-cluster
+          config: {mode: in_cluster, timeout_seconds: 15, executor: {mode: in_cluster}}
+
+api:
+  replicas: 1
+
+# The executor may write in the lab namespace only. lab/00-namespace.yaml must be applied first: the chart
+# binds a Role in each namespace listed here.
+executor:
+  enabled: true
+  namespaces: [moks-lab]
+
+# networkPolicy.apiServer.cidrs is set by the script: the API server's addresses differ per cluster.
