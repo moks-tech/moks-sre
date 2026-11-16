@@ -8,6 +8,7 @@
   moks worker                        run the investigation worker
   moks create-user EMAIL [--password-stdin] [--grant ROLE[:ENV[:NS]] ...]
   moks grant EMAIL ROLE[:ENV[:NS]]   add a role binding
+  moks unlink-identity EMAIL         clear an OIDC account's subject, so its next sign-in links it again
   moks verify-audit                  recompute the audit hash chain
   moks executor                      run the action/diagnostics executor (write credentials)
   moks terminal                      run the terminal gateway (pods in the terminal namespace only)
@@ -225,6 +226,27 @@ async def _grant(email: str, grant: str) -> None:
         if (await db.execute(select(User).where(User.email == email.lower()))).scalar_one_or_none() is None:
             raise SystemExit(f"no user {email}; with OIDC they must sign in once first")
     await _create_user(email, None, [grant])
+
+
+async def _unlink_identity(email: str) -> None:
+    """An OIDC account belongs to one subject (auth/routes.py). When a person's subject really changed, for example
+    after the client was registered again at the provider, this clears it and ends their sessions; the next
+    sign-in with the account's email links the new subject."""
+    from sqlalchemy import select
+
+    from . import audit
+    from .auth.sessions import revoke_all_for_user
+    from .db import session_scope
+    from .models import User
+
+    async with session_scope() as db:
+        user = (await db.execute(select(User).where(User.email == email.lower()))).scalar_one_or_none()
+        if user is None or user.auth_provider != "oidc":
+            raise SystemExit(f"no OIDC user {email}")
+        user.subject = None
+        await revoke_all_for_user(db, user.id)
+        await audit.record(db, action="user.unlink_identity", actor_email="cli", resource_type="user", resource_id=str(user.id), details={"email": user.email})
+    print(f"user {email}: identity unlinked; the next sign-in with this email links it again")
 
 
 async def _verify() -> None:
@@ -536,6 +558,8 @@ def main(argv: list[str] | None = None) -> None:
     g = sub.add_parser("grant")
     g.add_argument("email")
     g.add_argument("grant")
+    ui = sub.add_parser("unlink-identity", help="clear an OIDC account's subject; its next sign-in links it again")
+    ui.add_argument("email")
     sub.add_parser("verify-audit")
     sub.add_parser("executor")
     sub.add_parser("terminal")
@@ -613,6 +637,8 @@ def main(argv: list[str] | None = None) -> None:
         asyncio.run(_create_user(a.email, pw, a.grant))
     elif a.cmd == "grant":
         asyncio.run(_grant(a.email, a.grant))
+    elif a.cmd == "unlink-identity":
+        asyncio.run(_unlink_identity(a.email))
     elif a.cmd == "verify-audit":
         asyncio.run(_verify())
     elif a.cmd == "executor":

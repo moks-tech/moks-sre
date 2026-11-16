@@ -3,13 +3,15 @@
 Modes (MOKS_AUTH_MODE):
 - oidc:  authorization code flow with PKCE and nonce against any OIDC provider (Okta, Entra ID,
          Google, Keycloak, Dex...). Users are created on first sign-in WITHOUT roles unless
-         listed in MOKS_BOOTSTRAP_ADMINS or mapped through MOKS_OIDC_GROUP_ROLES.
+         listed in MOKS_BOOTSTRAP_ADMINS or mapped through MOKS_OIDC_GROUP_ROLES. An account belongs
+         to the subject (`sub`) that created it; the same email under another subject is refused.
 - local: email + password (argon2id). Users are created by an administrator (UI or CLI);
          there is no self-registration and no first-visitor setup page.
 - dev:   password-less sign-in for local development only (refused unless MOKS_ENV=development).
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -135,7 +137,9 @@ async def local_login(body: LoginIn, request: Request, response: Response, db: A
     user = (await db.execute(select(User).where(User.email == body.email.lower()))).scalar_one_or_none()
     ok = False
     try:
-        ok = hasher.verify(user.password_hash if user and user.password_hash else _DUMMY_HASH, body.password)
+        # argon2id is deliberately slow and uses 64 MiB. In a thread, a sign-in does not hold up every other
+        # request and event stream this process is serving.
+        ok = await asyncio.to_thread(hasher.verify, user.password_hash if user and user.password_hash else _DUMMY_HASH, body.password)
     except (VerificationError, InvalidHashError):
         ok = False
     if not ok or user is None or not user.is_active or user.auth_provider != "local":
@@ -143,7 +147,7 @@ async def local_login(body: LoginIn, request: Request, response: Response, db: A
                            details={"mode": "local"}, ip=ip)
         raise HTTPException(401, "Invalid email or password")
     if hasher.check_needs_rehash(user.password_hash):
-        user.password_hash = hasher.hash(body.password)
+        user.password_hash = await asyncio.to_thread(hasher.hash, body.password)
     await create_session(db, response, request, user)
     await _ensure_bootstrap(db, user)
     await audit.record(db, action="auth.login", actor_id=user.id, actor_email=user.email, decision="allow", details={"mode": "local"}, ip=ip)
@@ -271,13 +275,25 @@ async def oidc_callback(request: Request, db: AsyncSession = Depends(get_db, sco
                            details={"mode": "oidc", "reason": "domain"}, ip=client_ip(request))
         return RedirectResponse(f"{login_page}?error=domain", status_code=302)
 
-    user = (await db.execute(select(User).where(User.auth_provider == "oidc", User.subject == str(claims["sub"])))).scalar_one_or_none()
+    subject = str(claims["sub"])
+    user = (await db.execute(select(User).where(User.auth_provider == "oidc", User.subject == subject))).scalar_one_or_none()
     if user is None:
         user = (await db.execute(select(User).where(User.email == email))).scalar_one_or_none()
         if user is not None and user.auth_provider != "oidc":
             return RedirectResponse(f"{login_page}?error=account_conflict", status_code=302)
+        if user is not None and user.subject:
+            # The account is another subject's. An email claim is not an identity: providers reassign addresses, and
+            # some issue the claim unverified. `moks unlink-identity` is how an administrator lets a person whose
+            # subject really changed sign in again.
+            await audit.record(None, action="auth.login", actor_email=email, decision="deny", outcome="failure", resource_type="user", resource_id=str(user.id),
+                               details={"mode": "oidc", "reason": "subject_mismatch"}, ip=client_ip(request))
+            return RedirectResponse(f"{login_page}?error=identity_conflict", status_code=302)
+        if user is not None:
+            user.subject = subject  # an account with no subject (unlinked by an administrator) takes the first one that signs in with its email
+            await audit.record(db, action="user.link_identity", actor_id=user.id, actor_email=email, resource_type="user", resource_id=str(user.id),
+                               details={"via": "oidc"}, ip=client_ip(request))
     if user is None:
-        user = User(email=email, display_name=str(claims.get("name") or email), auth_provider="oidc", subject=str(claims["sub"]))
+        user = User(email=email, display_name=str(claims.get("name") or email), auth_provider="oidc", subject=subject)
         db.add(user)
         await db.flush()
         await audit.record(db, action="user.create", actor_id=user.id, actor_email=email, resource_type="user",

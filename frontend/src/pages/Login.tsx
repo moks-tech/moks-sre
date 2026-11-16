@@ -13,6 +13,7 @@ const ERRORS: Record<string, string> = {
   domain: "Your email domain is not allowed to sign in.",
   disabled: "Your MOKS account is disabled.",
   account_conflict: "An account with this email uses a different sign-in method.",
+  identity_conflict: "This email belongs to a MOKS account that is linked to a different identity at your provider. Ask an administrator to unlink it.",
 };
 
 export default function Login() {
