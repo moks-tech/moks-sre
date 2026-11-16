@@ -1,7 +1,7 @@
 name: moks
 
-# check   -> pull requests and pushes: backend tests against PostgreSQL (with line coverage), frontend
-#            typecheck/build, Helm lint/render, Argo CD child Applications against the chart
+# check   -> pull requests and pushes: backend tests against PostgreSQL (with line coverage on pull requests),
+#            frontend typecheck/build, Helm lint/render, Argo CD child Applications against the chart
 # image   -> pull requests and pushes: the default image built as release builds it, smoke-tested and scanned
 # e2e     -> pull requests and pushes: the chart on a kind cluster; one lab incident investigated and one Deployment
 #            restarted by the executor through an action plan (scripts/e2e-kind.sh)
@@ -58,8 +58,14 @@ jobs:
         run: |
           pip install -r requirements.txt pytest pytest-asyncio pytest-cov
           pip install --no-deps -e .
-          python -m pytest -q --cov=moks --cov-report=term:skip-covered
-          echo "Backend line coverage: $(python -m coverage report --format=total)%" >> "$GITHUB_STEP_SUMMARY"
+          if [[ "$GITHUB_EVENT_NAME" == pull_request ]]; then
+            # Measuring line coverage doubles the suite's time (4m42s to 9m33s on 2026-11-16), so it is measured where
+            # it is read, on pull requests, and a release does not wait for it.
+            python -m pytest -q --cov=moks --cov-report=term:skip-covered
+            echo "Backend line coverage: $(python -m coverage report --format=total)%" >> "$GITHUB_STEP_SUMMARY"
+          else
+            python -m pytest -q
+          fi
       # Undefined names and syntax errors only: the cheap class of bug the tests can miss in an unexercised branch.
       - name: Backend lint (undefined names, syntax)
         run: |

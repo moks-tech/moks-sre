@@ -27,6 +27,9 @@ COPY backend/ ./
 RUN pip install --prefix=/install --no-deps .
 
 FROM python:3.12-slim
+# Upgrade first: the base image lags its own security fixes (zlib1g 1.3.1-1+b1 with CVE-2026-76844 and CVE-2026-85091,
+# fixed in 1.3.1-1+deb13u1). CI's image job scans what this stage produces and fails on anything fixable.
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
 ARG GIT_COMMIT=dev
 LABEL org.opencontainers.image.revision=$GIT_COMMIT
 ENV MOKS_BUILD_COMMIT=$GIT_COMMIT
