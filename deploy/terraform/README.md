@@ -33,7 +33,7 @@ Commit `.terraform.lock.hcl` with the module. `*.tfplan`, state and `.terraform/
 ## After apply
 
 1. **CI:** store the role ARN as a repository *variable*, not a secret:
-   `gh variable set AWS_ROLE_ARN --repo moks-tech/moks-sre --body "$(terraform output -raw ci_role_arn)"`.
+   `gh variable set AWS_ROLE_ARN --repo mrjithendar/moks-sre --body "$(terraform output -raw ci_role_arn)"`.
    No `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` secrets are needed.
 2. **Runtime key for mk4**, after `scripts/create-secrets.sh` has created `moks-secrets`:
    `scripts/create-runtime-key.sh mk4` (use `ROTATE=1` to rotate later).
@@ -66,7 +66,7 @@ more is needed. Otherwise, add its ARN to `ecr_pull_principal_arns` in `mk4.tfva
 ## Troubleshooting CI sign-in
 
 `Not authorized to perform sts:AssumeRoleWithWebIdentity` means the GitHub token's `sub` claim does
-not match the trust policy. Compare `gh api repos/moks-tech/moks-sre/actions/oidc/customization/sub`
+not match the trust policy. Compare `gh api repos/mrjithendar/moks-sre/actions/oidc/customization/sub`
 (field `sub_claim_prefix`) with `github_oidc_subject_prefix` in `tfvars/mk4.tfvars`. Workflows that
 use a GitHub environment send `:environment:<name>` instead of `:ref:...`.
 

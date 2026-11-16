@@ -14,7 +14,7 @@ of each type per environment is used, except PostgreSQL and Redis clusters, whic
 | Prometheus, Loki | Implemented, verified live against mk4 |
 | Grafana | Implemented; reaches mk4 Grafana 13.2.4 but needs a service-account token (`auth: 401` until configured) |
 | CloudWatch | Implemented; tested against botocore's Stubber. Needs credentials and log groups to verify live |
-| Git (GitHub) | Implemented; ingestion verified live against the public `moks-tech/moks-sre` repository |
+| Git (GitHub) | Implemented; ingestion verified live against the public `mrjithendar/moks-sre` repository |
 | AWS cost (Cost Explorer, anomalies, budgets) | Implemented; tested against the Stubber. Needs `finops_enabled` in Terraform to verify live |
 | Cost model | Implemented; verified live (allocation and rightsizing of `roboshop-ai`) |
 | PostgreSQL (`postgres`), several per environment | Implemented; tested against PostgreSQL 16/17 as a `pg_monitor`-only role, including a live lock chain. Not yet run against a CloudNativePG cluster on mk4. See [DATASTORES.md](DATASTORES.md) |

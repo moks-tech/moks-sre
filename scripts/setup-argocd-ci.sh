@@ -14,7 +14,7 @@
 # TOKEN_EXPIRY sets the token lifetime (default 365d); rerun with ROTATE=1 before it lapses.
 set -euo pipefail
 
-REPO="${GITHUB_REPO:-moks-tech/moks-sre}"
+REPO="${GITHUB_REPO:-mrjithendar/moks-sre}"
 CONTEXT="${KUBE_CONTEXT:-mk4}"
 SERVER="${ARGOCD_SERVER:-jithendar.com}"
 EXPIRY="${TOKEN_EXPIRY:-365d}"

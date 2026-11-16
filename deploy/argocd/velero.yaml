@@ -9,8 +9,8 @@ metadata:
 spec:
   description: Velero cluster backups
   sourceRepos:
-    - https://github.com/moks-tech/moks-sre.git
-    - https://github.com/mrjithendar/moks.git  # until every Application names moks-tech (2026-11-16 org move)
+    - https://github.com/mrjithendar/moks-sre.git
+    - https://github.com/mrjithendar/moks.git  # old URL, until every Application names the new one (2026-11-16)
     - https://vmware-tanzu.github.io/helm-charts
   destinations:
     - server: https://kubernetes.default.svc
@@ -45,7 +45,7 @@ spec:
       helm:
         releaseName: velero
         valueFiles: [$values/deploy/velero/values-r2-minikube.yaml]
-    - repoURL: https://github.com/moks-tech/moks-sre.git
+    - repoURL: https://github.com/mrjithendar/moks-sre.git
       targetRevision: master
       ref: values
   destination:

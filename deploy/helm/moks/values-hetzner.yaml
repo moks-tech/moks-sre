@@ -57,7 +57,7 @@ seed:
           credential_ref: {type: env, name: MOKS_CRED_GRAFANA_TOKEN}   # Grafana service-account token (Viewer) in moks-secrets
         - type: git
           name: github
-          config: {provider: github, repositories: [moks-tech/moks-sre, moks-tech/roboshop-ai, moks-tech/tools, moks-tech/kubernetes, moks-tech/jithendar.com]}   # miniKube is private: the GitHub token needs read access
+          config: {provider: github, repositories: [mrjithendar/moks-sre, mrjithendar/roboshop-ai, moks-tech/tools, moks-tech/kubernetes, moks-tech/jithendar.com]}   # miniKube is private: the GitHub token needs read access
         - type: cost_model
           name: hetzner
           config: {monthly_cost_usd: 0, cpu_share: 0.5, currency: USD}   # SET the server's real monthly price
@@ -69,7 +69,7 @@ seed:
   knowledge_sources:
     - name: moks-docs
       type: github
-      config: {repository: moks-tech/moks-sre, include: ["docs/**", "lab/**", "backend/moks/skills/**"], sync_interval_minutes: 360}
+      config: {repository: mrjithendar/moks-sre, include: ["docs/**", "lab/**", "backend/moks/skills/**"], sync_interval_minutes: 360}
 
 api:
   replicas: 2

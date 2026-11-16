@@ -23,7 +23,7 @@ What one run does, on a single-node kind cluster:
 5. Asks the cluster, not MOKS: the Deployment's revision went up by exactly one and carries `restartedAt`.
 6. Runs `moks verify-audit` over the audit records all of that wrote.
 
-First run: [43816682077](https://github.com/moks-tech/moks-sre/actions/runs/43816682077), passed in 2m47s, with 16
+First run: [43816682077](https://github.com/mrjithendar/moks-sre/actions/runs/43816682077), passed in 2m47s, with 16
 tool calls, 10 successful Kubernetes reads, 16 cited facts, revision 1 to 2 and 27 audit records verified. It also
 found a defect the unit suite had not: `investigations.mode` was never written, so the API reported that rule-based
 run as `llm`. The column is now stored with the result, and the job checks it.
@@ -186,7 +186,7 @@ These runs found and fixed several real defects:
   memory limit** and RabbitMQ CPU above request. An investigation ("which pods are close to their
   memory limits?") selected the `oomkilled-memory` skill and cited that as a fact with a
   `patch_resources` suggestion.
-- GitHub ingestion of `moks-tech/moks-sre` (`docs/**`, `lab/README.md`) at commit `03732fc`: 7
+- GitHub ingestion of `mrjithendar/moks-sre` (`docs/**`, `lab/README.md`) at commit `03732fc`: 7
   documents. Search returned the rollout section with a line-anchored GitHub URL.
 - An alert webhook opened an incident and an automatic read-only investigation; the repeat alert was deduplicated.
 - An action plan for `Deployment/mongodb` (`patch_resources`) was created from a rightsizing row

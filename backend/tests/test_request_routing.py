@@ -29,7 +29,7 @@ DNS_ERROR = (f"Failed to load target state: failed to get cluster info for \"htt
 
 def argo_app(name, namespace, message=DNS_ERROR, server=f"https://{EKS}", path=None):
     return {"metadata": {"name": name}, "spec": {"project": "default", "destination": {"namespace": namespace, "server": server},
-                                                 "source": {"repoURL": "https://github.com/moks-tech/roboshop-ai.git", "path": path or f"eks/{name}", "targetRevision": "master"}},
+                                                 "source": {"repoURL": "https://github.com/mrjithendar/roboshop-ai.git", "path": path or f"eks/{name}", "targetRevision": "master"}},
             "status": {"sync": {"status": "Unknown"}, "health": {"status": "Healthy"}, "resources": [{}],
                        "conditions": [{"type": "ComparisonError", "message": message}]}}
 
@@ -105,7 +105,7 @@ It pins the image digest in `kustomization.yaml`, server dry-runs, applies, wait
 
 class Repos:
     type = "git"
-    repositories = ["moks-tech/jithendar.com", "moks-tech/roboshop-ai", "moks-tech/tools"]
+    repositories = ["moks-tech/jithendar.com", "mrjithendar/roboshop-ai", "moks-tech/tools"]
     files: dict[str, dict[str, str]] = {}
     calls: list[tuple] = []
     fail_reads = False
@@ -154,7 +154,7 @@ class Prometheus:
 @pytest.fixture(autouse=True)
 def fakes(monkeypatch):
     Cluster.scenarios, Cluster.argocd = scenarios(), list(ROBOSHOP_APPS)
-    Repos.files, Repos.calls, Repos.fail_reads = {"moks-tech/jithendar.com": dict(JITHENDAR_FILES), "moks-tech/roboshop-ai": {"README.md": "# RoboShop\n"}, "moks-tech/tools": {}}, [], False
+    Repos.files, Repos.calls, Repos.fail_reads = {"moks-tech/jithendar.com": dict(JITHENDAR_FILES), "mrjithendar/roboshop-ai": {"README.md": "# RoboShop\n"}, "moks-tech/tools": {}}, [], False
     Prometheus.calls = []
     FakeKubernetes.calls = []
     monkeypatch.setitem(registry.CONNECTOR_TYPES, "kubernetes", Cluster)
@@ -307,7 +307,7 @@ async def test_ambiguous_target_asks_one_focused_question(client):
         assert "target" in inv.report["request"]["unresolved"] and inv.report["answer"]["question_for_user"].startswith("Which application")
         assert not any(t.startswith(("k8s_", "prom_", "git_")) for t, _ in tools(events))
     finally:
-        Repos.repositories = ["moks-tech/jithendar.com", "moks-tech/roboshop-ai", "moks-tech/tools"]
+        Repos.repositories = ["moks-tech/jithendar.com", "mrjithendar/roboshop-ai", "moks-tech/tools"]
 
 
 async def test_an_unrelated_critical_alert_does_not_hijack_deployment_guidance(client):

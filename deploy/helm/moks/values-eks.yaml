@@ -46,11 +46,11 @@ seed:
           config: {monthly_cost_usd: 98, cpu_share: 0.5, currency: USD, storage_gib_month_usd: 0.08}
         - type: git
           name: github
-          config: {provider: github, repositories: [moks-tech/moks-sre, moks-tech/roboshop-ai, moks-tech/tools, moks-tech/jithendar.com]}
+          config: {provider: github, repositories: [mrjithendar/moks-sre, mrjithendar/roboshop-ai, moks-tech/tools, moks-tech/jithendar.com]}
   knowledge_sources:
     - name: moks-docs
       type: github
-      config: {repository: moks-tech/moks-sre, include: ["docs/**", "lab/**", "backend/moks/skills/**"], sync_interval_minutes: 360}
+      config: {repository: mrjithendar/moks-sre, include: ["docs/**", "lab/**", "backend/moks/skills/**"], sync_interval_minutes: 360}
 
 # Half the chart's CPU requests, on nodes with about 440m unrequested between them. A meshed pod
 # costs 70m (50m plus a 20m sidecar), and two API replicas would leave no room for the extra pod a

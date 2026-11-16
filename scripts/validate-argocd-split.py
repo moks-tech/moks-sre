@@ -26,7 +26,7 @@ CHART = ROOT / "deploy/helm/moks"
 ARGOCD = ROOT / "deploy/argocd"
 GROUPS = ["foundation", "database", "migrate", "opensearch", "api", "worker", "executor", "terminal", "reranker", "routing", "backup", "crewai"]
 CLUSTER_SCOPED = {"Namespace", "ClusterRole", "ClusterRoleBinding"}
-REPO = "https://github.com/moks-tech/moks-sre.git"
+REPO = "https://github.com/mrjithendar/moks-sre.git"
 TERMINAL_ON = ["--set", "terminal.enabled=true", "--set", "terminal.image.digest=sha256:" + "a" * 64, "--set", "terminal.profiles[0].name=ro",
                "--set", "terminal.kubernetes.namespaces={moks-lab}", "--set", "terminal.network.apiServer=true"]
 POOLS = ["--set-json", 'worker.pools=[{"name":"detection","classes":"detection","capacity":"detection=2","replicas":1},'
