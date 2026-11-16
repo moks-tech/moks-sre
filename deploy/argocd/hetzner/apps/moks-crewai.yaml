@@ -10,7 +10,7 @@ metadata:
 spec:
   project: moks
   source:
-    repoURL: https://github.com/mrjithendar/moks.git
+    repoURL: https://github.com/mrjithendar/moks-sre.git
     targetRevision: master
     path: deploy/helm/moks
     helm:

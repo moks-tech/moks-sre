@@ -186,7 +186,7 @@ These runs found and fixed several real defects:
   memory limit** and RabbitMQ CPU above request. An investigation ("which pods are close to their
   memory limits?") selected the `oomkilled-memory` skill and cited that as a fact with a
   `patch_resources` suggestion.
-- GitHub ingestion of `mrjithendar/moks` (`docs/**`, `lab/README.md`) at commit `03732fc`: 7
+- GitHub ingestion of `mrjithendar/moks-sre` (`docs/**`, `lab/README.md`) at commit `03732fc`: 7
   documents. Search returned the rollout section with a line-anchored GitHub URL.
 - An alert webhook opened an incident and an automatic read-only investigation; the repeat alert was deduplicated.
 - An action plan for `Deployment/mongodb` (`patch_resources`) was created from a rightsizing row

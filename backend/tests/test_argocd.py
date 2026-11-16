@@ -36,9 +36,9 @@ GOOD = app("cart-service", sync="Synced")
 
 
 class Git:
-    repositories = ["mrjithendar/roboshop-ai", "mrjithendar/tools"]
+    repositories = ["mrjithendar/roboshop-ai", "moks-tech/tools"]
     trees = {"mrjithendar/roboshop-ai": ["services/web/frontend/index.html", "services/web/nginx/nginx.conf"],
-             "mrjithendar/tools": ["minikube/cert-manager/values.yaml", "observability/jaeger/deployment.yaml"]}
+             "moks-tech/tools": ["minikube/cert-manager/values.yaml", "observability/jaeger/deployment.yaml"]}
 
     async def list_paths(self, repo):
         return self.trees[repo]
@@ -83,7 +83,7 @@ async def test_it_names_each_failing_app_and_where_git_has_it_now():
     assert s["total"] == 3 and s["healthy"] == ["cart-service"] and [f["kind"] for f in s["findings"]] == ["argocd_source_missing"] * 2
     by_app = {f["resources"][0]: f for f in s["findings"]}
     assert "mrjithendar/roboshop-ai:services/web/frontend" in by_app["application/frontend"]["detail"]
-    assert "mrjithendar/tools:minikube/cert-manager/values.yaml" in by_app["application/cert-manager"]["detail"]
+    assert "moks-tech/tools:minikube/cert-manager/values.yaml" in by_app["application/cert-manager"]["detail"]
     assert all("without prune" in f["remediation_hint"] for f in s["findings"])
     # Argo CD's own report says nothing about running workloads, so the finding does not claim they are fine
     assert "not affected" not in by_app["application/frontend"]["detail"] and "state is unknown" in by_app["application/frontend"]["detail"]
@@ -91,12 +91,12 @@ async def test_it_names_each_failing_app_and_where_git_has_it_now():
 
 
 async def test_exact_paths_in_another_repository_rank_first():
-    paths = {"mrjithendar/roboshop-ai": ["services/mongodb/Dockerfile"], "mrjithendar/tools": ["minikube/mongodb/service.yaml"]}
+    paths = {"mrjithendar/roboshop-ai": ["services/mongodb/Dockerfile"], "moks-tech/tools": ["minikube/mongodb/service.yaml"]}
     git = Git()
     git.trees = paths
     row = app("mongodb", conditions=[("ComparisonError", WRAP + "minikube/mongodb: app path does not exist")], source={"repoURL": ROBOSHOP, "path": "minikube/mongodb"})
     s = await argocd.status(K8s([row]), everything, git)
-    assert [c["repository"] for c in s["problems"][0]["missing"]["candidates"]] == ["mrjithendar/tools", "mrjithendar/roboshop-ai"]
+    assert [c["repository"] for c in s["problems"][0]["missing"]["candidates"]] == ["moks-tech/tools", "mrjithendar/roboshop-ai"]
 
 
 async def test_a_repository_git_cannot_list_is_reported_and_the_rest_still_works():

@@ -10,7 +10,8 @@ metadata:
 spec:
   description: MOKS SRE portal
   sourceRepos:
-    - https://github.com/mrjithendar/moks.git
+    - https://github.com/mrjithendar/moks-sre.git
+    - https://github.com/mrjithendar/moks.git  # old URL, until every Application names the new one (2026-11-16)
   destinations:
     - server: https://kubernetes.default.svc
       namespace: moks
