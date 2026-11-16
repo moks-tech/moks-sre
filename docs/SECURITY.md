@@ -12,6 +12,15 @@ New OIDC users get **no roles**. Access comes from `MOKS_BOOTSTRAP_ADMINS` (Admi
 first sign-in), `MOKS_OIDC_GROUP_ROLES` (IdP group to grants, re-synced on every sign-in;
 manual grants are kept) or an administrator.
 
+**An OIDC account belongs to one subject.** MOKS finds an account by the ID token's `sub`, and the account keeps
+the subject that created it. A sign-in with another subject and the same email is refused and audited
+(`auth.login`, reason `subject_mismatch`): an email claim is not an identity, because providers reassign
+addresses and some issue the claim unverified. When a person's subject really changed, for example after the
+client was registered again at the provider, an operator runs `moks unlink-identity EMAIL`. It clears the
+subject and ends the account's sessions, and the next sign-in with that email links the new subject
+(`user.unlink_identity`, `user.link_identity`). `MOKS_BOOTSTRAP_ADMINS` and `MOKS_OIDC_ALLOWED_DOMAINS` still
+go by the email claim, so with a provider that does not verify email addresses, grant roles by group instead.
+
 **Sessions.** The cookie `moks_session` holds an opaque 256-bit token (`HttpOnly`, `Secure`,
 `SameSite=Lax`, `Path=/moks`). Only its SHA-256 is stored. Sessions have an 8-hour idle timeout
 and a 12-hour absolute lifetime, and are revoked on logout and when the user is disabled.
@@ -21,25 +30,41 @@ by `/auth/me`, kept in memory only) **and**, when present, an `Origin` matching
 `MOKS_PUBLIC_URL`. SSE and every other GET are side-effect free.
 
 **Rate limits** are per process: 10 logins per minute per IP and per email, 10 investigations per
-minute per user, and 600 API calls per minute per session. Add a Traefik `RateLimit` middleware
-for a cluster-wide limit.
+minute per user, and 600 API calls per minute per session. Add a rate limit at the edge gateway
+for a cluster-wide limit. Password checks run in a thread, so a burst of sign-ins does not stall other requests.
 
 **Headers.** A strict CSP (`script-src 'self'`, `frame-ancestors 'none'`), `X-Frame-Options:
 DENY`, `nosniff`, `Referrer-Policy: same-origin`, and `Cache-Control: no-store` on API responses.
 
 ## Application RBAC
 
+`ROLES` in `backend/moks/rbac.py` is the definition, and `GET /api/auth/roles` lists it. `terminal.use` is in
+the `terminal` role alone. The `secrets.*` permissions are in the three `secrets_*` roles and in `admin`,
+and in no other role.
+
 | Role | Permissions |
 |---|---|
-| viewer | `overview.read`, `investigation.read` |
-| investigator | viewer + `investigation.run`, `explorer.read`, `metrics.raw_query`, `finops.read`, `incident.write` |
+| viewer | `overview.read`, `investigation.read`, `knowledge.read`, `ml.read` |
+| investigator | viewer + `investigation.run`, `explorer.read`, `metrics.raw_query`, `finops.read`, `incident.write`, `backup.read`, `knowledge.test`, `ml.feedback` |
 | operator | investigator + `action.request`, `action.execute` |
-| approver | viewer + `action.approve`, `finops.read` (never their own plans; only a global admin may approve their own, and an admin's plans need no second approval) |
-| admin | everything, including `admin.users`, `admin.connectors`, `admin.llm`, `admin.policies`, `audit.read` |
+| approver | viewer + `action.approve`, `finops.read`, `backup.read` (never their own plans; only a global admin may approve their own, and an admin's plans need no second approval) |
+| terminal | `overview.read`, `investigation.read`, `knowledge.read`, `terminal.use`. In no other role, `admin` included ([Web terminal](#web-terminal)) |
+| knowledge_reviewer | viewer + `knowledge.test`, `knowledge.review` |
+| knowledge_admin | knowledge_reviewer + `knowledge.source_admin` |
+| index_operator | viewer + `knowledge.test`, `knowledge.index` |
+| skill_publisher | viewer + `skills.review`, `skills.publish` |
+| ml_reviewer | viewer + `ml.feedback`, `learning.review` |
+| ml_admin | ml_reviewer + `learning.export`, `ml.admin` |
+| secrets_viewer | `overview.read`, `secrets.discover`, `secrets.compare` (names, key names and masked differences; never values) |
+| secrets_operator | secrets_viewer + `secrets.map`, `secrets.propose`, `secrets.execute`. Not part of `operator` |
+| secrets_approver | secrets_viewer + `secrets.approve`, `secrets.reveal`. Not part of `approver` |
+| admin | everything except `terminal.use`, so including `admin.users`, `admin.connectors`, `admin.llm`, `admin.policies`, `audit.read`, and `secrets.reveal` wherever secret sync is enabled |
 
 A binding is `role : environment-pattern : namespace-pattern` (glob). Some rules are deliberate:
 
-- `admin.*` and `audit.read` only count from a binding whose environment **and** namespace are both `*`.
+- `admin.*`, `audit.read`, `terminal.revoke`, `knowledge.source_admin`, `knowledge.index`, `skills.review`,
+  `skills.publish`, `learning.export` and `ml.admin` only count from a binding whose environment **and**
+  namespace are both `*`.
 - Raw PromQL (`metrics.raw_query`) needs a namespace `*` binding, because PromQL cannot be reliably
   confined to a namespace. Namespace-scoped users get the templated, namespace-pinned
   `prom_pod_resources` instead.
@@ -120,7 +145,12 @@ Every call, including embeddings, reserves its worst-case cost before it runs (`
 
 Secret sync ([SECRETS_SYNC.md](SECRETS_SYNC.md)) is the one feature that reads Secret values. It does so only in
 the executor, keeps values in memory for one job, stores keyed digests (HMAC under a key only the executor has),
-has no reveal action, and is not reachable from investigations, LLM prompts or CrewAI.
+and is not reachable from investigations, LLM prompts or CrewAI. People with `secrets.reveal` (the
+`secrets_approver` role, and administrators) can view one secret's values: the executor encrypts them to a key
+that exists only in that browser tab, PostgreSQL and the API hold only the ciphertext, and both the request and
+the read are audited ([Viewing values](SECRETS_SYNC.md)). The executor can read every Secret in
+`secretsSync.namespaces`, so list a namespace there only if its Secrets may be shown to those people; that
+includes MOKS's own namespace and its `moks-secrets`.
 
 ## Audit
 
@@ -145,8 +175,8 @@ For stronger guarantees, ship records off-cluster where MOKS's credentials canno
 
 ## Network policies
 
-The chart allows: ingress to `:8080` from the `traefik` namespace and to `:9464` from
-`monitoring`; egress to DNS, PostgreSQL, the Kubernetes API endpoints (listed explicitly),
+The chart allows: ingress to `:8080` from the edge gateway's namespace (`networkPolicy.ingressNamespaces`,
+`istio-ingress` on mk4) and to `:9464` from `monitoring`; egress to DNS, PostgreSQL, the Kubernetes API endpoints (listed explicitly),
 Prometheus/Loki/OTel in-cluster, and HTTPS to public addresses (LLM providers, OIDC issuer, AWS).
 PostgreSQL accepts only MOKS pods and has no egress.
 

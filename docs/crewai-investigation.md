@@ -5,8 +5,9 @@ an incident summary in which every finding cites recorded evidence. The LangGrap
 default for everything else. CrewAI runs only when `MOKS_CREWAI_ENABLED=true` **and** the image was built
 with the crewai extra.
 
-Status (2026-11-06): implemented on `feature/crewai-investigation` and left uncommitted. Tested with a
-scripted model and fake connectors only. It has not been run against mk4, a real model or a real image.
+Status: on `master`, and switched on for mk4 in `values-hetzner.yaml` (`crewai.enabled: true`). CI's
+`release-crewai` job builds the `moks-crewai` image on every push to `master`, after the backend suite passed on
+the CrewAI dependency set. Tested with a scripted model and fake connectors only: no real model has run the crew.
 See [What is still unverified](#what-is-still-unverified).
 
 ## 1. How an investigation runs today
@@ -220,6 +221,6 @@ To stop CI deploying, set `MK4_DEPLOY=false`.
 
 - No real model has run the crew. Small models may not follow the Action/Observation format. A model that
   writes no valid JSON at the end gets the rule-based report, which is correct but less useful.
-- The `moks-crewai` image has never been built; CI's release-crewai job is the first place it will be. Its import check
-  fails the build if a linux/arm64 wheel is missing (onnxruntime, google-re2, lancedb and pyarrow are the likely ones).
+- The `moks-crewai` image is built by CI's release-crewai job, whose import check fails the build if a linux/arm64
+  wheel is missing. That shows it imports at the pinned version with telemetry off, not that a crew runs in it.
 - No mk4 smoke test has been run: the demo namespace needs a cluster write, and the run needs the image.

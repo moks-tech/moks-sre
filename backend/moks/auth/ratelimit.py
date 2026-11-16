@@ -1,7 +1,7 @@
 """In-process sliding-window rate limiting.
 
 Limits are per replica (MOKS runs 1-2 API replicas). They protect login and expensive
-endpoints from bursts; Traefik can add a cluster-wide RateLimit middleware if needed.
+endpoints from bursts; the edge gateway can add a cluster-wide limit if needed.
 """
 from __future__ import annotations
 

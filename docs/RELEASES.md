@@ -28,7 +28,7 @@ it again afterwards so CI releases resume.
 
 ## Release
 
-1. A pull request passes the `check` job, which runs on pull requests only. Merging it to `master` builds one image and pushes it as `latest`. A failed image build or smoke test pushes nothing, so `latest` stays where it was. A direct push to `master` is released without `check`, so require `check` in branch protection.
+1. A pull request passes the `check` job. Merging it to `master` runs `check` again on the merged commit, and only then builds one image and pushes it as `latest`: a commit that fails `check` is not released, whether it arrived by merge or by a direct push. A failed image build or smoke test also pushes nothing, so `latest` stays where it was. The pull request's own jobs (`check`, `image`, `e2e`, `terminal`, `crewai`) still only gate a merge if branch protection on `master` requires them (on 2026-11-16 `master` had no protection rule).
 2. Check any migration the release brings. Migrations run when the new API pods start, or in the `moks-migrate` Job once `secrets.split` is true. A mutable tag never changes that Job's name, so it needs the steps in [ARGOCD_APP_SPLIT.md](ARGOCD_APP_SPLIT.md#upgrades-and-migrations) before this restart.
 3. CI's `deploy` job (when variable `MK4_DEPLOY` is `true`) has Argo CD sync the MOKS Applications and restart the
    Deployments that run `latest`. Without it, restart by hand:

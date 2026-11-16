@@ -37,7 +37,7 @@ class AuthContext:
 
 
 def client_ip(request: Request) -> str | None:
-    # Traefik sets X-Forwarded-For; uvicorn's proxy-headers handling (forwarded_allow_ips)
+    # The edge gateway sets X-Forwarded-For; uvicorn's proxy-headers handling (forwarded_allow_ips)
     # decides whether request.client reflects it.
     return request.client.host if request.client else None
 
