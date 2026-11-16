@@ -60,7 +60,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: inventory
-          image: python:3.12-alpine
+          image: python:3.15-alpine
           command: [python, /app/inventory.py]
           env: [{name: DELAY_MS, value: "20"}]
           ports: [{name: http, containerPort: 8080}]
@@ -88,7 +88,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: orders
-          image: python:3.12-alpine
+          image: python:3.15-alpine
           command: [python, /app/orders.py]
           ports: [{name: metrics, containerPort: 9100}]
           resources: {requests: {cpu: 10m, memory: 24Mi}, limits: {cpu: 100m, memory: 64Mi}}
