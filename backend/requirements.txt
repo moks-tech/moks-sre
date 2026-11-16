@@ -8,9 +8,9 @@ alembic==1.20.1
 pydantic==2.14.3
 pydantic-settings==2.16.2
 httpx==0.28.1
-anthropic==2.6.0
-langchain-core==1.7.6
-langgraph==1.2.20
+anthropic==2.8.0
+langchain-core==1.8.0
+langgraph==1.2.21
 kubernetes_asyncio==36.1.0
 Authlib==1.9.5
 argon2-cffi==25.1.0

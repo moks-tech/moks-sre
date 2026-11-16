@@ -4,4 +4,4 @@
 # not pinned here: Dependabot bumps every pin in /backend together (PR #23 moved it to 2.14.3 and broke the build).
 # crewai's own hard dependencies include chromadb, lancedb, onnxruntime, openai and instructor. MOKS never
 # instantiates their clients (memory, knowledge and planning are off), but they are in the image.
-crewai==1.15.36
+crewai==1.15.41
