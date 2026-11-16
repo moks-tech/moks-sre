@@ -137,7 +137,7 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
       - name: Build
         run: docker buildx build --load --build-arg GIT_COMMIT=${{ github.sha }} -t moks:e2e .
-      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc   # v1.14.0
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376   # v1.15.2
         with: {cluster_name: kind}
       - name: Investigate and remediate on a real cluster
         env:
@@ -180,7 +180,7 @@ jobs:
           ignore-unfixed: true
           exit-code: "1"
           trivyignores: deploy/terminal/.trivyignore
-      - uses: helm/kind-action@ef37e7f390d99f746eb8b610417061a60e82a6cc   # v1.14.0
+      - uses: helm/kind-action@ea822c7bf1874f08e5a491df991c228edffc3376   # v1.15.2
         with: {cluster_name: kind, config: deploy/terminal/kind-isolation.yaml}
       - name: Isolation on a real cluster
         env:
