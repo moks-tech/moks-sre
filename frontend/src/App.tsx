@@ -34,6 +34,7 @@ const Actions = page(ops, "Actions"), DiagnosticView = page(ops, "DiagnosticView
 const Overview = lazy(() => import("./pages/Overview"));
 const ml = () => import("./pages/ML");
 const MLInsights = page(ml, "MLInsights"), MLAdmin = page(ml, "MLAdmin");
+const CrewAIConsole = lazy(() => import("./pages/CrewAIConsole").then((m) => ({ default: m.CrewAIConsole })));
 
 /** Explains a page the role cannot use, instead of an empty page and a 403. The backend still decides. */
 function Need({ any, children }: { any: string[]; children: ReactNode }) {
@@ -66,6 +67,7 @@ export default function App() {
         <Route path="/logs" element={<Need any={["explorer.read"]}><Logs /></Need>} />
         <Route path="/detections" element={<Detections />} />
         <Route path="/incidents" element={<Incidents />} />
+        <Route path="/crewai/*" element={<Need any={["investigation.read"]}><CrewAIConsole /></Need>} />
         <Route path="/incidents/:id" element={<IncidentView />} />
         <Route path="/actions" element={<Need any={["action.request", "action.approve"]}><Actions /></Need>} />
         <Route path="/actions/:id" element={<Need any={["investigation.read", "action.approve"]}><PlanView /></Need>} />

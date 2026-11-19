@@ -13,6 +13,7 @@ export const NAV: NavGroup[] = [
     { to: "/investigate", label: "New investigation", icon: "plus", show: (can) => can("investigation.run") },
     { to: "/investigations", label: "Investigations", icon: "chat", show: read, scoped: true },
     { to: "/incidents", label: "Incidents", icon: "alert", show: read },
+    { to: "/crewai", label: "CrewAI console", icon: "spark2", show: read },
   ] },
   { label: "Monitor", items: [
     { to: "/", label: "Overview", icon: "grid", end: true, show: () => true },

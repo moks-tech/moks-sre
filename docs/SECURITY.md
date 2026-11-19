@@ -58,11 +58,11 @@ and in no other role.
 | secrets_viewer | `overview.read`, `secrets.discover`, `secrets.compare` (names, key names and masked differences; never values) |
 | secrets_operator | secrets_viewer + `secrets.map`, `secrets.propose`, `secrets.execute`. Not part of `operator` |
 | secrets_approver | secrets_viewer + `secrets.approve`, `secrets.reveal`. Not part of `approver` |
-| admin | everything except `terminal.use`, so including `admin.users`, `admin.connectors`, `admin.llm`, `admin.policies`, `audit.read`, and `secrets.reveal` wherever secret sync is enabled |
+| admin | everything except `terminal.use`, so including `admin.users`, `admin.connectors`, `admin.llm`, `admin.policies`, `crewai.admin` (the CrewAI console's crews, schedules, flows on or off, settings and import, [crewai-console.md](crewai-console.md)), `audit.read`, and `secrets.reveal` wherever secret sync is enabled |
 
 A binding is `role : environment-pattern : namespace-pattern` (glob). Some rules are deliberate:
 
-- `admin.*`, `audit.read`, `terminal.revoke`, `knowledge.source_admin`, `knowledge.index`, `skills.review`,
+- `admin.*`, `crewai.admin`, `audit.read`, `terminal.revoke`, `knowledge.source_admin`, `knowledge.index`, `skills.review`,
   `skills.publish`, `learning.export` and `ml.admin` only count from a binding whose environment **and**
   namespace are both `*`.
 - Raw PromQL (`metrics.raw_query`) needs a namespace `*` binding, because PromQL cannot be reliably

@@ -23,9 +23,11 @@ ROLES = ("moks_api", "moks_worker", "moks_executor", "moks_backup", "moks_termin
 _API_RW = ("learning_records", "learning_judgments", "learning_datasets", "learning_dataset_items", "ml_capabilities", "ml_models", "ml_artifacts", "ml_observations", "retrieval_feedback", "improvement_proposals", "users", "role_bindings", "sessions", "environments", "connectors", "llm_configs", "llm_usage", "investigations", "investigation_events", "evidence",
            "incidents", "incident_events", "jobs", "knowledge_sources", "documents", "chunks", "embedding_indexes", "conversations", "conversation_participants", "conversation_reads", "knowledge_sync_items", "document_index_state", "skill_versions", "skill_generations",
            "conversation_messages", "backup_stores", "database_backups", "database_backup_schedules", "skill_policies", "detection_policies", "detection_states", "maintenance_windows", "saved_queries",
-           "diagnostic_sessions", "diagnostic_commands", "alert_events", "eval_runs", "index_outbox", "llm_reservations", "component_versions")
+           "diagnostic_sessions", "diagnostic_commands", "alert_events", "eval_runs", "index_outbox", "llm_reservations", "component_versions",
+           "crew_runs", "crew_run_counters", "crew_schedules", "crew_configs", "crew_settings")
 _WORKER_RW = ("learning_records", "ml_models", "ml_artifacts", "ml_observations", "search_backend_status", "llm_usage", "investigations", "investigation_checkpoints", "investigation_events", "evidence", "incidents", "incident_events", "jobs", "knowledge_sources", "documents", "chunks",
-              "embedding_indexes", "knowledge_sync_items", "document_index_state", "skill_versions", "skill_generations", "conversations", "conversation_participants", "conversation_messages", "detection_runs", "detection_states", "alert_events", "eval_runs", "index_outbox", "llm_reservations", "component_versions")
+              "embedding_indexes", "knowledge_sync_items", "document_index_state", "skill_versions", "skill_generations", "conversations", "conversation_participants", "conversation_messages", "detection_runs", "detection_states", "alert_events", "eval_runs", "index_outbox", "llm_reservations", "component_versions",
+              "crew_runs", "crew_run_counters", "crew_run_steps", "crew_run_logs", "crew_run_calls")
 _EXECUTOR_RW = ("diagnostic_sessions", "diagnostic_commands", "incidents", "incident_events", "component_versions")
 
 TABLES = ("learning_records", "learning_judgments", "learning_datasets", "learning_dataset_items", "ml_capabilities", "ml_models", "ml_artifacts", "ml_observations", "retrieval_feedback", "search_backend_status", "improvement_proposals", "users", "role_bindings", "sessions", "environments", "connectors", "llm_configs", "llm_usage", "investigations", "investigation_checkpoints", "investigation_events", "evidence", "audit_events",
@@ -33,7 +35,8 @@ TABLES = ("learning_records", "learning_judgments", "learning_datasets", "learni
           "conversation_messages", "backup_runs", "backup_stores", "database_backups", "database_backup_schedules", "skill_policies", "detection_policies", "detection_runs", "detection_states", "maintenance_windows",
           "saved_queries", "index_outbox", "llm_reservations", "component_versions", "action_plans", "approvals", "diagnostic_sessions", "diagnostic_commands", "terminal_sessions", "alert_events", "eval_runs", "alembic_version",
           "secret_mappings", "secret_inventory", "secret_inventory_scopes", "secret_plans", "secret_plan_items", "secret_plan_approvals", "secret_sync_schedules",
-          "secret_schedule_approvals")
+          "secret_schedule_approvals", "crew_runs", "crew_run_counters", "crew_run_steps", "crew_run_logs", "crew_run_calls", "crew_schedules", "crew_configs",
+          "crew_settings")
 # The gateway signs people in and runs shells, so it sees only that. Its session updates are the two columns load() touches.
 _TERMINAL_READS = {"users", "role_bindings", "sessions", "environments", "terminal_sessions", "alembic_version"}
 SECRETS = {"secret_mappings", "secret_inventory", "secret_inventory_scopes", "secret_plans", "secret_plan_items", "secret_plan_approvals", "secret_sync_schedules",
@@ -57,6 +60,9 @@ EXECUTOR_SCHEDULED_PLAN_COLUMNS = ("plan_hash", "expires_at", "submitted_at", "q
 API_SECRET_SCHEDULE_COLUMNS = ("name", "mapping_ids", "mapping_versions", "interval_minutes", "status", "paused_reason", "schedule_hash", "version", "next_run_at", "updated_at")
 EXECUTOR_SECRET_SCHEDULE_COLUMNS = ("status", "paused_reason", "next_run_at", "last_run_at", "last_plan_id", "last_outcome", "updated_at")
 API_SECRET_ITEM_COLUMNS = ("included", "resolution", "key_choices", "targets", "actions", "expected", "diff", "warnings", "blocked", "status", "error", "updated_at")
+# CrewAI console (docs/crewai-console.md). The API owns schedules, crew versions and settings; the worker's scheduler
+# only records when a schedule fired and what came of it.
+WORKER_CREW_SCHEDULE_COLUMNS = ("next_run_at", "last_run_at", "last_run_id", "last_error")
 EXECUTOR_PLAN_COLUMNS = ("status", "worker_id", "executed_at", "heartbeat_at", "lease_expires_at", "execution_token", "mutation_state", "checkpoint", "finished_at", "result")
 
 
@@ -71,6 +77,7 @@ def statements() -> list[str]:
     out += [f"GRANT {RW} ON {t} TO moks_worker" for t in _WORKER_RW]
     out += ["GRANT DELETE ON learning_datasets TO moks_worker"]  # retention (learning.purge); invalidation runs in a SECURITY DEFINER trigger
     out += [f"GRANT {RW} ON {t} TO moks_executor" for t in _EXECUTOR_RW]
+    out += [f"GRANT UPDATE ({', '.join(WORKER_CREW_SCHEDULE_COLUMNS)}) ON crew_schedules TO moks_worker"]
     out += [f"GRANT {APPEND} ON audit_events TO {r}" for r in ROLES]
     out += [f"GRANT {RW} ON terminal_sessions TO moks_terminal", "GRANT UPDATE (last_seen_at, revoked_at) ON sessions TO moks_terminal"]
     out += ["GRANT INSERT ON approvals TO moks_api", "GRANT INSERT ON action_plans TO moks_api", "GRANT INSERT ON backup_runs TO moks_backup",
