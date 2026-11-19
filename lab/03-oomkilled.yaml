@@ -11,7 +11,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65534, runAsGroup: 65534, seccompProfile: {type: RuntimeDefault}}
       containers:
         - name: cache
-          image: python:3.12-alpine
+          image: python:3.15-alpine
           command: [python, -c]
           args:
             - |
