@@ -468,6 +468,21 @@ def test_opensearch_stays_private_unless_the_bundled_pod_is_published(sets):
     assert {d["metadata"]["name"] for d in docs if d["kind"] == "VirtualService"} == {"moks"}
 
 
+def test_mk4_seeds_bge_m3_and_lets_the_pods_reach_it():
+    """The shared bge-m3 (miniKube deploy/minikube/embeddings/bge-m3) admits app=moks pods by NetworkPolicy and the
+    moks service account by AuthorizationPolicy; this side needs the seed entry and the egress rule."""
+    docs = render("values-hetzner.yaml")
+    seed = yaml.safe_load(of(docs, "ConfigMap", "moks-seed")["data"]["seed.yaml"])
+    (emb,) = [l for l in seed["llm"] if l["purpose"] == "embedding"]
+    assert emb["endpoint"] == "http://bge-m3.embeddings:11434" and emb["model"] == "bge-m3:567m"
+    assert {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "embeddings"}}}],
+            "ports": [{"port": 11434, "protocol": "TCP"}]} in of(docs, "NetworkPolicy", "moks")["spec"]["egress"]
+    by = dict(pods(docs))
+    assert {by[n]["serviceAccountName"] for n in ("moks-api", "moks-worker", "moks-crewai")} == {"moks"}
+    for n in ("moks-api", "moks-worker", "moks-crewai"):
+        assert of(docs, "Deployment", n)["spec"]["template"]["metadata"]["labels"]["app"] == "moks"
+
+
 def test_mk4_runs_opensearch_on_the_node_with_its_data():
     # On k3s the local-path volume's own node affinity places the pod; nodeName is for clusters where it does not.
     docs = render("values-hetzner.yaml", "rag.opensearch.nodeName=mk4-m02")

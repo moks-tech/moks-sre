@@ -240,9 +240,15 @@ The API's init container runs migration `0002` automatically. Take a backup firs
    ([SKILLS.md](SKILLS.md)).
 8. **Evaluation:** **Evaluation → Run lab** (rules mode) should score 1.0. Run it again in LLM mode
    after configuring a provider, to compare.
-9. **LLM:** configure providers under **LLM providers**. The mk4 seed adds none. Without an active chat
+9. **LLM:** configure chat providers under **LLM providers**. The mk4 seed adds none. Without an active chat
    model, investigations and **Analyze with AI** use rule-based reports. Set input and output prices there
    so FinOps can show cost as well as tokens. An inactive provider can be deleted; its usage history stays.
+   The embedding model is seeded: `bge-m3` (Ollama at `http://bge-m3.embeddings:11434`, 1024 dimensions), the
+   cluster's shared deployment from miniKube `deploy/minikube/embeddings/bge-m3`. It is activated only when no
+   embedding model is active. Press **Test**, then **Rebuild index** under **Runbooks & knowledge** (or
+   `kubectl -n moks exec deploy/moks-worker -- moks reindex`). Until the rebuild finishes, search is keyword-only.
+   bge-m3 embeds about 0.7 chunks a second, so the rebuild takes about 25 minutes per 1,000 chunks. Deleting
+   `bge-m3` in the portal does not last: the seed creates it again, inactive, at the next pod start.
 
 ## Secret sync with AWS Secrets Manager
 
@@ -635,7 +641,8 @@ A preset only fills in the form. Put the key in the Secret under the variable it
 - Claude models that support it hand a declined request to another model (`fallbacks: "default"`), billed at that
   model's rates. It is off when a custom endpoint is set. A declined request that no model will answer shows as refused.
 - Enter prices. With none, spend counts as $0 and the daily budget cannot limit the model.
-- The network policy allows outbound 443 to public addresses. A self-hosted server inside the cluster needs its own egress rule.
+- The network policy allows outbound 443 to public addresses. A self-hosted server inside the cluster needs its own egress rule
+  (`networkPolicy.inCluster`; mk4 lists `embeddings` port 11434 for bge-m3).
 
 ## Upgrading to schema 0029
 

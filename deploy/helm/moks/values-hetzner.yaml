@@ -65,7 +65,24 @@ seed:
         # - type: aws_cost
         #   name: aws
         #   config: {cache_minutes: 60, max_requests_per_hour: 60}
-  # LLM providers are configured in the portal (Administration > LLM providers), not seeded here.
+  # Chat providers are configured in the portal (Administration > LLM providers), not seeded here. The embedding
+  # model is mk4's shared bge-m3 (miniKube deploy/minikube/embeddings/bge-m3, release bge-m3 in namespace
+  # embeddings): Ollama on CPU, 1024 dimensions, no query prefix. Create-only, like the rest of the seed: it is
+  # activated only when no embedding model is active, and a choice made in the portal is never overridden.
+  # Activating it (here or in the portal) needs a reindex: until then search is keyword-only.
+  # Ollama embeds one request at a time (~0.7 chunks/s, a batch of 32 takes ~45 s): timeout_seconds covers a
+  # batch with margin, and max_concurrency 1 keeps a search from queueing behind one (it waits 2 s for the slot,
+  # then answers keyword-only).
+  llm:
+    - name: bge-m3
+      purpose: embedding
+      provider: ollama
+      model: bge-m3:567m                      # the chart's model.name; a new tag or digest means a reindex
+      endpoint: http://bge-m3.embeddings:11434
+      embedding_dimensions: 1024
+      timeout_seconds: 300
+      max_concurrency: 1
+      is_active: true
   knowledge_sources:
     - name: moks-docs
       type: github
@@ -163,13 +180,17 @@ networkPolicy:
   apiServer:
     cidrs: [10.43.0.1/32, 10.0.0.2/32]   # k3s kubernetes Service VIP and the endpoint behind it (jithendar-master1)
     ports: [443, 6443]
-  inCluster:                     # values.yaml's list, plus the shared PostgreSQL
+  inCluster:                     # values.yaml's list, plus the shared PostgreSQL and the embedding model
     - namespace: monitoring
       ports: [9090, 3100, 80, 3000]
     - namespace: observability
       ports: [4318]
     - namespace: postgres-db
       ports: [5432]
+    # bge-m3 (seed.llm). Its own NetworkPolicy and AuthorizationPolicy admit app=moks pods running as the moks
+    # service account only: api, worker and crewai, not the executor or the terminal.
+    - namespace: embeddings
+      ports: [11434]
 
 logCollector:
   enabled: true         # monitoring/alloy; also add "moks" to Alloy's namespaces in the tools repo
