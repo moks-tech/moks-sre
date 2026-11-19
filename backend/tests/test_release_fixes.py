@@ -277,12 +277,57 @@ async def test_the_seed_still_activates_when_nothing_is_active(tmp_path):
     await _reset_active_chat()
 
 
-def test_mk4_seeds_no_llm_provider():
+def _mk4_seeded_llms() -> list[dict]:
     import yaml
     from pathlib import Path
 
     values = yaml.safe_load((Path(__file__).parents[2] / "deploy/helm/moks/values-hetzner.yaml").read_text())
-    assert not values["seed"].get("llm")
+    return values["seed"].get("llm") or []
+
+
+def test_mk4_seeds_no_chat_provider():
+    """Chat providers need keys and prices, so they are made in the portal."""
+    assert not [l for l in _mk4_seeded_llms() if l.get("purpose", "chat") == "chat"]
+
+
+def test_mk4_seeds_the_shared_bge_m3_embedding_model():
+    """miniKube deploy/minikube/embeddings/bge-m3: the model name and dimensions must match its values.yaml."""
+    (emb,) = [l for l in _mk4_seeded_llms() if l.get("purpose") == "embedding"]
+    assert (emb["name"], emb["provider"], emb["model"], emb["endpoint"], emb["embedding_dimensions"]) == (
+        "bge-m3", "ollama", "bge-m3:567m", "http://bge-m3.embeddings:11434", 1024)
+    assert not emb.get("credential_ref")  # cluster-internal; the mesh policy admits the moks service account
+    # The seed runs in every pod's init container: a key LLMConfig lacks would crash-loop the pods.
+    assert set(emb) <= {c.name for c in LLMConfig.__table__.columns}
+    admin.LLMIn(**{k: v for k, v in emb.items() if k in admin.LLMIn.model_fields})
+    # Ollama embeds one request at a time and a batch of 32 takes ~45 s on mk4.
+    assert emb["timeout_seconds"] >= 120 and emb["max_concurrency"] == 1
+
+
+async def test_the_seeded_bge_m3_config_embeds_through_ollama(tmp_path):
+    """The mk4 seed entry, loaded the way the init container loads it, calls Ollama's /api/embed."""
+    import yaml
+
+    from moks.cli import _seed
+    from moks.llm.providers import provider_for
+
+    (emb,) = [l for l in _mk4_seeded_llms() if l.get("purpose") == "embedding"]
+    name = f"bge-m3-{uuid.uuid4().hex[:6]}"
+    seed = tmp_path / "seed.yaml"
+    seed.write_text(yaml.safe_dump({"llm": [{**emb, "name": name, "is_active": False}]}))
+    await _seed(str(seed), False)
+    async with session_scope() as db:
+        cfg = (await db.execute(select(LLMConfig).where(LLMConfig.name == name))).scalar_one()
+        assert (cfg.purpose, cfg.timeout_seconds, cfg.max_concurrency, cfg.is_active) == ("embedding", emb["timeout_seconds"], 1, False)
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append((str(request.url), json.loads(request.content)))
+            return httpx.Response(200, json={"embeddings": [[0.0] * 1024]})
+
+        out = await provider_for(cfg, transport=httpx.MockTransport(handler)).embed(["hello"])
+        await db.delete(cfg)
+    assert seen == [("http://bge-m3.embeddings:11434/api/embed", {"model": "bge-m3:567m", "input": ["hello"]})]
+    assert len(out[0]) == 1024
 
 
 async def test_deleting_a_provider_keeps_usage_and_refuses_the_active_one(client):
