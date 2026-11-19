@@ -110,7 +110,7 @@ async def result(iid):
     async with session_scope() as db:
         inv = await db.get(Investigation, uuid.UUID(iid))
         ev = (await db.execute(select(Evidence).where(Evidence.investigation_id == inv.id))).scalars().all()
-        return inv, {e.ref: e for e in ev}
+        return inv, {e.ref: e for e in sorted(ev, key=lambda e: int(e.ref[1:]))}  # in the order collected, whatever order the table returns
 
 
 def happy(script_report=REPORT) -> Script:
@@ -430,3 +430,82 @@ async def test_a_workload_without_pods_gets_an_explicit_empty_result(client, cre
     assert "cart-worker" not in full["excerpt"]
     assert any(g["source"] == "search_logs" and "no pods are owned" in g["reason"] for g in crew["gaps"])
     assert not any(e.tool == "loki_search" for e in ev.values())
+
+
+# ---- the CrewAI console (docs/crewai-console.md) ----------------------------------------------
+
+async def _admin(client, env):
+    email = f"adm-{uuid.uuid4().hex[:6]}@example.com"
+    await make_user(email, ["admin"])
+    client.cookies.clear()
+    return await login(client, email)
+
+
+async def test_the_console_records_steps_log_lines_and_transcripts(client, crew_on):
+    crew_on.setattr(budget, "complete", happy())
+    r, h = await start(client)
+    iid = r.json()["id"]
+    await Investigator(uuid.UUID(iid), "t").run()
+    detail = (await client.get(f"/moks/api/crewai/runs/{iid}")).json()
+    assert detail["run"]["status"] == "completed" and detail["run"]["crew_status"] == "completed"
+    assert [(s["step"], s["status"]) for s in detail["steps"]] == [("setup", "succeeded"), ("workload", "succeeded"), ("change", "succeeded"),
+                                                                    ("review", "succeeded"), ("validate", "succeeded")]
+    by_agent = {a["step"]: a for a in detail["cost"]["by_agent"]}
+    assert by_agent["workload"]["model_calls"] == 3 and by_agent["workload"]["tool_calls"] >= 2 and by_agent["review"]["model_calls"] == 2
+    assert detail["cost"]["by_model"][0]["model"] == "openai/m" and detail["cost"]["by_model"][0]["calls"] >= 7
+    page = (await client.get(f"/moks/api/crewai/runs/{iid}/logs", params={"limit": 5000})).json()
+    lines = page["lines"]
+    assert page["done"] and {l["step"] for l in lines} == {"setup", "workload", "change", "review", "validate"}
+    assert any(l["message"].startswith("CrewAI 1.15") and "the code's defaults" in l["message"] for l in lines)
+    tool = next(l for l in lines if (l["data"] or {}).get("event") == "tool_call" and l["data"]["tool"] == "pod_logs")
+    assert tool["step"] == "workload" and tool["data"]["evidence"].startswith("E") and tool["data"]["args"] == {"pod": "payments-5c4-xyz", "previous": True}
+    assert any("E99" in l["message"] and l["step"] == "validate" for l in lines)  # the invented citation, rejected
+    calls = [l for l in lines if (l["data"] or {}).get("event") == "llm_call"]
+    assert len(calls) >= 7 and all(c["call_id"] for c in calls)
+    transcript = (await client.get(f"/moks/api/crewai/calls/{calls[-1]['call_id']}")).json()
+    assert "Incident reviewer" in transcript["system"] and "untrusted_data" in transcript["system"] and transcript["response"]
+
+
+async def test_an_active_version_changes_the_crew_s_prompts_tools_and_limits(client, crew_on):
+    ha = await _admin(client, None)
+    overlay = {"agents": {"workload": {"role": "Pod detective", "goal": "Find out what {target} is doing.", "tools": ["namespace_health", "describe_pod"]}},
+               "tasks": {"review": {"description": "Target: {target}.\nList the evidence, then report. CANARY-7."}}, "limits": {"max_iterations": 3}}
+    assert (await client.post("/moks/api/crewai/crews/workload/versions", json={"config": overlay, "activate": True}, headers=ha)).status_code == 201
+
+    class Renamed(Script):
+        def agent(self, system: str) -> str:
+            return "workload" if "Pod detective" in system else super().agent(system)
+
+    script = Renamed(workload=[act("namespace_health"), act("pod_logs", {"pod": "payments-5c4-xyz"}), final("done [E1]")],
+                     change=[final("nothing changed")], review=[act("evidence_list"), final(REPORT)])
+    crew_on.setattr(budget, "complete", script)
+    try:
+        r, _ = await start(client)
+        iid = r.json()["id"]
+        await Investigator(uuid.UUID(iid), "t").run()
+        inv, ev = await result(iid)
+        assert inv.status == "completed", inv.error
+        assert "k8s_pod_logs" not in {e.tool for e in ev.values()}  # pod_logs is not among this version's tools
+        prompts_seen = "\n".join(text for who, text in script.calls)
+        assert "Find out what Deployment payments" in prompts_seen or any("Pod detective" in w for w, _ in script.calls) or script.calls[0][0] == "workload"
+        assert "CANARY-7" in prompts_seen and '"likely_causes"' in prompts_seen  # the edited task, and the code-owned output contract after it
+        assert inv.report["crewai"]["limits"]["max_iterations_per_agent"] == 3 and inv.report["crewai"]["config"].startswith("version ")
+        steps = (await client.get(f"/moks/api/crewai/runs/{iid}")).json()["steps"]
+        assert steps[1]["label"] == "Pod detective"
+    finally:
+        await client.post("/moks/api/crewai/crews/workload/activate", json={"version": None}, headers=ha)
+
+
+async def test_a_queued_run_fails_at_start_once_its_flow_is_switched_off(client, crew_on):
+    crew_on.setattr(budget, "complete", happy())
+    r, _ = await start(client)
+    ha = await _admin(client, None)
+    await client.patch("/moks/api/crewai/flows/workload_investigation", json={"enabled": False}, headers=ha)
+    try:
+        await Investigator(uuid.UUID(r.json()["id"]), "t").run()
+        inv, ev = await result(r.json()["id"])
+        assert inv.status == "failed" and "switched off" in inv.error and not ev
+        steps = (await client.get(f"/moks/api/crewai/runs/{r.json()['id']}")).json()["steps"]
+        assert steps[0]["status"] == "failed" and "switched off" in steps[0]["error"]
+    finally:
+        await client.patch("/moks/api/crewai/flows/workload_investigation", json={"enabled": True}, headers=ha)

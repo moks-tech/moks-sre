@@ -81,11 +81,22 @@ async def investigate_config(ctx: AuthContext = Depends(get_auth), db: AsyncSess
 
     cfg = (await db.execute(select(LLMConfig).where(LLMConfig.purpose == "chat", LLMConfig.is_active.is_(True)))).scalar_one_or_none()
     envs = (await db.execute(select(Environment).where(~Environment.name.startswith("eval-")).order_by(Environment.name))).scalars().all()
-    from ..crew import capability, worker_version
+    from ..crew import capability, console, worker_version
+    from ..crew import config as crew_config
 
+    crew = capability(get_settings(), cfg, await worker_version(db))
+    if crew["enabled"]:  # what the CrewAI console decides: the flow switched on or off, and the active version's limits
+        flow = (await console.flows_state(db))[crew_config.FLOW]
+        if crew["available"] and not flow["enabled"]:
+            crew.update(available=False, reason="the workload investigation flow is switched off in the CrewAI console" + (f": {flow['reason']}" if flow.get("reason") else ""))
+        active = await console.active_config(db)
+        limits = crew_config.merge(active.config if active else None)["limits"]
+        crew["limits"].update(timeout_seconds=limits["timeout_seconds"], max_tool_calls=min(limits["max_tool_calls"], get_settings().max_tool_calls),
+                              max_iterations_per_agent=limits["max_iterations"])
+        crew["config_version"] = active.version if active else None
     return {"llm": {"provider": cfg.provider, "model": cfg.model} if cfg else None,
             "skills": sorted(skills.library().skills), "environments": [e.name for e in envs if ctx.principal.namespace_patterns(P.INVESTIGATION_RUN, e.name)],
-            "crewai": capability(get_settings(), cfg, await worker_version(db))}
+            "crewai": crew}
 
 
 async def resolve_scope(db: AsyncSession, ctx: AuthContext, question: str, environment: str | None, namespace: str | None) -> tuple[Environment, str, str]:
@@ -180,20 +191,18 @@ class CrewIn(BaseModel):
 
 @router.post("/investigations/crewai", status_code=201)
 async def create_crewai(body: CrewIn, request: Request, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
-    """Opt-in (docs/crewai-investigation.md). While MOKS_CREWAI_ENABLED is false this route answers 404, as if it did not exist."""
-    from ..crew import capability, worker_version
-    from ..models import LLMConfig
+    """Opt-in (docs/crewai-investigation.md). While MOKS_CREWAI_ENABLED is false this route answers 404, as if it did not exist.
+    The run is the CrewAI console's workload investigation flow (docs/crewai-console.md): numbered, with its log."""
+    from ..crew import config as crew_config
+    from .crewai import start_run
 
-    s = get_settings()
-    if not s.crewai_enabled:
+    if not get_settings().crewai_enabled:
         raise HTTPException(404, "Not Found")
-    cfg = (await db.execute(select(LLMConfig).where(LLMConfig.purpose == "chat", LLMConfig.is_active.is_(True)))).scalar_one_or_none()
-    state = capability(s, cfg, await worker_version(db))
-    if not state["available"]:
-        raise HTTPException(503, f"CrewAI investigation unavailable: {state['reason']}")
-    question = body.question or f"Why is {body.kind} {body.workload} in namespace {body.namespace} unhealthy?"
-    inner = CreateIn(question=question, environment=body.environment, namespace=body.namespace, minutes=body.minutes)
-    return await start_investigation(inner, request, ctx, db, crewai={"workload": body.workload, "kind": body.kind})
+    environment = body.environment
+    if environment is None:  # as before: the default environment, or the only one the person may investigate
+        environment = (await resolve_scope(db, ctx, body.question or body.workload, None, body.namespace))[0].name
+    inputs = {"environment": environment, "namespace": body.namespace, "workload": body.workload, "kind": body.kind, "minutes": body.minutes, "question": body.question}
+    return await start_run(request, ctx, db, crew_config.FLOW, inputs)
 
 
 async def start_investigation(body: CreateIn, request: Request, ctx: AuthContext, db: AsyncSession, conversation_id: uuid.UUID | None = None,
@@ -259,7 +268,8 @@ async def start_investigation(body: CreateIn, request: Request, ctx: AuthContext
                                        **({"crewai": crewai} if crewai else {})}))
     await audit.record(db, action="investigation.create", actor_id=ctx.user.id, actor_email=ctx.user.email,
                        resource_type="investigation", resource_id=str(inv.id), environment=env.name, namespace=body.namespace,
-                       decision="allow", details={"question_chars": len(body.question), "window_minutes": int(window.total_seconds() // 60), **({"workflow": "crewai", **crewai} if crewai else {})},
+                       decision="allow", details={"question_chars": len(body.question), "window_minutes": int(window.total_seconds() // 60),
+                                                  **({"workflow": "crewai", **{k: v for k, v in crewai.items() if k != "draft"}} if crewai else {})},
                        ip=client_ip(request))
     await db.flush()
     if conversation_id:

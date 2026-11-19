@@ -144,6 +144,9 @@ async def run_worker(stop: asyncio.Event | None = None) -> None:
         if reap:
             await reap_stale()
             await jobs.reap_abandoned()
+            from ..crew import console as crew_console
+
+            await crew_console.housekeeping()  # CrewAI console schedules (every 30 s) and run-history retention
         if schedule:
             await jobs.schedule_periodic()
 

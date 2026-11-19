@@ -1274,3 +1274,115 @@ class SecretScheduleApproval(Base):
     schedule_hash: Mapped[str] = mapped_column(String(64))
     comment: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CrewRun(Base):
+    """One CrewAI investigation as the console shows it (docs/crewai-console.md). The investigation row holds its status."""
+    __tablename__ = "crew_runs"
+    investigation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("investigations.id", ondelete="CASCADE"), primary_key=True)
+    flow: Mapped[str] = mapped_column(String(60))
+    run_number: Mapped[int] = mapped_column(Integer)
+    trigger: Mapped[str] = mapped_column(String(20))  # user | rerun | schedule | test
+    inputs: Mapped[dict] = mapped_column(JSONB, default=dict)
+    schedule_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("crew_schedules.id", ondelete="SET NULL"), nullable=True)
+    rerun_of: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    config_version: Mapped[int | None] = mapped_column(Integer, nullable=True)  # None: the code's defaults (or a test run's draft)
+    config_digest: Mapped[str] = mapped_column(String(64), default="")
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CrewRunStep(Base):
+    __tablename__ = "crew_run_steps"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    investigation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("crew_runs.investigation_id", ondelete="CASCADE"))
+    step: Mapped[str] = mapped_column(String(30))
+    position: Mapped[int] = mapped_column(Integer)
+    label: Mapped[str] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(12))  # running | succeeded | failed | cancelled | skipped
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_calls: Mapped[int] = mapped_column(Integer, default=0)
+    tool_calls: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+
+
+class CrewRunLog(Base):
+    __tablename__ = "crew_run_logs"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    investigation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("crew_runs.investigation_id", ondelete="CASCADE"))
+    step: Mapped[str] = mapped_column(String(30))
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    level: Mapped[str] = mapped_column(String(8), default="info")  # debug | info | warning | error
+    message: Mapped[str] = mapped_column(Text)
+    data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    call_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+
+class CrewRunCall(Base):
+    """One model call's transcript, while the console's transcripts setting is on."""
+    __tablename__ = "crew_run_calls"
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    investigation_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("crew_runs.investigation_id", ondelete="CASCADE"))
+    step: Mapped[str] = mapped_column(String(30))
+    provider: Mapped[str] = mapped_column(String(20), default="")
+    model: Mapped[str] = mapped_column(String(200), default="")
+    system: Mapped[str] = mapped_column(Text, default="")
+    prompt: Mapped[list] = mapped_column(JSONB, default=list)
+    response: Mapped[str] = mapped_column(Text, default="")
+    tokens_in: Mapped[int] = mapped_column(Integer, default=0)
+    tokens_out: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[Decimal] = mapped_column(Numeric(12, 6), default=Decimal("0"))
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    outcome: Mapped[str] = mapped_column(String(20), default="ok")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CrewSchedule(Base):
+    __tablename__ = "crew_schedules"
+    __table_args__ = (UniqueConstraint("flow", "name"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    flow: Mapped[str] = mapped_column(String(60))
+    name: Mapped[str] = mapped_column(String(120))
+    cron: Mapped[str] = mapped_column(String(120))  # five fields, UTC
+    inputs: Mapped[dict] = mapped_column(JSONB, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    owner_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))  # runs as this person, rechecked at every start
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_run_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CrewConfig(Base):
+    """One version of a crew's editable surface. At most one is active per crew; none means the code's defaults."""
+    __tablename__ = "crew_configs"
+    __table_args__ = (UniqueConstraint("crew", "version"),)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    crew: Mapped[str] = mapped_column(String(60))
+    version: Mapped[int] = mapped_column(Integer)
+    config: Mapped[dict] = mapped_column(JSONB)
+    digest: Mapped[str] = mapped_column(String(64))
+    base_digest: Mapped[str] = mapped_column(String(64))  # the code defaults it was edited against ("upstream changed")
+    note: Mapped[str] = mapped_column(Text, default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CrewSetting(Base):
+    __tablename__ = "crew_settings"
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

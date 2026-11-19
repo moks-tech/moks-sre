@@ -57,6 +57,7 @@ docs/             Architecture, security/RBAC, connectors, operator guide, testi
 - [Operator guide](docs/OPERATOR_GUIDE.md): commands in implementation order, local development, backup/restore
 - [Demo incident lab](lab/README.md)
 - [SRE skills (SKILL.md)](docs/SKILLS.md)
+- [CrewAI workload investigation](docs/crewai-investigation.md) and the [CrewAI console](docs/crewai-console.md): runs and logs, flows, schedules, crew versions
 - [FinOps](docs/FINOPS.md)
 - [Trustworthy reports and durable investigations](docs/INVESTIGATION_DURABILITY.md)
 - [Reranking](docs/RERANKING.md): optional internal PyTorch service, off by default

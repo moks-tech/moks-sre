@@ -189,9 +189,10 @@ class Investigator:
 
     async def _emit(self, type_: str, payload: dict[str, Any]) -> None:
         self.seq += 1
+        seq = self.seq  # taken before the await: two emits in flight (a crew's posted note and its next model call) must not share a number
         async with session_scope() as db:
             await self._fence(db)
-            db.add(InvestigationEvent(investigation_id=self.id, seq=self.seq, type=type_, payload=payload))
+            db.add(InvestigationEvent(investigation_id=self.id, seq=seq, type=type_, payload=payload))
             if type_ == "phase":
                 await db.execute(update(Investigation).where(Investigation.id == self.id).values(stage=payload["phase"]))
 

@@ -5,6 +5,11 @@ an incident summary in which every finding cites recorded evidence. The LangGrap
 default for everything else. CrewAI runs only when `MOKS_CREWAI_ENABLED=true` **and** the image was built
 with the crewai extra.
 
+Runs, logs, schedules and the crew's prompts are managed in the **CrewAI console** at `/moks/crewai`
+([crewai-console.md](crewai-console.md)). `POST /investigations/crewai` (the form on New investigation) starts the
+console's *Workload investigation* flow, so every run is numbered, logged step by step and uses the crew's active
+configuration version (prompts, tool subset and limits; section 4 describes the code's defaults).
+
 Status: on `master`, and switched on for mk4 in `values-hetzner.yaml` (`crewai.enabled: true`). CI's
 `release-crewai` job builds the `moks-crewai` image on every push to `master`, after the backend suite passed on
 the CrewAI dependency set. Tested with a scripted model and fake connectors only: no real model has run the crew.
