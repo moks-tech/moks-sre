@@ -1,5 +1,10 @@
 # OpenSearch for MOKS knowledge
 
+> **mk4 no longer runs OpenSearch (2026-11-19).** It searches PostgreSQL: full text plus pgvector k-NN in the shared
+> CloudNativePG database (`rag.backend: postgres`), embedded by the cluster's bge-m3. The bundled pod, its Dashboards
+> and the `/opensearch` routes are retired; see [Retiring OpenSearch on mk4](OPERATOR_GUIDE.md#retiring-opensearch-on-mk4).
+> This document still describes the backend for any environment that sets `rag.backend: opensearch`, and how mk4 ran it.
+
 PostgreSQL is the source of truth for documents, access, ingestion state and indexing events. OpenSearch holds a derived copy, and every result is checked against PostgreSQL before anyone sees it. Losing OpenSearch loses speed and vector search, not knowledge.
 
 **This is persistence, not high availability.** One pod, on one node, on a disk it shares with everything else on mk4. The four minikube nodes are containers on one Hetzner host: they are not four failure domains. If that host or disk fails, the volume goes with it, and a PVC is not a backup.

@@ -319,7 +319,7 @@ jobs:
       - name: Sync the MOKS Applications from master
         run: |
           set -euo pipefail
-          for app in foundation database api worker crewai executor terminal routing opensearch reranker; do
+          for app in foundation database api worker crewai executor terminal routing reranker; do
             argocd app get "moks-$app" -o name > /dev/null 2>&1 || { echo "moks-$app does not exist; skipped"; continue; }
             argocd app get "moks-$app" --refresh > /dev/null
             argocd app sync "moks-$app" --timeout 600

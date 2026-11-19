@@ -110,6 +110,18 @@ class PostgresBackend:
             "SELECT 1 FROM information_schema.columns WHERE table_name = 'chunk_embeddings' AND column_name = 'embedding'"))).first()
         return row is not None
 
+    async def enable_vector(self) -> bool:
+        """Whether vectors can be stored, adding the column first when pgvector has been installed since.
+        Migration 0002 adds it only if this role could create the extension then. A tenant of a shared
+        CloudNativePG cluster cannot (pgvector is not a trusted extension), so the cluster installs it
+        (the Database's extensions) and the next index build adds the column here."""
+        if await self.has_vector():
+            return True
+        if (await self.db.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'"))).first() is None:
+            return False
+        await self.db.execute(text("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS embedding vector"))
+        return True
+
     async def keyword(self, query: str, found: list[access.Grant], k: int, only: list[str] | None = None) -> list[str]:
         params: dict[str, Any] = {"q": query, "k": k}
         where = _filters_sql(found, params, only)

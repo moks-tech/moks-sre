@@ -4,14 +4,14 @@ import uuid
 
 import httpx
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 
 from moks.connectors.base import ConnectorError
 from moks.db import session_scope
 from moks.llm.providers import LLMError
 from moks.models import EmbeddingIndex, KnowledgeSource, LLMConfig
 from moks.rag import service
-from moks.rag.backends import OpenSearchBackend
+from moks.rag.backends import OpenSearchBackend, PostgresBackend
 
 
 class FakeOS:
@@ -210,3 +210,33 @@ async def test_a_dead_build_does_not_block_reindex_forever(os_, monkeypatch):
     async with session_scope() as db:
         r = await service.reindex(db)
     assert r["model"].endswith("m4/default")
+
+
+async def test_enable_vector_adds_the_column_once_pgvector_is_installed():
+    """mk4's shared CloudNativePG cluster: migration 0002 ran where the tenant role could not create pgvector, and the
+    cluster installs it later. The next index build adds the column; with no extension it stays keyword-only."""
+    async with session_scope() as db:
+        pg = PostgresBackend(db)
+        installed = (await db.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'"))).first() is not None
+        if installed:
+            await db.execute(text("ALTER TABLE chunk_embeddings DROP COLUMN embedding"))
+        assert await pg.has_vector() is False
+        assert await pg.enable_vector() is installed
+        assert await pg.has_vector() is installed
+        await db.rollback()  # DDL is transactional: the shared test database keeps its column, or its lack of one
+
+
+async def test_postgres_reindex_without_pgvector_says_how_to_install_it(monkeypatch):
+    async with session_scope() as db:
+        if (await db.execute(text("SELECT 1 FROM pg_extension WHERE extname = 'vector'"))).first():
+            pytest.skip("pgvector is installed on this server")
+    monkeypatch.setattr(service, "backend_name", lambda: "postgres")
+    await _model(monkeypatch)
+    try:
+        async with session_scope() as db:
+            with pytest.raises(ConnectorError, match="CloudNativePG Database's extensions") as raised:
+                await service.reindex(db)
+        assert raised.value.kind == "config"
+    finally:
+        async with session_scope() as db:
+            await db.execute(delete(LLMConfig).where(LLMConfig.purpose == "embedding"))

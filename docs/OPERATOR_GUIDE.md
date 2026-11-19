@@ -10,7 +10,8 @@ been run against the cluster yet; each step says what it changes.
 - Harbor at `registry.jithendar.com` (tools repository, `deploy/minikube/harbor`). Every MOKS image is
   `registry.jithendar.com/jithendar/<image>:latest`.
 - Capacity: MOKS needs about 0.5 CPU and 1 GiB in steady state (2 API pods, 1 worker,
-  PostgreSQL). Each mk4 node has ~32 GiB, so OpenSearch (~2.5 GiB, Phase 2) also fits.
+  PostgreSQL). Knowledge search runs in PostgreSQL (full text + pgvector), so it adds no pods; OpenSearch
+  (~2.5 GiB) ran on mk4 until 2026-11-19.
 
 ## 1. AWS resources and CI (one time)
 
@@ -259,7 +260,42 @@ Off by default. [SECRETS_SYNC.md](SECRETS_SYNC.md#configuration) has the chart v
 
 See [TERMINAL.md](TERMINAL.md). It is off until `terminal.enabled` is set, and needs a Terraform apply, a Secret and a database role first.
 
+## Retiring OpenSearch on mk4
+
+Since 2026-11-19 mk4 sets `rag.backend: postgres`: keyword search and pgvector k-NN in the MOKS database, fused with
+RRF, and embedded by the cluster's bge-m3. pgvector is not a trusted extension, so the `moks` role cannot create it:
+the kubernetes repository has the CloudNativePG operator install it (`postgres_databases.moks.extensions`), and the
+next index build adds the `chunk_embeddings.embedding` column that migration `0002` skipped.
+
+1. The kubernetes change is applied (its CI applies on merge). Check that the extension is there:
+   `kubectl -n postgres-db get database postgres-cluster-moks -o jsonpath='{.status.extensions}'`.
+2. Argo CD syncs `moks-foundation`, so `MOKS_RAG_BACKEND` is `postgres` and the pods roll. Search is keyword-only and
+   says so until the next step.
+3. Knowledge → **Rebuild index**, or `kubectl -n moks exec deploy/moks-worker -- moks reindex`. bge-m3 embeds about
+   0.7 chunks a second, so about 2,000 chunks take most of an hour; search stays on the keyword index until the switch.
+4. Check on the Knowledge page that the `postgres` index is active with full vector coverage, and that a search
+   answers in hybrid mode.
+5. Remove what Argo CD left behind (it never prunes). The Application has no finalizer, so deleting it removes
+   only itself:
+
+   ```sh
+   kubectl -n argocd delete application moks-opensearch
+   kubectl -n moks delete statefulset/moks-opensearch deployment/moks-opensearch-dashboards \
+     service/moks-opensearch service/moks-opensearch-dashboards \
+     networkpolicy/moks-opensearch networkpolicy/moks-opensearch-dashboards \
+     virtualservice/moks-opensearch virtualservice/moks-opensearch-dashboards
+   kubectl -n moks delete pvc data-moks-opensearch-0
+   kubectl get pv | grep data-moks-opensearch-0          # reclaim policy Retain: delete the PV by name
+   ```
+
+   A Retain local-path volume leaves its directory on the node
+   (`/var/local-path-provisioner/pvc-…_moks_data-moks-opensearch-0` on worker2): remove it there to get the disk back.
+
+The OpenSearch generations stay in `embedding_indexes` as history; nothing reads them while the backend is `postgres`.
+
 ## OpenSearch at /opensearch
+
+mk4 no longer publishes this (see above); it applies to an environment that still runs the bundled pod.
 
 On mk4 Traefik publishes the bundled pod at `https://jithendar.com/opensearch` for reads only: GET and HEAD,
 plus POST to `_search`, `_msearch` and `_count`. The pod has no security of its own, so everything rests on the
