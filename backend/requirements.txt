@@ -1,5 +1,5 @@
 # Pinned runtime dependencies for the image (tested together on Python 3.11 and 3.12).
-fastapi==0.162.0
+fastapi==0.162.5
 starlette==1.10.0
 uvicorn[standard]==0.54.0
 SQLAlchemy[asyncio]==2.1.8
@@ -8,9 +8,9 @@ alembic==1.20.1
 pydantic==2.14.3
 pydantic-settings==2.16.2
 httpx==0.28.1
-anthropic==2.6.0
-langchain-core==1.7.6
-langgraph==1.2.20
+anthropic==2.8.0
+langchain-core==1.8.0
+langgraph==1.2.21
 kubernetes_asyncio==36.1.0
 Authlib==1.9.5
 argon2-cffi==25.1.0
@@ -19,7 +19,7 @@ opentelemetry-sdk==1.45.2
 opentelemetry-exporter-otlp-proto-http==1.45.2
 opentelemetry-instrumentation-fastapi==0.66b2
 opentelemetry-instrumentation-httpx==0.66b2
-boto3==1.43.125
+boto3==1.44.2
 cryptography==50.0.2
 PyYAML==6.0.3
 python-multipart==0.0.33
