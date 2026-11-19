@@ -131,7 +131,7 @@ async def ensure_index(db: AsyncSession) -> EmbeddingIndex:
     cfg = await embedding_config(db)
     if backend_name() == "evaluation":
         cfg = None  # keyword and exact-identifier ranking only, on no shared budget
-    if backend_name() == "postgres" and cfg and not await PostgresBackend(db).has_vector():
+    if backend_name() == "postgres" and cfg and not await PostgresBackend(db).enable_vector():
         cfg = None  # pgvector not installed: keyword-only
     dims, error = None, None
     if cfg:
@@ -700,8 +700,9 @@ async def reindex(db: AsyncSession, job_id: uuid.UUID | None = None) -> dict:
     document changed after that position is copied again. Inserts into the outbox are held only for
     the moment of the final check and the switch, so nothing can slip between them."""
     cfg = await embedding_config(db)
-    if backend_name() == "postgres" and cfg and not await PostgresBackend(db).has_vector():
-        raise ConnectorError("config", "pgvector is not installed in this PostgreSQL; use the opensearch backend or a pgvector image")
+    if backend_name() == "postgres" and cfg and not await PostgresBackend(db).enable_vector():
+        raise ConnectorError("config", "pgvector is not installed in this database: add it to the CloudNativePG Database's extensions, "
+                                       "use a pgvector image, or the opensearch backend")
     await db.execute(update(EmbeddingIndex).where(
         EmbeddingIndex.backend == backend_name(), EmbeddingIndex.status == "building",
         EmbeddingIndex.heartbeat_at < datetime.now(timezone.utc) - BUILD_STALE).values(status="failed", error="build stopped responding", cleanup_pending=True))

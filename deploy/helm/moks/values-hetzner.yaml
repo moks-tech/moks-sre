@@ -106,9 +106,8 @@ mesh:
     dryRun: true
     namespaces: [istio-ingress, monitoring]
 
-# Routed by the Istio ingress gateway: miniKube deploy/minikube/istio/edge delegates /moks, /opensearch and
-# /opensearch-dashboards to the VirtualServices this renders. TLS, HTTP to HTTPS and the OpenSearch logins and
-# read-only rule are the gateway's.
+# Routed by the Istio ingress gateway: kubernetes deploy/minikube/istio/edge delegates /moks to the VirtualService
+# this renders. TLS and HTTP to HTTPS are the gateway's.
 ingress:
   enabled: false
 istio:
@@ -120,25 +119,13 @@ istio:
 postgres:
   bundled: false
 
+# Full-text search and pgvector k-NN in the MOKS database, fused with RRF: no search pods. pgvector comes from the
+# shared cluster (kubernetes minikube-infrastructure: postgres_databases.moks.extensions); a reindex adds the
+# vector column when the extension is there. Until 2026-11-19 this was the bundled OpenSearch pod (~2.5 GiB requested).
+# Changing the backend moves nothing: Rebuild index (Knowledge) or run `moks reindex` after.
 rag:
-  backend: opensearch    # ~2.5 GiB; mk4 nodes have ~32 GiB. Changing this moves nothing: run `moks reindex` after.
+  backend: postgres
   # backend: pinecone    # needs MOKS_CRED_PINECONE_API_KEY, and a reindex
-  opensearch:
-    storage: 20Gi
-    storageClass: local-path     # like every other volume on the cluster; local-path PVs carry node affinity
-    fixVolumePermissions: true   # local-path is a hostPath; chown the data dir to opensearch (uid 1000)
-    # local-path volumes share the node's disk with the other databases. Bytes free say what is really
-    # left. Below 1gb OpenSearch stops writes, which protects the other databases.
-    diskWatermarks: {low: 3gb, high: 2gb, floodStage: 1gb}
-    publicRoute: {enabled: true}   # https://jithendar.com/opensearch; login from Secret moks-opensearch-auth (on the gateway)
-    dashboards: {enabled: true}    # https://jithendar.com/opensearch-dashboards; login from Secret moks-opensearch-dashboards-auth
-    # The secured cluster beside this one (docs/OPENSEARCH.md). Off until you run that document's steps.
-    secure:
-      enabled: false
-      active: false
-      fixVolumePermissions: true
-      allowMmap: true      # mk4 nodes report vm.max_map_count 1048576
-      diskWatermarks: {low: 3gb, high: 2gb, floodStage: 1gb}
 
 executor:
   enabled: true
