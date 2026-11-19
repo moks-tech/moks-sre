@@ -122,7 +122,7 @@ def happy(script_report=REPORT) -> Script:
 async def test_capability_reports_available_with_the_flag_and_a_model(client, crew_on):
     await start(client)
     cfg = (await client.get("/moks/api/investigate/config")).json()["crewai"]
-    assert cfg["available"] is True and cfg["version"] == "1.15.36" and cfg["llm"] == "openai/m"
+    assert cfg["available"] is True and cfg["version"] == "1.15.41" and cfg["llm"] == "openai/m"
 
 
 async def test_a_crew_report_cites_only_recorded_evidence(client, crew_on):
@@ -304,6 +304,15 @@ async def test_no_network_and_no_telemetry_during_a_run(client, crew_on):
     assert inv.status == "completed" and lookups == []
     assert os.environ["CREWAI_DISABLE_TELEMETRY"] == "true" and os.environ["CREWAI_TRACING_ENABLED"] == "false"
     assert inv.report["crewai"]["status"] == "completed"
+
+
+def test_no_spreadsheet_url_in_a_task_is_downloaded():
+    """Since crewai 1.15.38 an agent downloads every CSV/TSV/Excel URL in its task's description before it
+    runs, when crewai's `spreadsheets` extra is installed. MOKS installs plain crewai, so that is a no-op."""
+    from crewai.agent.spreadsheet_inputs import read_spreadsheet_inputs, spreadsheets_installed
+
+    assert not spreadsheets_installed()
+    assert read_spreadsheet_inputs("see https://example.com/pods.csv").urls == frozenset()
 
 
 async def test_the_executor_denies_what_the_person_may_not_read(client, crew_on):
