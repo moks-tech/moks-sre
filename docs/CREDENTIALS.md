@@ -2,8 +2,11 @@
 
 Every form in MOKS that needs a key, token or password takes the value itself: connectors (including the
 kubeconfig and the AWS keys for secret sync), LLM providers, GitHub knowledge sources and backup storage. Paste it
-and save. MOKS stores it encrypted and never shows it again. Settings → Credentials lists what is stored and where
-each one is used, and replaces or deletes them.
+and save, or pick one already saved under *… from*. MOKS stores it encrypted and never shows it again.
+
+Settings → Credentials lists what is stored and where each one is used. **Add credential** saves a named value
+(an API key used by several providers, say) for any form to pick; **Replace value** changes it everywhere it is
+used; a credential nothing uses can be deleted.
 
 Nothing needs a Kubernetes Secret entry any more, apart from what MOKS needs to start:
 
@@ -23,15 +26,25 @@ A connector, provider, source or backup store keeps a *reference*, never a value
 | `{"type": "env", "name": "MOKS_CRED_X"}` | An environment variable from a Kubernetes Secret |
 | `{"type": "file", "path": "eks/kubeconfig"}` | A file under `MOKS_CREDENTIALS_DIR` |
 
-Environment and file references keep working. Choose them under *… from* in any credential field.
+Environment and file references keep working for seeds, Helm values and API clients, but forms no longer offer
+them. A form showing one says so, and a value pasted there replaces it with a stored credential.
 
 ## Moving off the Secret
 
-Settings → Credentials → **Import from Kubernetes Secret** copies the value of every `MOKS_CRED_*` variable that a
-connector, LLM provider, knowledge source or backup store names. It stores one encrypted copy per variable and
-points those references at it. Running it again reuses the copies. Variables the API pod does not have are listed
-and left alone. The Secret itself is not changed. Once **Test all** on Connectors and each LLM provider's test pass,
-delete the `MOKS_CRED_*` entries from the Secret.
+When the API starts, it copies the value of every `MOKS_CRED_*` variable that a connector, LLM provider, knowledge
+source or backup store names into stored credentials: one encrypted copy per variable, and those references point
+at it. One replica does it (advisory lock), later starts find nothing to do, and the audit log records it as
+`credential.import_environment` with `automatic: true`. The Secret itself is not changed. Once **Test all** on
+Connectors and each LLM provider's test pass, delete the `MOKS_CRED_*` entries from the Secret. A Secret value
+changed after the move is not picked up: replace it in Settings instead.
+
+`MOKS_CREDENTIALS_IMPORT_ON_START=false` turns this off; Settings →
+Credentials → **Import from Kubernetes Secret** then does the same on demand.
+
+A reference to a variable the API pod does not have is left alone and listed under *Waiting for a value* with what
+uses it. **Paste value** stores it once and points every one of those references at it
+(`PUT /admin/credentials/environment/{name}`). Secret sync's AWS keys and a connector's executor credential are the
+exception: the executor's own Secret holds those on purpose, so they are never listed as waiting.
 
 `MOKS_CRED_PINECONE_API_KEY` is used by MOKS itself, not by a connector, so it is listed under *Used by the
 deployment*. A value set there is used before the environment variable. `MOKS_CRED_RERANKER_TOKEN` stays in
@@ -75,8 +88,8 @@ A saved value is usable within seconds, and a replaced value rebuilds cached con
 
 | Action | Permission |
 |---|---|
-| Store or replace a value from a form | `admin.connectors`, `admin.llm`, `admin.settings` or `knowledge.source_admin` |
-| List, delete, import, re-encrypt | `admin.settings` |
+| Store or replace a value from a form; list saved names to pick from | `admin.connectors`, `admin.llm`, `admin.settings` or `knowledge.source_admin` |
+| List with usage, add, delete, import, fill a waiting variable, re-encrypt | `admin.settings` |
 
 A credential that something still uses cannot be deleted; the refusal names the users. Every create, replace,
 delete, import and re-encryption is in the audit log, with the label and never the value.
@@ -85,4 +98,5 @@ delete, import and re-encryption is in the audit log, with the label and never t
 
 The AWS keys for an `aws_secrets` connector can be stored here like any other credential. When they are, the API
 pod can decrypt them too, because it holds the same key. Where that matters, keep using Pod Identity or IRSA (no
-keys), or an environment or file reference that only the executor's Secret holds (docs/SECRETS_SYNC.md).
+keys), or an environment or file reference that only the executor's Secret holds (docs/SECRETS_SYNC.md), set in
+the connector's JSON or seed.

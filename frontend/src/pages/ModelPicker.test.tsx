@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FeedbackProvider } from "../ui";
 import { chooseModel, LLMProviders } from "./Admin";
 import { canList } from "./ModelPicker";
+import { forgetChoices } from "../credentials";
 
 vi.mock("../auth", () => ({ useAuth: () => ({ can: () => true, me: { email: "a@x" } }) }));
 
 const KEY_ID = "6f1c2a3b-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+const SAVED_ID = "0b7e7c55-0d3c-4a43-9c32-4d1f3e2a9b10";
 
 /** /admin/llm/models answers with `listing(body)`; every request is recorded. */
 function server(listing: (body: any) => any) {
@@ -19,6 +21,7 @@ function server(listing: (body: any) => any) {
       return new Response(JSON.stringify(listing(body)), { status: 200 });
     }
     if (path === "/admin/credentials") return new Response(JSON.stringify({ ref: { type: "stored", id: KEY_ID } }), { status: 201 });
+    if (path === "/admin/credentials/choices") return new Response(JSON.stringify({ credentials: [{ id: SAVED_ID, label: "OpenAI key" }] }), { status: 200 });
     return new Response(JSON.stringify(path === "/admin/llm" ? [] : {}), { status: 200 });
   }));
   return asked;
@@ -35,7 +38,7 @@ async function openForm(preset: string) {
 const select = (d: HTMLElement) => within(d).getByLabelText("Model") as HTMLSelectElement;
 const groups = (d: HTMLElement) => [...select(d).querySelectorAll("optgroup")].map((g) => g.label);
 
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); forgetChoices(); });
 
 describe("LLM provider form: models from the provider", () => {
   it("stores the pasted Anthropic key, lists its models with it, and fills in prices and a name", async () => {
@@ -73,13 +76,15 @@ describe("LLM provider form: models from the provider", () => {
   });
 
   it("keeps the usual models when the account cannot be asked, says why, and still lets a name be typed", async () => {
-    const asked = server(() => ({ models: [], error: "credential environment variable MOKS_CRED_OPENAI_API_KEY is not set", note: null }));
+    const asked = server(() => ({ models: [], error: "the provider answered 401: invalid API key", note: null }));
     const d = await openForm("openai");
     expect(groups(d)[0]).toMatch(/^Suggested chat models \(\d+\)$/);  // at once, before the provider is asked
-    fireEvent.change(within(d).getByLabelText("API key from"), { target: { value: "env" } });  // the older way still works
-    fireEvent.change(within(d).getByLabelText("Variable"), { target: { value: "MOKS_CRED_OPENAI_API_KEY" } });
+    const from = within(d).getByLabelText("API key from") as HTMLSelectElement;
+    await waitFor(() => expect([...from.options].map((o) => o.value)).toContain(`id:${SAVED_ID}`));
+    fireEvent.change(from, { target: { value: `id:${SAVED_ID}` } });  // a key saved in Settings > Credentials
     expect([...select(d).options].map((o) => o.value)).toContain("gpt-5");
-    await waitFor(() => expect(within(d).getByRole("status").textContent).toContain("MOKS_CRED_OPENAI_API_KEY is not set"));
+    await waitFor(() => expect(within(d).getByRole("status").textContent).toContain("401: invalid API key"));
+    expect(asked.at(-1).credential_ref).toEqual({ type: "stored", id: SAVED_ID });
     expect(within(d).getByRole("status").textContent).toContain("Showing the usual models");
     fireEvent.change(within(d).getByLabelText("Purpose"), { target: { value: "embedding" } });
     expect(groups(d)[0]).toBe("Suggested embedding models (2)");

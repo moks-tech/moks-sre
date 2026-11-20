@@ -2,6 +2,7 @@ import { Suspense, useMemo, useState, type FormEvent, type ReactNode } from "rea
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
+import { forgetChoices } from "../credentials";
 import { Badge, ErrorBox, FormDrawer, FormSection, Loading, PageHead, Time, useLoad } from "../components";
 import { settingsFor } from "../nav";
 import { Empty, Icon, Skeleton, useFeedback } from "../ui";
@@ -37,7 +38,7 @@ const DESCRIBE: Record<string, string> = {
   "/settings/runtime": "LLM budgets, automatic investigation caps, CrewAI limits and ML schedules, changed without a deploy.",
   "/settings/deployment": "Every value this deployment started with. Read-only; secrets show only whether they are set.",
   "/settings/users": "People, their roles and where each role applies.",
-  "/settings/credentials": "API keys, tokens and passwords pasted into MOKS: where each is used, replacing one, and importing from the Kubernetes Secret.",
+  "/settings/credentials": "API keys, tokens and passwords stored in MOKS: add one, see where each is used, replace or delete it.",
   "/settings/environments": "Clusters, allowed namespaces, detection and investigation limits.",
   "/settings/connectors": "Prometheus, Loki, Kubernetes, Git and the other sources MOKS reads.",
   "/settings/backup-storage": "Where database backups are written.",
@@ -251,16 +252,19 @@ export function Deployment() {
 
 const CRED_STATE: Record<string, [string, "ok" | "warn" | "bad"]> = { current: ["current key", "ok"], older_key: ["older key", "warn"], unreadable: ["unreadable", "bad"] };
 
-/** Every credential pasted into MOKS: where it is used, who changed it, and the move off environment variables. */
+/** Every credential stored in MOKS: add one, where each is used, who changed it, and references still waiting for a value. */
 export function Credentials() {
   const { confirm: ask, toast } = useFeedback();
   const load = useLoad(() => api<any>("/admin/credentials"), []);
   const [replacing, setReplacing] = useState<any>(null);
   const [value, setValue] = useState("");
+  const [name, setName] = useState("");
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const d = load.data;
   const envRefs: any[] = d?.environment_references ?? [];
+  const importable = envRefs.filter((r) => r.set_here);
+  const waiting = envRefs.filter((r) => !r.set_here);
   const older = (d?.credentials ?? []).filter((c: any) => c.state === "older_key").length;
   async function run(fn: () => Promise<any>) {
     setBusy(true);
@@ -284,20 +288,27 @@ export function Credentials() {
     if (!await ask({ title: `Delete ${c.label}?`, body: "The value is destroyed. Nothing uses it now.", action: "Delete credential", danger: true })) return;
     if (await run(() => api(`/admin/credentials/${c.id}`, { method: "DELETE" }))) { toast(`Deleted ${c.label}.`); load.reload(); }
   }
+  function open(r: any) { setError(null); setValue(""); setName(""); setReplacing(r); }
   async function replace(e: FormEvent) {
     e.preventDefault();
-    const req = replacing.id ? api(`/admin/credentials/${replacing.id}`, { method: "PUT", body: { value } })
+    const req = replacing.adding ? api("/admin/credentials", { method: "POST", body: { label: name.trim(), value } })
+      : replacing.variable ? api(`/admin/credentials/environment/${encodeURIComponent(replacing.variable)}`, { method: "PUT", body: { value } })
+      : replacing.id ? api(`/admin/credentials/${replacing.id}`, { method: "PUT", body: { value } })
       : api("/admin/credentials", { method: "POST", body: { label: replacing.label, value } });
     if (await run(() => req)) {
-      toast(`Replaced ${replacing.label}. Everything using it picks up the new value within a few seconds.`);
+      forgetChoices();
+      toast(replacing.adding ? `Added ${name.trim()}. Pick it under "... from" in any connector, LLM provider, knowledge source or backup storage.`
+        : `${replacing.id ? "Replaced" : "Saved"} ${replacing.label}. Everything using it picks up the value within a few seconds.`);
       setReplacing(null);
       setValue("");
+      setName("");
       load.reload();
     }
   }
   return <div className="stack">
-    <PageHead title="Credentials" sub="API keys, tokens and passwords are pasted into the form that uses them: a connector, an LLM provider, a knowledge source or backup storage. MOKS stores them encrypted and never shows them again.">
-      {envRefs.length > 0 && <button onClick={importEnv} disabled={busy}>Import from Kubernetes Secret</button>}
+    <PageHead title="Credentials" sub="API keys, tokens and passwords, stored encrypted and never shown again. Add one here and pick it in a connector, LLM provider, knowledge source or backup storage, or paste it straight into that form.">
+      {importable.length > 0 && <button className="ghost" onClick={importEnv} disabled={busy}>Import from Kubernetes Secret</button>}
+      <button onClick={() => open({ adding: true, label: "credential", used_by: [] })}>Add credential</button>
     </PageHead>
     {!replacing && <ErrorBox error={error} />}
     {d ? <>
@@ -308,23 +319,30 @@ export function Credentials() {
           <dd className="stack">
             <span><Badge kind={CRED_STATE[c.state]?.[1] ?? "warn"}>{CRED_STATE[c.state]?.[0] ?? c.state}</Badge> {c.used_by.length ? <>used by {c.used_by.join(", ")}</> : <span className="muted">not used</span>}</span>
             <span className="small muted">Changed <Time iso={c.updated_at} />{c.updated_by ? ` by ${c.updated_by}` : ""}</span>
-            <span className="row wrap"><button className="small" onClick={() => { setError(null); setValue(""); setReplacing(c); }}>Replace value</button>
+            <span className="row wrap"><button className="small" onClick={() => open(c)}>Replace value</button>
               {!c.used_by.length && <button className="small ghost" onClick={() => remove(c)} disabled={busy}>Delete</button>}</span>
           </dd>
-        </div>)}</dl> : <Empty title="No credentials stored yet.">Paste a key into a connector, an LLM provider or backup storage, or import the ones in the Kubernetes Secret.</Empty>}
+        </div>)}</dl> : <Empty title="No credentials stored yet.">Use Add credential, or paste a key into a connector, an LLM provider or backup storage.</Empty>}
       </section>
       {(d.deployment ?? []).length > 0 && <section className="card stack">
         <h2>Used by the deployment</h2>
         <div className="small muted">Credentials MOKS itself uses rather than a connector. A value set here is used before the environment variable of the same name.</div>
         <dl className="kv settings-kv">{d.deployment.map((x: any) => <div key={x.name} className="kv-row"><dt><span className="mono">{x.name}</span><div className="small muted">{x.help}</div></dt>
           <dd className="row wrap">{x.source === "stored" ? <Badge kind="ok">stored in MOKS</Badge> : x.source === "environment" ? <Badge>from the environment</Badge> : <Badge kind="warn">not set</Badge>}
-            <button className="small" onClick={() => { setError(null); setValue(""); setReplacing({ id: x.id, label: x.name, used_by: [`Deployment (${x.name})`] }); }}>{x.id ? "Replace value" : "Set value"}</button></dd></div>)}</dl>
+            <button className="small" onClick={() => open({ id: x.id, label: x.name, used_by: [`Deployment (${x.name})`] })}>{x.id ? "Replace value" : "Set value"}</button></dd></div>)}</dl>
       </section>}
-      {envRefs.length > 0 && <section className="card stack">
+      {waiting.length > 0 && <section className="card stack">
+        <h2>Waiting for a value</h2>
+        <div className="small muted">These were set up to read a Kubernetes Secret variable this deployment does not have, so they cannot sign in. Paste each value once: MOKS stores it and everything listed uses it.</div>
+        <dl className="kv settings-kv">{waiting.map((r) => <div key={r.name} className="kv-row"><dt><span className="mono">{r.name}</span><div className="small muted">{(r.used_by ?? []).join(", ")}</div></dt>
+          <dd className="row wrap"><Badge kind="bad">not set</Badge>
+            <button className="small" onClick={() => open({ variable: r.name, label: r.name, used_by: r.used_by ?? [] })}>Paste value</button></dd></div>)}</dl>
+      </section>}
+      {importable.length > 0 && <section className="card stack">
         <h2>Still read from the Kubernetes Secret</h2>
-        <div className="small muted">These references name environment variables. Import them to manage them here; after that the Secret needs only what MOKS needs to start: the database URL, the session secret and, with OIDC, the client secret.</div>
-        <dl className="kv settings-kv">{envRefs.map((r) => <div key={r.name} className="kv-row"><dt className="mono">{r.name}</dt>
-          <dd>{r.set_here ? <Badge kind="ok">set</Badge> : <Badge kind="bad">not set: paste it into the form that uses it</Badge>}</dd></div>)}</dl>
+        <div className="small muted">MOKS moves these into stored credentials when the API starts, unless MOKS_CREDENTIALS_IMPORT_ON_START is off. Import moves them now; the Secret is left as it is.</div>
+        <dl className="kv settings-kv">{importable.map((r) => <div key={r.name} className="kv-row"><dt><span className="mono">{r.name}</span><div className="small muted">{(r.used_by ?? []).join(", ")}</div></dt>
+          <dd><Badge kind="ok">set</Badge></dd></div>)}</dl>
       </section>}
       <section className="card stack">
         <h2>Encryption</h2>
@@ -332,8 +350,9 @@ export function Credentials() {
         {d.key.source === "MOKS_SESSION_SECRET" && <div className="small muted">To change the session secret without losing stored credentials, first set MOKS_CREDENTIALS_KEY_PREVIOUS to the current session secret, roll out, then choose Re-encrypt.</div>}
       </section>
     </> : <Loading load={load} />}
-    {replacing && <FormDrawer title={`${replacing.id ? "Replace" : "Set"} ${replacing.label}`} submit={replacing.id ? "Replace" : "Save"} busy={busy} error={error} onSubmit={replace} onClose={() => setReplacing(null)}>
-      <FormSection title="New value" help={replacing.used_by.length ? `Used by ${replacing.used_by.join(", ")}. All of them switch to the new value.` : "Nothing uses this credential yet."}>
+    {replacing && <FormDrawer title={replacing.adding ? "Add credential" : `${replacing.id ? "Replace" : "Set"} ${replacing.label}`} submit={replacing.adding ? "Add credential" : replacing.id ? "Replace" : "Save"} busy={busy} error={error} onSubmit={replace} onClose={() => setReplacing(null)}>
+      <FormSection title={replacing.adding ? "Credential" : "New value"} help={replacing.adding ? "Stored encrypted and never shown again. Forms list it by this name." : replacing.used_by.length ? `Used by ${replacing.used_by.join(", ")}. All of them switch to the new value.` : "Nothing uses this credential yet."}>
+        {replacing.adding && <label>Name<input required maxLength={200} value={name} onChange={(e) => setName(e.target.value)} placeholder="OpenAI API key (production)" /></label>}
         <label>Value<textarea required rows={4} className="mono" autoComplete="off" spellCheck={false} value={value} onChange={(e) => setValue(e.target.value)} placeholder="Paste the new value" /></label>
       </FormSection>
     </FormDrawer>}

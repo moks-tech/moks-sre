@@ -16,6 +16,9 @@ Values leave this module only through reveal(), which connectors and providers c
 returned by the API, logged, audited, traced or put in prompts. Each process keeps the encrypted rows in memory and
 refreshes them from the database every few seconds, on API requests and when it claims work; that is what lets
 connectors resolve a credential synchronously.
+
+At API start-up import_on_start() copies the MOKS_CRED_* values that references name into stored credentials, so
+an existing deployment moves off its Kubernetes Secret without a manual step.
 """
 from __future__ import annotations
 
@@ -303,6 +306,14 @@ async def holders(db: AsyncSession) -> list[tuple[Any, str, str, list[tuple[str,
     return out
 
 
+def executor_only(row: Any, kind: str, path: str) -> bool:
+    """References the executor resolves from its own Secret, kept from the API on purpose (docs/SECRETS_SYNC.md):
+    secret sync's AWS keys and a connector's executor credential. The API not having their variable is expected, so
+    they are never reported as waiting for a value, and a value is never pasted over them from Settings."""
+    return kind == "connector" and (path.startswith("config.executor_credential_ref")
+                                    or (getattr(row, "type", None) == "aws_secrets" and path.startswith("config.credentials")))
+
+
 async def usage(db: AsyncSession) -> dict[uuid.UUID, list[str]]:
     used: dict[uuid.UUID, list[str]] = {}
     for name in DEPLOYMENT:
@@ -337,10 +348,13 @@ def _set_path(root: Any, path: str, ref: dict[str, Any]) -> Any:
     return out
 
 
-async def import_environment(db: AsyncSession, actor: uuid.UUID | None) -> dict[str, Any]:
+async def import_environment(db: AsyncSession, actor: uuid.UUID | None, given: dict[str, str] | None = None) -> dict[str, Any]:
     """Stores the value of every MOKS_CRED_* variable a reference names and points the reference at the stored copy.
     One stored credential per variable, shared by every reference to it. Variables this process does not have are
-    listed and left as they are."""
+    listed and left as they are.
+
+    With `given` ({variable: value}), only those variables, with values an administrator pasted: how a reference to a
+    variable the deployment never had gets its value. A stored copy with that label takes the new value."""
     from .models import StoredCredential
 
     stored: dict[str, uuid.UUID] = {}
@@ -350,7 +364,12 @@ async def import_environment(db: AsyncSession, actor: uuid.UUID | None) -> dict[
 
     async def copy_of(name: str, value: str) -> uuid.UUID:
         if name not in stored:
-            stored[name] = existing.get(name) or await store(db, label=name, value=value, actor=actor)
+            cid = existing.get(name)
+            if cid is None:
+                cid = await store(db, label=name, value=value, actor=actor)
+            elif given is not None:
+                await replace(db, cid, value=value, actor=actor)
+            stored[name] = cid
         return stored[name]
 
     for row, kind, label, refs in await holders(db):
@@ -358,21 +377,53 @@ async def import_environment(db: AsyncSession, actor: uuid.UUID | None) -> dict[
             if ref.get("type") != "env":
                 continue
             name = str(ref.get("name") or "")
-            value = os.environ.get(name) if name.startswith("MOKS_CRED_") else None
+            if given is not None and (name not in given or executor_only(row, kind, path)):
+                continue
+            value = given[name] if given is not None else os.environ.get(name) if name.startswith("MOKS_CRED_") else None
             if not value or not value.strip():
-                missing.add(name)
+                if not executor_only(row, kind, path):
+                    missing.add(name)
                 continue
             new = {"type": "stored", "id": str(await copy_of(name, value))}
             column = path.split(".", 1)[0].split("[", 1)[0]
             inner = path[len(column):].lstrip(".")
             setattr(row, column, _set_path(getattr(row, column), inner, new))
             changed.append(f"{label}: {path}")
-    for name in DEPLOYMENT:
+    for name in DEPLOYMENT if given is None else ():
         value = os.environ.get(name)
         if value and value.strip():
             await copy_of(name, value)
     await db.flush()
     return {"stored": sorted(stored), "references": changed, "missing": sorted(n for n in missing if n)}
+
+
+IMPORT_LOCK = "credentials:import-environment"
+
+
+async def import_on_start() -> dict[str, Any] | None:
+    """API start-up (credentials_import_on_start): import_environment without anyone clicking Import, so connectors,
+    providers, knowledge sources and backup storage stop reading the Kubernetes Secret on the first deploy. One
+    replica does it at a time (advisory lock) and a second run finds nothing to do. References to variables this
+    process does not have stay as they are; their forms ask for the value. Never raises."""
+    from . import audit
+    from .db import session_scope
+
+    if not get_settings().credentials_import_on_start:
+        return None
+    try:
+        async with session_scope() as db:
+            await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": IMPORT_LOCK})
+            out = await import_environment(db, None)
+            if out["references"] or out["stored"]:
+                await audit.record(db, action="credential.import_environment", resource_type="stored_credential", decision="allow",
+                                   details={"automatic": True, "variables": out["stored"], "references": len(out["references"]), "missing": out["missing"]})
+        if out["references"] or out["missing"]:
+            log.info("credentials imported from the environment", extra={"event": "credentials_imported", "references": len(out["references"]),
+                                                                         "missing": out["missing"]})
+        return out
+    except Exception as exc:
+        log.warning("credential import at start-up failed", extra={"event": "credentials_import_failed", "errorType": type(exc).__name__})
+        return None
 
 
 async def describe(db: AsyncSession) -> dict[str, Any]:
@@ -390,14 +441,21 @@ async def describe(db: AsyncSession) -> dict[str, Any]:
         except CredentialUnavailable:
             return "unreadable"
         return "current" if r.key_id == cur.id else "older_key"
-    env_refs = sorted({str(ref.get("name")) for _, _, _, refs in await holders(db) for _, ref in refs if ref.get("type") == "env" and ref.get("name")})
+    env_refs: dict[str, list[str]] = {}
+    for row, kind, label, refs in await holders(db):
+        for path, ref in refs:
+            if ref.get("type") == "env" and ref.get("name"):
+                if executor_only(row, kind, path) and not (os.environ.get(str(ref["name"])) or "").strip():
+                    continue  # in the executor's Secret, as intended
+                env_refs.setdefault(str(ref["name"]), []).append(label)
     return {
         "key": {"source": cur.source, "id": cur.id},
         "credentials": [{"id": str(r.id), "label": r.label, "used_by": used.get(r.id, []),
                          "state": state(r),
                          "created_at": r.created_at.isoformat() if r.created_at else None, "created_by": emails.get(r.created_by),
                          "updated_at": r.updated_at.isoformat() if r.updated_at else None, "updated_by": emails.get(r.updated_by)} for r in rows],
-        "environment_references": [{"name": n, "set_here": bool((os.environ.get(n) or "").strip())} for n in env_refs],
+        "environment_references": [{"name": n, "set_here": bool((os.environ.get(n) or "").strip()), "used_by": sorted(set(env_refs[n]))}
+                                   for n in sorted(env_refs)],
         "deployment": [{"name": n, "help": h, "source": "stored" if named(n) else "environment" if (os.environ.get(n) or "").strip() else "unset",
                         "id": str(named(n)) if named(n) else None} for n, h in DEPLOYMENT.items()],
         "count": int((await db.execute(select(func.count()).select_from(StoredCredential))).scalar_one()),

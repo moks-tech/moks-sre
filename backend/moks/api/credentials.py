@@ -50,6 +50,15 @@ async def list_credentials(ctx: AuthContext = Depends(needs(P.ADMIN_SETTINGS)), 
     return await credentials.describe(db)
 
 
+@router.get("/choices")
+async def choices(ctx: AuthContext = Depends(writer), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """Names of the stored credentials, for the "... from" list in every form that takes one. No values, no usage."""
+    from sqlalchemy import select
+
+    rows = (await db.execute(select(StoredCredential.id, StoredCredential.label).order_by(StoredCredential.label))).all()
+    return {"credentials": [{"id": str(i), "label": label} for i, label in rows]}
+
+
 @router.post("", status_code=201)
 async def create(body: CredentialIn, ctx: AuthContext = Depends(writer), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
     try:
@@ -98,6 +107,30 @@ async def import_environment(ctx: AuthContext = Depends(needs(P.ADMIN_SETTINGS))
     out = await credentials.import_environment(db, ctx.user.id)
     await audit.record(db, action="credential.import_environment", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="stored_credential",
                        decision="allow", details={"variables": out["stored"], "references": len(out["references"]), "missing": out["missing"]})
+    return out
+
+
+class FillIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: SecretStr
+
+
+@router.put("/environment/{name}")
+async def fill_environment_reference(name: str, body: FillIn, ctx: AuthContext = Depends(needs(P.ADMIN_SETTINGS)),
+                                     db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """A value for a MOKS_CRED_* variable that references name but the deployment does not have (or has a stale copy
+    of): stored once, and every reference to the variable points at it."""
+    if not name.startswith("MOKS_CRED_"):
+        raise HTTPException(422, "Variable names start with MOKS_CRED_")
+    try:
+        value = credentials.check_value(body.value.get_secret_value())
+        out = await credentials.import_environment(db, ctx.user.id, given={name: value})
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    if not out["references"]:
+        raise HTTPException(404, f"Nothing reads {name} any more")
+    await audit.record(db, action="credential.fill_environment_reference", actor_id=ctx.user.id, actor_email=ctx.user.email,
+                       resource_type="stored_credential", decision="allow", details={"variable": name, "references": len(out["references"])})
     return out
 
 

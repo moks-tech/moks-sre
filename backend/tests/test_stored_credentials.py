@@ -97,7 +97,8 @@ async def test_importing_the_environment_points_references_at_stored_copies(clie
     r = await client.post("/moks/api/admin/credentials/import-environment", headers=h)
     assert r.status_code == 200, r.text
     out = r.json()
-    assert var in out["stored"] and "MOKS_CRED_NOT_SET_ANYWHERE" in out["missing"] and "from-the-secret" not in r.text
+    assert var in out["stored"] and "from-the-secret" not in r.text
+    assert "MOKS_CRED_NOT_SET_ANYWHERE" not in out["missing"]  # secret sync's key: the executor's Secret holds it
     async with session_scope() as db:
         rows = {c.name: c for c in (await db.execute(text("SELECT c.* FROM connectors c JOIN environments e ON e.id = c.environment_id WHERE e.name = :n"), {"n": env_name})).mappings()}
     grafana, aws = rows["grafana"], rows["aws"]
@@ -142,6 +143,8 @@ async def test_only_people_who_configure_credentials_may_store_or_list_them(clie
     assert (await client.post("/moks/api/admin/credentials", json={"label": "x", "value": "y"}, headers=hv)).status_code == 403
     assert (await client.get("/moks/api/admin/credentials", headers=hv)).status_code == 403
     assert (await client.post("/moks/api/admin/credentials/import-environment", headers=hv)).status_code == 403
+    assert (await client.get("/moks/api/admin/credentials/choices", headers=hv)).status_code == 403
+    assert (await client.put("/moks/api/admin/credentials/environment/MOKS_CRED_X", json={"value": "y"}, headers=hv)).status_code == 403
 
 
 async def test_another_process_picks_up_a_new_credential_without_a_restart(client):
@@ -202,3 +205,88 @@ async def test_importing_twice_reuses_the_stored_copy(client, monkeypatch):
     await client.post("/moks/api/admin/credentials/import-environment", headers=h)
     async with session_scope() as db:
         assert (await db.execute(select(StoredCredential).where(StoredCredential.label == var))).scalars().all().__len__() == 1
+
+
+async def _refs(env_name: str) -> dict[str, dict]:
+    async with session_scope() as db:
+        rows = (await db.execute(text("SELECT c.name, c.credential_ref FROM connectors c JOIN environments e ON e.id = c.environment_id WHERE e.name = :n"),
+                                 {"n": env_name})).all()
+    return {name: ref for name, ref in rows}
+
+
+async def test_the_api_moves_secret_values_into_moks_by_itself_at_start_up(client, monkeypatch):
+    var = f"MOKS_CRED_START_{uuid.uuid4().hex[:6].upper()}"
+    lacking = f"MOKS_CRED_LACKING_{uuid.uuid4().hex[:6].upper()}"
+    monkeypatch.setenv(var, "from-the-secret")
+    env_name = f"start-{uuid.uuid4().hex[:6]}"
+    await make_env(env_name, connectors=[
+        {"type": "grafana", "name": "grafana", "config": {"base_url": "http://g"}, "credential_ref": {"type": "env", "name": var}},
+        {"type": "postgres", "name": "shop-db", "config": {"host": "db"}, "credential_ref": {"type": "env", "name": lacking}},
+    ])
+
+    monkeypatch.setattr(get_settings(), "credentials_import_on_start", False)
+    assert await credentials.import_on_start() is None
+    assert (await _refs(env_name))["grafana"] == {"type": "env", "name": var}
+
+    monkeypatch.setattr(get_settings(), "credentials_import_on_start", True)
+    out = await credentials.import_on_start()
+    assert var in out["stored"] and lacking in out["missing"]
+    refs = await _refs(env_name)
+    assert refs["grafana"]["type"] == "stored" and refs["shop-db"] == {"type": "env", "name": lacking}
+    monkeypatch.delenv(var)  # the Secret entry can go
+    assert resolve_credential(refs["grafana"]) == "from-the-secret"
+    async with session_scope() as db:
+        event = (await db.execute(select(AuditEvent).where(AuditEvent.action == "credential.import_environment").order_by(AuditEvent.id.desc()))).scalars().first()
+    assert event.details["automatic"] is True and var in event.details["variables"] and "from-the-secret" not in str(event.details)
+
+    again = await credentials.import_on_start()  # every later start finds nothing to move
+    assert not any(env_name in r for r in again["references"])
+
+
+async def test_one_paste_fills_every_reference_to_a_variable_the_deployment_lacks(client):
+    h = await admin(client)
+    var = f"MOKS_CRED_FILL_{uuid.uuid4().hex[:6].upper()}"
+    env_name = f"fill-{uuid.uuid4().hex[:6]}"
+    await make_env(env_name, connectors=[
+        {"type": "redis", "name": "valkey", "config": {"host": "v"}, "credential_ref": {"type": "env", "name": var}},
+        {"type": "redis", "name": "valkey-sentinel", "config": {"host": "s"}, "credential_ref": {"type": "env", "name": var}},
+    ])
+    listed = (await client.get("/moks/api/admin/credentials", headers=h)).json()
+    waiting = next(r for r in listed["environment_references"] if r["name"] == var)
+    assert waiting["set_here"] is False and waiting["used_by"] == [f"Connector {env_name}/valkey", f"Connector {env_name}/valkey-sentinel"]
+
+    assert (await client.put(f"/moks/api/admin/credentials/environment/{var}", json={"value": "  "}, headers=h)).status_code == 422
+    r = await client.put(f"/moks/api/admin/credentials/environment/{var}", json={"value": "valkey-pass"}, headers=h)
+    assert r.status_code == 200, r.text
+    assert "valkey-pass" not in r.text and len(r.json()["references"]) == 2
+    refs = await _refs(env_name)
+    assert refs["valkey"] == refs["valkey-sentinel"] and refs["valkey"]["type"] == "stored"
+    assert resolve_credential(refs["valkey"]) == "valkey-pass"
+
+    assert (await client.put(f"/moks/api/admin/credentials/environment/{var}", json={"value": "v2"}, headers=h)).status_code == 404  # nothing names it now
+    assert (await client.put("/moks/api/admin/credentials/environment/PATH", json={"value": "v"}, headers=h)).status_code == 422
+    async with session_scope() as db:
+        assert (await db.execute(select(AuditEvent).where(AuditEvent.action == "credential.fill_environment_reference"))).scalars().first() is not None
+
+
+async def test_forms_list_saved_credentials_by_name_only(client):
+    h = await admin(client)
+    label = f"OpenAI key {uuid.uuid4().hex[:6]}"
+    ref = (await client.post("/moks/api/admin/credentials", json={"label": label, "value": VALUE}, headers=h)).json()["ref"]
+    r = await client.get("/moks/api/admin/credentials/choices", headers=h)
+    assert r.status_code == 200 and VALUE not in r.text
+    assert {"id": ref["id"], "label": label} in r.json()["credentials"]
+
+
+async def test_secret_sync_keys_only_the_executor_holds_are_not_waiting_for_a_value(client):
+    h = await admin(client)
+    var = f"MOKS_CRED_EXEC_ONLY_{uuid.uuid4().hex[:6].upper()}"
+    env_name = f"exec-{uuid.uuid4().hex[:6]}"
+    await make_env(env_name, connectors=[
+        {"type": "aws_secrets", "name": "aws", "config": {"account_id": "123456789012", "credentials": {
+            "access_key_id": {"type": "env", "name": var}, "secret_access_key": {"type": "env", "name": var}}}, "credential_ref": None},
+    ])
+    listed = (await client.get("/moks/api/admin/credentials", headers=h)).json()
+    assert var not in [r["name"] for r in listed["environment_references"]]
+    assert var not in (await client.post("/moks/api/admin/credentials/import-environment", headers=h)).json()["missing"]
+    assert (await client.put(f"/moks/api/admin/credentials/environment/{var}", json={"value": "x"}, headers=h)).status_code == 404

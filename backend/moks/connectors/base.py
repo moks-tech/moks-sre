@@ -61,7 +61,7 @@ def resolve_credential(ref: dict[str, Any] | None) -> str | None:
             raise ConnectorError("config", "environment credential names must start with MOKS_CRED_")
         value = os.environ.get(name)
         if value is None:
-            raise ConnectorError("config", f"credential environment variable {name} is not set: paste the value into this form instead, or add {name} to the Secret")
+            raise ConnectorError("config", f"credential environment variable {name} is not set: paste the value into this form instead")
         return value.strip()  # a value made with `echo` or from a file ends in a newline, which is an illegal header
     if kind == "file":
         path = resolve_credential_path(ref)

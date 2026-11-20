@@ -132,6 +132,7 @@ button.ident-more { display: inline-flex; align-items: center; justify-content: 
 .row.end { justify-content: flex-end; }
 .stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .muted { color: var(--muted); }
+.warn-text { color: var(--warn); }
 .small { font-size: 12px; }
 .right { margin-left: auto; }
 
