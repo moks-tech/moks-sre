@@ -717,3 +717,23 @@ def test_session_pods_pull_a_tag_every_time_and_a_digest_once():
         return pod_manifest(session)["spec"]["containers"][0]["imagePullPolicy"]
     assert policy("registry.jithendar.com/jithendar/moks-terminal:latest") == "Always"
     assert policy("registry.jithendar.com/jithendar/moks-terminal@sha256:" + "a" * 64) == "IfNotPresent"
+
+
+def test_session_pods_stay_out_of_the_mesh_in_the_shared_namespace():
+    """Sessions run beside MOKS in moks-sre, which injects sidecars: a sidecar would give a shell or a diagnostic a mesh
+    identity that the namespace's own AuthorizationPolicies accept, so both kinds of pod opt out by label."""
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from moks.diagnostics.service import pod_manifest as diagnostic_pod
+    from moks.terminal.pods import pod_manifest as terminal_pod
+    now = datetime.now(timezone.utc)
+    shell = SimpleNamespace(id=uuid4(), owner_id=uuid4(), lifetime_minutes=15, region="us-east-1", aws_account="1", environment="mk4",
+                            pod_name="moks-term-x", pod_namespace="moks-sre", expires_at=now, image="moks-terminal:latest")
+    diag = SimpleNamespace(id=uuid4(), requested_by=uuid4(), expires_at=now, ttl_minutes=15, packages=[], elevated=False, image_key="base",
+                           image="moks-diagnostics:latest")
+    for pod in (terminal_pod(shell), diagnostic_pod(diag, "moks-sre")):
+        assert pod["metadata"]["labels"]["sidecar.istio.io/inject"] == "false"
+        assert pod["spec"]["activeDeadlineSeconds"] > 0   # what puts it under the moks-sessions quota (scope Terminating)
+        assert all("cpu" in c["resources"]["limits"] and "memory" in c["resources"]["limits"] and "ephemeral-storage" in c["resources"]["limits"]
+                   for c in pod["spec"]["containers"])

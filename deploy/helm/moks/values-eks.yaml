@@ -94,7 +94,6 @@ databaseBackups:
 
 diagnostics:
   enabled: true
-  namespace: moks-sre-diagnostics
 
 # Off: session isolation depends on NetworkPolicy, which this cluster does not enforce (below).
 # Read-only shells. A push changes nothing here: the gateway exists after roboshop-demo-moks-terminal is

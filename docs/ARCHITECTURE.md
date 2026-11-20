@@ -48,7 +48,7 @@ flowchart LR
 | 3. Typed connectors and tool registry | `moks.connectors.*` (Kubernetes, Prometheus, Loki) and `moks.tools` (17 typed tools, one executor) |
 | 4. RAG ingestion/retrieval workers | `moks.rag`: GitHub/upload/postmortem ingestion as background jobs in the worker; Postgres full-text, pgvector or OpenSearch (BM25 + k-NN, RRF) |
 | 5. Approval and remediation service | `moks.actions.service`: allowlisted, hash-bound action plans with approvals, expiry and replay protection |
-| 6. Isolated execution workers | `moks-executor`: the only write-capable process, with its own ServiceAccount bound per namespace; runs actions and diagnostic-session pods in an isolated namespace |
+| 6. Isolated execution workers | `moks-executor`: the only write-capable process, with its own ServiceAccount bound per namespace; runs actions, and diagnostic-session pods beside MOKS (selected by label, no sidecar, their own quota) |
 | 7. Audit and observability | Hash-chained `audit_events` (DB triggers), Prometheus metrics, JSON logs, OTel traces, Grafana dashboard |
 
 The LLM never holds credentials. It receives redacted evidence and returns *requests*. The
@@ -164,14 +164,12 @@ Migration `backend/moks/migrations/versions/0001_initial.py`:
 
 ```mermaid
 flowchart LR
-  subgraph moks namespace
+  subgraph moks-sre namespace
     API[moks-api] --- W[moks-worker<br/>investigations · jobs:<br/>ingest, reindex, alert poll, evals]
     EX[moks-executor<br/>SA moks-executor]
     PG[(PostgreSQL)]
     OS[(OpenSearch<br/>optional)]
-  end
-  subgraph moks-sre-diagnostics
-    D[session pods<br/>no SA token, TTL, quota]
+    D[session pods<br/>no SA token, TTL, quota, no sidecar]
   end
   subgraph target namespaces
     T[Deployments / Services / HPAs]

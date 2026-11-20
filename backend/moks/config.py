@@ -182,10 +182,10 @@ class Settings(BaseSettings):
     process_role: Literal["api", "worker", "executor", "terminal"] = "api"
     sync_timezone: str = "UTC"  # shown beside knowledge sync schedules
     database_volume_gib: int = 10  # capacity of the database volume, for the size alert
-    diagnostics_namespace: str = "moks-sre-diagnostics"
+    diagnostics_namespace: str = "moks-sre"
     velero_namespace: str = "velero"
     # Terminal gateway. Profiles are JSON from the chart, so a change of IAM role is a reviewed change.
-    terminal_namespace: str = "moks-sre-terminals"
+    terminal_namespace: str = "moks-sre"
     terminal_image: str = ""
     terminal_image_pull_secrets: str = ""
     terminal_service_account: str = "moks-terminal-session"

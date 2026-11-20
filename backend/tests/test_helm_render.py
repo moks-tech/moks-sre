@@ -179,6 +179,10 @@ def test_minikube_sidecars_reach_istiod_only_from_already_isolated_pods():
     selected = set(mesh["podSelector"]["matchExpressions"][0]["values"])
     isolated = {p["podSelector"]["matchLabels"]["app"] for p in policies.values()
                 if set(p.get("policyTypes", [])) == {"Ingress", "Egress"} and "app" in p["podSelector"].get("matchLabels", {})}
+    # Session pods share moks-sre but opt out of injection (terminal/pods.py, diagnostics/service.py): no sidecar, no istiod.
+    sessions = {"moks-diagnostic", "moks-terminal"}
+    assert sessions <= isolated and not sessions & selected
+    isolated -= sessions
     # moks-postgres and the OpenSearch pods are always selected; mk4 runs none of them, so those match nothing.
     assert isolated <= selected and selected - isolated <= {"moks-search", "moks-search-dashboards", "moks-postgres",
                                                             "moks-opensearch", "moks-opensearch-dashboards"}
@@ -327,8 +331,9 @@ def test_mk4_pulls_every_moks_image_from_harbor_as_latest():
 def test_mk4_opts_into_the_terminal_with_https_only():
     """mk4 runs terminals: moks-terminal:latest from Harbor, one read-only profile, and egress to public HTTPS only."""
     docs = render("values-hetzner.yaml")
-    assert of(docs, "Namespace", "moks-sre-terminals")["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == "restricted"
+    assert not [d for d in docs if d["kind"] == "Namespace"]   # sessions run in moks-sre itself
     policy = of(docs, "NetworkPolicy", "terminals")["spec"]
+    assert policy["podSelector"] == {"matchLabels": {"app": "moks-terminal"}}
     public = [r for r in policy["egress"] for t in r["to"] if t.get("ipBlock", {}).get("cidr") == "0.0.0.0/0"]
     assert [r["ports"] for r in public] == [[{"port": 443, "protocol": "TCP"}]]
     assert {"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"} <= set(public[0]["to"][0]["ipBlock"]["except"])
@@ -351,7 +356,7 @@ def test_the_gateway_is_routed_under_the_base_path_and_keeps_to_its_own_identity
 
 def test_the_gateway_can_touch_only_the_terminal_namespace():
     docs = render("values-hetzner.yaml", *TERMINAL)
-    assert not [d for d in docs if d["kind"] in ("ClusterRoleBinding", "RoleBinding") and any(s["name"] == "moks-terminal" for s in d.get("subjects", [])) and d["metadata"].get("namespace") != "moks-sre-terminals"]
+    assert not [d for d in docs if d["kind"] in ("ClusterRoleBinding", "RoleBinding") and any(s["name"] == "moks-terminal" for s in d.get("subjects", [])) and d["metadata"].get("namespace") != "moks-sre"]
     rules = of(docs, "Role", "moks-terminal-gateway")["rules"]
     assert {r for rule in rules for r in rule["resources"]} == {"pods", "pods/exec", "serviceaccounts/token"}
     assert next(r for r in rules if "serviceaccounts/token" in r["resources"])["resourceNames"] == ["moks-terminal-session"]
@@ -367,9 +372,33 @@ def test_the_session_identity_is_read_only_and_never_sees_secrets():
     assert not [d for d in docs if d["kind"] == "ClusterRoleBinding" and "terminal" in d["metadata"]["name"]]
 
 
-def test_the_terminal_namespace_is_restricted_and_closed_by_default():
+def test_sessions_share_the_release_namespace_closed_by_label_and_capped_by_one_quota():
     docs = render("values.yaml", *TERMINAL)
-    ns = of(docs, "Namespace", "moks-sre-terminals")["metadata"]["labels"]
+    assert not [d for d in docs if d["kind"] in ("Namespace", "LimitRange")]   # both would bind MOKS itself too
+    for name, app in (("terminals", "moks-terminal"), ("diagnostics", "moks-diagnostic")):
+        policy = of(docs, "NetworkPolicy", name)
+        assert policy["metadata"]["namespace"] == "moks-sre" and policy["spec"]["podSelector"] == {"matchLabels": {"app": app}}
+        assert policy["spec"]["ingress"] == [] and set(policy["spec"]["policyTypes"]) == {"Ingress", "Egress"}
+    quota = of(docs, "ResourceQuota", "moks-sessions")["spec"]
+    assert quota["scopes"] == ["Terminating"] and {"pods", "limits.cpu", "limits.memory", "limits.ephemeral-storage"} <= set(quota["hard"])
+    assert not [d for d in docs if d["kind"] == "ResourceQuota" and d["metadata"]["name"] != "moks-sessions"]
+    config = of(docs, "ConfigMap", "moks-config")["data"]
+    assert config["MOKS_DIAGNOSTICS_NAMESPACE"] == "moks-sre"
+    assert {"name": "MOKS_TERMINAL_NAMESPACE", "value": "moks-sre"} in dict(pods(docs))["moks-terminal"]["containers"][0]["env"]
+
+
+def test_jobs_never_count_against_the_session_quota():
+    """Scope Terminating counts pods with activeDeadlineSeconds; MOKS's own Jobs set it on the Job only."""
+    docs = render("values-hetzner.yaml", "backup.enabled=true", "backup.bucket=ci", "secrets.split=true", "ml.training.enabled=true", "ml.anomaly.namespaces=mk4:roboshop-ai")
+    for d in docs:
+        spec = d.get("spec") or {}
+        pod = (spec.get("jobTemplate", {}).get("spec", {}).get("template") or spec.get("template") or {}).get("spec") or {}
+        assert "activeDeadlineSeconds" not in pod, (d["kind"], d["metadata"]["name"])
+
+
+def test_the_terminal_namespace_is_restricted_and_closed_when_it_has_its_own():
+    docs = render("values.yaml", *TERMINAL, "terminal.namespace=moks-terminals")
+    ns = of(docs, "Namespace", "moks-terminals")["metadata"]["labels"]
     assert ns["pod-security.kubernetes.io/enforce"] == "restricted"
     policy = of(docs, "NetworkPolicy", "terminals")["spec"]
     assert policy["podSelector"] == {} and policy["ingress"] == [] and set(policy["policyTypes"]) == {"Ingress", "Egress"}
@@ -395,7 +424,7 @@ def test_reranking_is_absent_when_off():
 
 def test_moks_knows_its_own_namespace_and_sandboxes():
     config = next(d for d in render("values-hetzner.yaml") if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "moks-config")["data"]
-    assert config["MOKS_OWN_NAMESPACE"] == "moks-sre" and config["MOKS_DIAGNOSTICS_NAMESPACE"] == "moks-sre-diagnostics"
+    assert config["MOKS_OWN_NAMESPACE"] == "moks-sre" and config["MOKS_DIAGNOSTICS_NAMESPACE"] == "moks-sre"
 
 
 def test_deploying_the_service_does_not_turn_it_on_for_search():

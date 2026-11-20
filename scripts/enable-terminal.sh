@@ -9,7 +9,7 @@ set -euo pipefail
 EMAIL="${1:-team@jithendar.com}"
 CONTEXT="${2:-mk4}"
 ENVIRONMENT="${3:-$CONTEXT}"
-TERMINALS=moks-sre-terminals
+TERMINALS=moks-sre   # sessions run beside MOKS (values.yaml terminal.namespace)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 kc() { kubectl --context "$CONTEXT" "$@"; }
 k() { kc -n moks-sre "$@"; }

@@ -41,7 +41,7 @@ def pod_manifest(s: TerminalSession) -> dict:
     return {
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": s.pod_name, "namespace": s.pod_namespace,
-                     "labels": {"app": "moks-terminal", "moks.io/session": str(s.id)},
+                     "labels": {"app": "moks-terminal", "moks.io/session": str(s.id), "sidecar.istio.io/inject": "false"},  # unmeshed: no mesh identity
                      "annotations": {"moks.io/owner": str(s.owner_id), "moks.io/expires-at": s.expires_at.isoformat()}},
         "spec": {
             "serviceAccountName": cfg.terminal_service_account, "automountServiceAccountToken": False, "enableServiceLinks": False,

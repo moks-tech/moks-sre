@@ -1,8 +1,12 @@
 {{- if include "moks.inGroup" (dict "root" . "group" "executor") }}
 {{- if and .Values.diagnostics.enabled .Values.executor.enabled }}
-{{- $ns := .Values.diagnostics.namespace }}
-# Diagnostic sessions: disposable pods with no service-account token, CPU/memory quota, and
-# egress-only networking that excludes cloud metadata and the Kubernetes API.
+{{- $ns := include "moks.diagnosticsNamespace" . }}
+{{- $own := ne $ns .Release.Namespace }}
+# Diagnostic sessions: disposable pods with no service-account token and egress-only networking that excludes
+# cloud metadata and the Kubernetes API. By default they run in the release namespace: the policy below selects
+# them by label, and sessions.quota (sessions.yaml) caps them. Quota, LimitRange and Pod Security are per
+# namespace, so only diagnostics.namespace set to a namespace of their own gets those three for sessions alone.
+{{- if $own }}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -32,12 +36,13 @@ spec:
       max: {cpu: 500m, memory: 512Mi}
       default: {cpu: 250m, memory: 128Mi}
       defaultRequest: {cpu: 10m, memory: 32Mi}
+{{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: diagnostics, namespace: {{ $ns }}}
 spec:
-  podSelector: {}
+  podSelector: {{ if $own }}{}{{ else }}{matchLabels: {app: moks-diagnostic}}{{ end }}
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:
@@ -56,15 +61,15 @@ spec:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: moks-sre-diagnostics, namespace: {{ $ns }}}
+metadata: {name: moks-diagnostics, namespace: {{ $ns }}}
 rules:
   - {apiGroups: [""], resources: [pods], verbs: [create, get, list, delete]}
   - {apiGroups: [""], resources: [pods/exec], verbs: [create, get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: moks-sre-diagnostics, namespace: {{ $ns }}}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: moks-sre-diagnostics}
+metadata: {name: moks-diagnostics, namespace: {{ $ns }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: moks-diagnostics}
 subjects:
   - {kind: ServiceAccount, name: moks-executor, namespace: {{ .Release.Namespace }}}
 {{- end }}

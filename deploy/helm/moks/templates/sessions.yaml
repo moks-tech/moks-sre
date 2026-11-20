@@ -1,0 +1,19 @@
+{{- if include "moks.inGroup" (dict "root" . "group" "foundation") }}
+{{- $diag := and .Values.diagnostics.enabled .Values.executor.enabled (eq (include "moks.diagnosticsNamespace" .) .Release.Namespace) }}
+{{- $term := and .Values.terminal.enabled (eq (include "moks.terminalNamespace" .) .Release.Namespace) }}
+{{- if or $diag $term }}
+# Diagnostic and terminal sessions in the release namespace: one cap for both. Scope Terminating counts only pods
+# that set activeDeadlineSeconds, which session pods always do and MOKS's own pods never do (its Jobs set the
+# deadline on the Job), so the API, workers and Jobs stay outside it. Every session container sets these limits.
+apiVersion: v1
+kind: ResourceQuota
+metadata: {name: moks-sessions}
+spec:
+  scopes: [Terminating]
+  hard:
+    pods: {{ .Values.sessions.quota.pods | quote }}
+    limits.cpu: {{ .Values.sessions.quota.cpu | quote }}
+    limits.memory: {{ .Values.sessions.quota.memory | quote }}
+    limits.ephemeral-storage: {{ .Values.sessions.quota.ephemeralStorage | quote }}
+{{- end }}
+{{- end }}

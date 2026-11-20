@@ -344,11 +344,17 @@ argocd:
 cnpg:
   enabled: false
 
-# Disposable diagnostic session pods (no service account token, quota, egress-only network policy).
+# Disposable diagnostic session pods (no service account token, egress-only network policy).
 diagnostics:
   enabled: true
-  namespace: moks-sre-diagnostics
-  quota: {pods: "5", cpu: "1", memory: 1Gi}
+  namespace: ""          # empty: the release namespace, with sessions.quota; a name gives them a namespace of their own
+  quota: {pods: "5", cpu: "1", memory: 1Gi}   # only in a namespace of their own
+
+# Diagnostic and terminal session pods that run in the release namespace (the default) share one ResourceQuota.
+# It is scoped to Terminating pods, those that set activeDeadlineSeconds: only session pods do, so it never counts
+# MOKS itself (the chart's Jobs set their deadline on the Job, not the pod).
+sessions:
+  quota: {pods: "9", cpu: "3", memory: 3Gi, ephemeralStorage: 4Gi}
 
 # Web terminal (docs/TERMINAL.md). Off, and nobody holds the terminal role until an admin grants it.
 # Internal PyTorch reranking (docs/RERANKING.md). enabled deploys the service; client.enabled makes
@@ -387,7 +393,7 @@ reranker:
 
 terminal:
   enabled: false
-  namespace: moks-sre-terminals
+  namespace: ""          # empty: the release namespace (sessions.quota applies); a name gives shells a namespace of their own
   image:
     repository: registry.jithendar.com/jithendar/moks-terminal
     tag: latest            # CI moves it on every master build; session pods pull it (Always) when they start
@@ -397,7 +403,7 @@ terminal:
   maxMinutes: 60           # a role session of over an hour needs the role's MaxSessionDuration raised
   userSessions: 2
   resources: {cpu: 500m, memory: 512Mi}       # limits of each session pod
-  quota: {pods: "4", cpu: "2", memory: 2Gi, ephemeralStorage: 2Gi}
+  quota: {pods: "4", cpu: "2", memory: 2Gi, ephemeralStorage: 2Gi}   # only in a namespace of their own
   # What may be opened. Nothing else can be selected, and a session never falls back to another identity.
   profiles: []
   #  - name: mk4-readonly

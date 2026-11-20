@@ -7,13 +7,14 @@ A shell is arbitrary code execution inside its sandbox. MOKS does not filter com
 ## How it fits together
 
 ```
-browser ── wss /moks/api/terminal/... ──> moks-terminal gateway ── pods/exec ──> session pod (moks-sre-terminals)
+browser ── wss /moks/api/terminal/... ──> moks-terminal gateway ── pods/exec ──> session pod (moks-sre)    
                                                │                                   ├─ AWS: role session, in memory
                                                └─ sts:AssumeRole                   └─ kubectl: token bound to the pod
 ```
 
-- **The gateway is its own component.** The API, worker and executor gain nothing. It has its own ServiceAccount, Secret and database role, power over the terminal namespace only, and no route to the rest of the portal. It reads users, roles, sign-ins and environments, and nothing else.
+- **The gateway is its own component.** The API, worker and executor gain nothing. It has its own ServiceAccount, Secret and database role, power over pods in the session namespace only, and no route to the rest of the portal. It reads users, roles, sign-ins and environments, and nothing else.
 - **Nothing connects to a session pod.** The shell is reached by exec through the Kubernetes API, and a pod accepts no inbound traffic.
+- **Sessions run in `moks-sre`, beside MOKS** (`terminal.namespace` empty, the default). The NetworkPolicy `terminals` selects them by label (`app: moks-terminal`), they opt out of the Istio sidecar so they have no mesh identity, and the ResourceQuota `moks-sessions` caps them with diagnostic sessions (scope Terminating: only pods with `activeDeadlineSeconds`). Set `terminal.namespace` to give shells a namespace of their own, with restricted Pod Security, a quota and a LimitRange of their own.
 - **tmux keeps the shell alive** when a connection drops. It is hidden: no status line, no prefix key.
 - **The ingress routes `/moks/api/terminal`** to the gateway, as a longer prefix than the portal's. Nothing is stripped, and Traefik carries the WebSocket upgrade.
 
@@ -138,10 +139,10 @@ Each step here is a change to AWS or to mk4, and is yours to run.
 2. **Image:** merge; CI pushes `moks-terminal:latest` to Harbor.
 3. **Migration:** take and verify a backup, then deploy so that migration 0023 runs. It adds `terminal_sessions` and widens the list of allowed roles.
 4. **Key, database role and Secret:** run `scripts/create-terminal-secrets.sh`. It creates a key for `moks-terminal-gateway`, sets the `moks_terminal` password and grants through `moks db-grants`, and writes `moks-terminal-secrets`. Add `ROTATE=1` to replace them. Do not reuse `moks-mk4-runtime`.
-5. **Pull secret:** once `moks-sre-terminals` exists, write `harbor-pull` into it from the tools repository: `python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-sre-terminals` (`scripts/enable-terminal.sh` does this too).
+5. **Pull secret:** `harbor-pull` in `moks-sre` (where sessions run) from the tools repository: `python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-sre` (`scripts/enable-terminal.sh` does this too).
 6. **Values:** set `terminal.enabled`, `terminal.imagePullSecrets: [harbor-pull]`, `terminal.profiles`, `terminal.kubernetes.namespaces` and `terminal.network`.
 7. **Argo:** apply `deploy/argocd/hetzner/project.yaml`, then sync `moks-root`, `moks-terminal` and `moks-routing` without prune. `deploy/argocd/hetzner/apps/moks-terminal.yaml` is the only terminal Application. On EKS it is `deploy/argocd/eks/optional/roboshop-demo-moks-terminal.yaml`, applied by hand with `deploy/argocd/eks/project.yaml`. The VPC CNI there runs with network policy off, so on EKS the database and API lines of `moks-verify-isolation` can pass only through the mesh, and unmeshed Services stay reachable until enforcement is on.
-8. **Grant** the `terminal` role to one person, and open a session in `moks-sre-lab`.
+8. **Grant** the `terminal` role to one person, and open a session.
 9. **Verify on that cluster,** from inside the session:
 
 ```sh
@@ -155,6 +156,8 @@ Every line must read `ok`, or `skip` with a reason. **Do not open terminals to o
 - **Never yet run for real.** See [TESTING.md](TESTING.md#web-terminal). The image has not been built, and no pod has run on a cluster.
 - **A session can reach its own node.** NetworkPolicy never applies between a pod and the node it runs on, so that node's kubelet and NodePorts answer a shell, with no way to close that here. The kubelet's own authorization is the control: mk4 has anonymous access off and webhook authorization on, and CI checks that it refuses a session. Other nodes stay blocked.
 - **Public HTTPS and DNS are open** once AWS is allowed, as above. A session could send what it can read to any public host.
+- **The gateway can exec into any pod in its namespace.** Kubernetes cannot narrow `pods/exec` or pod creation to some pods, so with sessions in `moks-sre` the gateway's Role reaches moks-api and every Secret a pod there could mount. The gateway's own code only ever names session pods; a namespace of its own (`terminal.namespace`) is what makes that a Kubernetes guarantee instead.
+- **Pod Security is the namespace's.** `moks-sre` enforces `baseline`, so `restricted` is what the gateway writes into each pod, not something the API server enforces, unless shells have a namespace of their own.
 - **Read-only depends on the role.** A wrongly widened role is a wrongly widened terminal. MOKS checks Kubernetes write access at start, and cannot check IAM the same way.
 - **ViewOnlyAccess is narrow.** Some read commands will be refused. That is its intent, and widening it is a decision.
 - **No credential renewal.** Credentials last the session, so long work means a new session. Sessions over an hour need `MaxSessionDuration` raised on the role, and role chaining caps at an hour.

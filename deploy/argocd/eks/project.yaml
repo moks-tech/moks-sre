@@ -15,10 +15,6 @@ spec:
     - name: roboshop-demo
       namespace: moks-sre
     - name: roboshop-demo
-      namespace: moks-sre-terminals        # terminal session namespace (chart-managed)
-    - name: roboshop-demo
-      namespace: moks-sre-diagnostics      # diagnostic session namespace (chart-managed)
-    - name: roboshop-demo
       namespace: roboshop-ai           # Role for database backups (databaseBackups.namespaces)
   clusterResourceWhitelist:
     - {group: "", kind: Namespace}
