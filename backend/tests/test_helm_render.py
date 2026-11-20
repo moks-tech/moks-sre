@@ -380,11 +380,25 @@ def test_sessions_share_the_release_namespace_closed_by_label_and_capped_by_one_
         assert policy["metadata"]["namespace"] == "moks-sre" and policy["spec"]["podSelector"] == {"matchLabels": {"app": app}}
         assert policy["spec"]["ingress"] == [] and set(policy["spec"]["policyTypes"]) == {"Ingress", "Egress"}
     quota = of(docs, "ResourceQuota", "moks-sessions")["spec"]
-    assert quota["scopes"] == ["Terminating"] and {"pods", "limits.cpu", "limits.memory", "limits.ephemeral-storage"} <= set(quota["hard"])
+    assert quota["scopes"] == ["Terminating"] and set(quota["hard"]) == {"pods", "limits.cpu", "limits.memory"}
     assert not [d for d in docs if d["kind"] == "ResourceQuota" and d["metadata"]["name"] != "moks-sessions"]
     config = of(docs, "ConfigMap", "moks-config")["data"]
     assert config["MOKS_DIAGNOSTICS_NAMESPACE"] == "moks-sre"
     assert {"name": "MOKS_TERMINAL_NAMESPACE", "value": "moks-sre"} in dict(pods(docs))["moks-terminal"]["containers"][0]["env"]
+
+
+# What the API server accepts in a quota with a Terminating/NotTerminating/BestEffort/NotBestEffort scope
+# (ResourceQuota validation): anything else is "unsupported scope applied to resource" and fails the whole sync.
+POD_SCOPE_RESOURCES = {"pods", "cpu", "memory", "requests.cpu", "requests.memory", "limits.cpu", "limits.memory"}
+
+
+@pytest.mark.parametrize("values_file", ["values.yaml", "values-hetzner.yaml", "values-eks.yaml", "values-kind.yaml"])
+def test_scoped_quotas_name_only_what_the_api_server_accepts(values_file):
+    docs = render(values_file, *TERMINAL)
+    scoped = [d for d in docs if d["kind"] == "ResourceQuota" and d["spec"].get("scopes")]
+    assert scoped or values_file == "values-kind.yaml"
+    for q in scoped:
+        assert set(q["spec"]["hard"]) <= POD_SCOPE_RESOURCES, (q["metadata"]["name"], set(q["spec"]["hard"]) - POD_SCOPE_RESOURCES)
 
 
 def test_jobs_never_count_against_the_session_quota():
