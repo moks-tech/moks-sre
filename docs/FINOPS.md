@@ -22,6 +22,9 @@ by namespace, workload or kind. It shows:
 - totals by resource type: CPU, memory, storage, cloud services and LLM calls, per environment
 - LLM calls by model (calls, input and output tokens, cost). Cost uses the prices set on each LLM
   provider, so 0 means no price is set, not free
+- LLM budgets, for LLM administrators (`admin.llm`): each provider's spend today and this month against its totals,
+  with a month-end forecast, and each LLM's against its daily and monthly budget. They cover every environment, so
+  `finops.read` alone does not show them. Limits are set in Settings → LLM providers ([SETTINGS.md](SETTINGS.md))
 - cost per workload, split by CPU, memory and storage, with idle cost
 - rightsizing across environments, with **Propose** to open an action plan
 - AWS anomalies, budgets and forecast, when one environment with `aws_cost` is selected

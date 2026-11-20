@@ -6,6 +6,7 @@ import { type Chip, FilterPanel } from "../filters";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
 import { ModelPicker, type ModelInfo } from "./ModelPicker";
 import { type Cred, CredentialInput, credFromRef, NO_CRED, PASTE, refOf, saveCred } from "../credentials";
+import { limitOrNull, spendClass, spentOf } from "../budget";
 
 function useAction() {
   const [error, setError] = useState<unknown>();
@@ -505,8 +506,9 @@ export function suggestedModels(preset: string): ModelInfo[] {
 export function LLMProviders() {
   const { confirm: ask, toast } = useFeedback();
   const list = useLoad(() => api<any[]>("/admin/llm"), []);
+  const totals = useLoad(() => api<any>("/admin/llm/totals"), []);
   const blank = { name: "", purpose: "chat", provider: "bedrock", model: "", endpoint: "", region: "us-east-1", cred: NO_CRED as Cred,
-    timeout_seconds: 60, max_output_tokens: 2000, daily_budget_usd: "5", input_price_per_mtok: "0", output_price_per_mtok: "0", embedding_options: { ...NO_OPTIONS } };
+    timeout_seconds: 60, max_output_tokens: 2000, daily_budget_usd: "5", monthly_budget_usd: "", input_price_per_mtok: "0", output_price_per_mtok: "0", embedding_options: { ...NO_OPTIONS } };
   const profiles = useLoad(() => api<any[]>("/admin/llm/embedding-profiles").then((p) => (Array.isArray(p) ? p : [])).catch(() => []), []);
   const [form, setForm] = useState<any>(blank);
   const [open, setOpen] = useState(false);
@@ -517,7 +519,7 @@ export function LLMProviders() {
   const edit = (c: any) => {
     a.clear();
     setEditing(c.id);
-    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", cred: credFromRef(c.credential_ref, c.credential), embedding_options: { ...NO_OPTIONS, ...(c.embedding_options ?? {}) } });
+    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", monthly_budget_usd: c.monthly_budget_usd ?? "", cred: credFromRef(c.credential_ref, c.credential), embedding_options: { ...NO_OPTIONS, ...(c.embedding_options ?? {}) } });
     setOpen(true);
   };
   async function save(e: FormEvent) {
@@ -526,14 +528,16 @@ export function LLMProviders() {
       const credential_ref = form.provider === "bedrock" ? { type: "none" } : await saveCred(form.cred, `API key for LLM provider ${form.name}`);
       setForm({ ...form, cred: credFromRef(credential_ref) });  // a retry after a failed save reuses what was stored
       const body = { ...form, endpoint: form.endpoint || null, region: form.provider === "bedrock" ? form.region : null, credential_ref,
+        monthly_budget_usd: limitOrNull(form.monthly_budget_usd),
         embedding_options: form.purpose === "embedding" ? optionsBody(form.embedding_options) : undefined, embedding_dimensions: form.embedding_dimensions || null };
-      delete body.cred; delete body.autoName; delete body.model_key; delete body.spent_last_24h_usd; delete body.credential; delete body.is_active; delete body.id;
+      for (const k of ["cred", "autoName", "model_key", "spent_last_24h_usd", "spent_today_usd", "spent_month_usd", "credential", "is_active", "id"]) delete body[k];
       return api(editing ? `/admin/llm/${editing}` : "/admin/llm", { method: editing ? "PUT" : "POST", body });
     });
     if (saved) {
       toast(`Saved ${form.name}`);
       close();
       list.reload();
+      totals.reload();
     }
   }
   async function test(id: string, name: string) {
@@ -565,10 +569,12 @@ export function LLMProviders() {
             { key: "m", head: "Provider / model", cell: (c) => <span className="mono small">{c.provider} / {c.model}{c.region && <span className="muted"> {c.region}</span>}{c.model_key && c.model_key.split("/").length > 3 && <span className="muted" title={c.model_key}> + options</span>}</span> },
             { key: "e", head: "Endpoint", wide: true, cell: (c) => <Truncate text={c.endpoint ?? ""} mono /> },
             { key: "c", head: "Credential", wide: true, cell: (c) => <Truncate text={c.credential ?? ""} mono /> },
-            { key: "b", head: "Budget (24 h)", cell: (c) => <span className="small">${Number(c.spent_last_24h_usd ?? 0).toFixed(4)} of ${c.daily_budget_usd}</span> },
+            { key: "b", head: "Today", cell: (c) => <span className={spendClass(c.spent_today_usd, c.daily_budget_usd)}>{spentOf(c.spent_today_usd, c.daily_budget_usd)}</span> },
+            { key: "mo", head: "This month", cell: (c) => <span className={spendClass(c.spent_month_usd, c.monthly_budget_usd)}>{spentOf(c.spent_month_usd, c.monthly_budget_usd)}</span> },
             { key: "t", head: "Test", cell: (c) => (tests[c.id] ? <span className={`small ${tests[c.id].ok ? "" : "muted"}`}>{tests[c.id].message}</span> : "") },
           ]} />}
       </div>
+      <ProviderTotals load={totals} />
       {open && <FormDrawer title={editing ? `Edit ${form.name}` : "Add provider"} submit={editing ? "Save" : "Add provider"} busy={a.busy} error={a.error} onSubmit={save} onClose={close}>
         <FormSection title="Provider" help={LLM_PRESETS[presetOf(form)].hint}>
           <div className="form-grid">
@@ -597,13 +603,64 @@ export function LLMProviders() {
             suggested={suggestedModels(presetOf(form))} onChange={(model, info) => setForm(withProfile(chooseModel(form, model, info), profiles.data ?? [], !editing, info))} />
         </FormSection>
         {form.purpose === "embedding" && <EmbeddingOptions form={form} setForm={setForm} profiles={profiles.data ?? []} />}
-        <FormSection title="Budget">
+        <FormSection title="Budget" help="Days and months are UTC calendar periods, the same as Anthropic's spend limits. A call must also fit its provider's totals, if any are set under Provider totals.">
           <div className="form-grid">
             <label>Daily budget (USD)<input value={form.daily_budget_usd} onChange={(e) => setForm({ ...form, daily_budget_usd: e.target.value })} /></label>
+            <label>Monthly budget (USD)<input inputMode="decimal" value={form.monthly_budget_usd ?? ""} placeholder="no monthly limit" onChange={(e) => setForm({ ...form, monthly_budget_usd: e.target.value })} /></label>
             <label>Input $ / 1M tokens<input value={form.input_price_per_mtok} onChange={(e) => setForm({ ...form, input_price_per_mtok: e.target.value })} /></label>
             <label>Output $ / 1M tokens<input value={form.output_price_per_mtok} onChange={(e) => setForm({ ...form, output_price_per_mtok: e.target.value })} /></label>
           </div>
           {Number(form.input_price_per_mtok) === 0 && Number(form.output_price_per_mtok) === 0 && form.provider !== "ollama" && <div className="small muted">With no prices set, spend counts as $0 and the daily budget cannot limit this model.</div>}
+        </FormSection>
+      </FormDrawer>}
+    </>
+  );
+}
+
+// ---- Provider totals ---------------------------------------------------------------------------
+
+/** All of one provider's LLMs together, for example the credit on one Anthropic account. Every limit is optional. */
+export function ProviderTotals({ load }: { load: { data?: any; reload: () => void } & Record<string, any> }) {
+  const { toast } = useFeedback();
+  const [form, setForm] = useState<any | null>(null);
+  const a = useAction();
+  const rows: any[] = load.data?.providers ?? [];
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    const saved = await a.run(() => api(`/admin/llm/totals/${form.provider}`, { method: "PUT",
+      body: { daily_budget_usd: limitOrNull(form.daily_budget_usd), monthly_budget_usd: limitOrNull(form.monthly_budget_usd) } }));
+    if (saved) {
+      toast(`Saved the ${form.provider} totals`);
+      setForm(null);
+      load.reload();
+    }
+  }
+  const edit = (p: any) => { a.clear(); setForm({ provider: p.provider, daily_budget_usd: p.daily_budget_usd ?? "", monthly_budget_usd: p.monthly_budget_usd ?? "" }); };
+  return (
+    <>
+      <div className="card" style={{ marginTop: 14 }}>
+        <h2>Provider totals</h2>
+        <div className="small muted" style={{ marginBottom: 6 }}>
+          Optional caps on all of one provider's LLMs together, for example the credit on one Anthropic account. A call must fit its own LLM's budget and these.
+          Empty is no limit. Spend counts finished calls plus calls in progress; days and months are UTC{load.data?.month_resets_at ? `, and this month ends ${String(load.data.month_resets_at).slice(0, 10)}` : ""}.
+        </div>
+        <Loading load={load as any} rows={2} />
+        {load.data && <DataTable label="Provider totals" rows={rows} rowKey={(p) => p.provider} onRow={edit} empty={<Empty title="No LLM providers yet.">Add one above, then set its totals here.</Empty>}
+          menu={(p) => ({ label: `Actions for ${p.provider}`, items: [{ label: "Edit totals", run: () => edit(p) }] })}
+          cols={[
+            { key: "p", head: "Provider", primary: true, cell: (p) => <span className="mono">{p.provider}</span> },
+            { key: "n", head: "LLMs", cell: (p) => p.llms },
+            { key: "d", head: "Today", cell: (p) => <span className={spendClass(p.spent_today_usd, p.daily_budget_usd)}>{spentOf(p.spent_today_usd, p.daily_budget_usd)}</span> },
+            { key: "m", head: "This month", cell: (p) => <span className={spendClass(p.spent_month_usd, p.monthly_budget_usd)}>{spentOf(p.spent_month_usd, p.monthly_budget_usd)}</span> },
+            { key: "f", head: "Month-end forecast", cell: (p) => <span className="small">${Number(p.forecast_month_usd ?? 0).toFixed(2)}</span> },
+          ]} />}
+      </div>
+      {form && <FormDrawer title={`Totals for ${form.provider}`} submit="Save" busy={a.busy} error={a.error} onSubmit={save} onClose={() => setForm(null)}>
+        <FormSection title="Limits" help="Leave a field empty for no limit. Clearing both removes the totals. Every change is audited.">
+          <div className="form-grid">
+            <label>Daily total (USD)<input inputMode="decimal" value={form.daily_budget_usd} placeholder="no daily limit" onChange={(e) => setForm({ ...form, daily_budget_usd: e.target.value })} /></label>
+            <label>Monthly total (USD)<input inputMode="decimal" value={form.monthly_budget_usd} placeholder="no monthly limit" onChange={(e) => setForm({ ...form, monthly_budget_usd: e.target.value })} /></label>
+          </div>
         </FormSection>
       </FormDrawer>}
     </>

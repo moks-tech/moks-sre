@@ -238,6 +238,32 @@ async def test_claude_errors_map_to_the_shared_kinds(claude, status, kind):
     assert e.value.kind == kind
 
 
+@pytest.mark.parametrize("status,error,reason", [
+    (400, {"type": "invalid_request_error", "message": "You have reached your specified workspace API usage limits. You will regain access on 2026-12-01 at 00:00 UTC."},
+     "spend limit is reached"),
+    (429, {"type": "rate_limit_error", "message": "You have reached your API usage limits: your organization has crossed its monthly API usage threshold.",
+           "details": {"error_code": "enforced_spend_limit_reached"}}, "spend limit is reached"),
+    (402, {"type": "billing_error", "message": "There is an issue with your billing."}, "billing problem"),
+])
+async def test_claude_account_spend_limits_are_budget_refusals(claude, status, error, reason):
+    """Anthropic's own spend limits stop the call as a budget refusal (not a bad request, not a rate limit), keeping
+    Anthropic's message, which says when access resumes."""
+    import anthropic
+
+    from moks.llm.providers import BudgetDenied
+
+    body = {"type": "error", "error": error}
+    resp = httpx.Response(status, request=httpx.Request("POST", "https://x"), json=body)
+    cls = {400: anthropic.BadRequestError, 429: anthropic.RateLimitError}.get(status, anthropic.APIStatusError)
+    err = cls.__new__(cls)
+    err.status_code, err.message, err.response, err.body = status, f"Error code: {status} - {body}", resp, body
+    claude.raises = err
+    with pytest.raises(BudgetDenied) as e:
+        await provider_for(cfg("anthropic", "claude-haiku-5-5")).complete("s", [{"role": "user", "content": "h"}], json_mode=False, max_tokens=100)
+    assert e.value.kind == "budget" and e.value.reason == "provider_account" and reason in e.value.message
+    assert error["message"][:40] in e.value.message
+
+
 async def test_claude_has_no_embeddings_and_says_so():
     with pytest.raises(LLMError, match="no embedding API"):
         await provider_for(cfg("anthropic")).embed(["x"])

@@ -4,9 +4,10 @@ Admission counts settled spend plus open reservations, so concurrent calls canno
 and overrun the budget. After the call the reservation becomes the real cost.
 
 Rules that apply to every budget here:
-- The day is the UTC calendar day.
+- The day is the UTC calendar day and the month the UTC calendar month, the same periods Anthropic's spend limits use.
 - A budget of 0 allows no paid use. Free models (zero price) still run, since they cost nothing.
-- No limit is expressed as None (settings only); a provider always has a budget.
+- No limit is expressed as None. Every LLM has a daily budget; its monthly budget and its provider's daily and monthly
+  totals (llm_provider_budgets, e.g. the credit on one Anthropic account) are optional. A call must fit all of them.
 
 When the outcome is unknown (timeout, dropped connection, or a worker that died), the provider may
 have charged for it, so the reservation stays counted at its full estimate for that day. Only a
@@ -23,25 +24,22 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import func, select, text, update
+from sqlalchemy import case, func, select, text, update
 
 from ..config import get_settings
 from ..db import session_scope
-from ..models import LLMConfig, LLMReservation, LLMUsage
+from ..models import LLMConfig, LLMProviderBudget, LLMReservation, LLMUsage
 from ..observability import EMBED_LATENCY, EMBED_REQUESTS, span as traced
-from .providers import LLMError, Message, Provider, complete_metered
+from .providers import BudgetDenied, LLMError, Message, Provider, complete_metered
 
 log = logging.getLogger("moks.budget")
 CHARS_PER_TOKEN = 3            # deliberately pessimistic for English and logs
 HOLD_MARGIN_SECONDS = 60
-DEFINITE = {"rate_limited", "auth", "config", "bad_request", "invalid_request"}  # refused, so not charged
+DEFINITE = {"rate_limited", "auth", "config", "bad_request", "invalid_request", "budget"}  # refused, so not charged
 WAIT_STEP = 0.2
+WHERE = "an administrator can change it in Settings → LLM providers"
 
-
-class BudgetDenied(LLMError):
-    def __init__(self, reason: str, message: str):
-        super().__init__("budget", message)
-        self.reason = reason
+__all__ = ["BudgetDenied", "complete", "embed", "estimate", "overview", "reserve"]
 
 
 def estimate(cfg: LLMConfig, chars: int, max_tokens: int) -> Decimal:
@@ -49,16 +47,49 @@ def estimate(cfg: LLMConfig, chars: int, max_tokens: int) -> Decimal:
     return ((tokens_in * Decimal(cfg.input_price_per_mtok) + Decimal(max_tokens) * Decimal(cfg.output_price_per_mtok)) / Decimal(1_000_000)).quantize(Decimal("0.000001"))
 
 
+def _start(unit: str = "day"):
+    return func.date_trunc(unit, func.now(), "UTC")
+
+
 def _today():
-    return func.date_trunc("day", func.now(), "UTC")
+    return _start("day")
 
 
-async def _committed(db, *where) -> Decimal:
+def resets_at(unit: str, now: datetime | None = None) -> datetime:
+    """When the current UTC day or month ends."""
+    now = now or datetime.now(timezone.utc)
+    if unit == "day":
+        return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (now.replace(day=1) + timedelta(days=32)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+async def _committed(db, *where, unit: str = "day") -> Decimal:
     """One statement, so one snapshot: a call settling between two reads would be counted nowhere."""
-    used = select(func.coalesce(func.sum(LLMUsage.cost_usd), 0)).where(LLMUsage.created_at >= _today(), *[w[0] for w in where]).scalar_subquery()
+    since = _start(unit)
+    used = select(func.coalesce(func.sum(LLMUsage.cost_usd), 0)).where(LLMUsage.created_at >= since, *[w[0] for w in where]).scalar_subquery()
     held = select(func.coalesce(func.sum(LLMReservation.estimated_usd), 0)).where(
-        LLMReservation.created_at >= _today(), LLMReservation.status.in_(("held", "uncertain")), *[w[1] for w in where]).scalar_subquery()
+        LLMReservation.created_at >= since, LLMReservation.status.in_(("held", "uncertain")), *[w[1] for w in where]).scalar_subquery()
     return Decimal((await db.execute(select(used + held))).scalar_one())
+
+
+def _of_llm(cfg: LLMConfig) -> tuple:
+    return (LLMUsage.llm_config_id == cfg.id, LLMReservation.llm_config_id == cfg.id)
+
+
+def _of_provider(provider: str) -> tuple:
+    """Usage keeps its provider after its LLM is deleted; an open hold always has its LLM."""
+    return (LLMUsage.provider == provider, LLMReservation.llm_config_id.in_(select(LLMConfig.id).where(LLMConfig.provider == provider)))
+
+
+def _over(spent: Decimal, est: Decimal, limit: Decimal) -> bool:
+    return spent + est > limit or (spent > 0 and spent >= limit)  # the second: a free call once the money is gone
+
+
+def _denied(reason: str, label: str, unit: str, spent: Decimal, est: Decimal, limit: Decimal) -> BudgetDenied:
+    period = "today" if unit == "day" else "this month"
+    reset = resets_at(unit).strftime("%Y-%m-%d %H:%M UTC")
+    more = f", and this call could cost up to ${est:.4f}" if spent < limit else ""
+    return BudgetDenied(reason, f"{label} is reached: ${spent:.2f} of ${limit:.2f} used {period}{more}. It resets at {reset}; {WHERE}.")
 
 
 async def _expire() -> None:
@@ -72,16 +103,29 @@ async def _try_reserve(cfg: LLMConfig, est: Decimal, user_id, investigation_id, 
     s = get_settings()
     await _expire()
     async with session_scope() as db:
+        # Always in this order (LLM, provider, person), so two calls never wait on each other's locks.
         await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"llm:{cfg.id}"})
+        await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"llm-provider:{cfg.provider}"})
         if user_id:
             await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"llm-user:{user_id}"})
         inflight = (await db.execute(select(func.count()).select_from(LLMReservation).where(LLMReservation.llm_config_id == cfg.id, LLMReservation.status == "held"))).scalar_one()
         if inflight >= cfg.max_concurrency:
             raise BudgetDenied("concurrency", f"{cfg.name} is at its limit of {cfg.max_concurrency} concurrent calls")
-        spent = await _committed(db, (LLMUsage.llm_config_id == cfg.id, LLMReservation.llm_config_id == cfg.id))
-        limit = Decimal(cfg.daily_budget_usd)
-        if spent + est > limit or (spent > 0 and spent >= limit):  # the second: a free call once the money is gone
-            raise BudgetDenied("provider", f"daily LLM budget of ${cfg.daily_budget_usd} for {cfg.name} reached")
+        spent, limit = await _committed(db, _of_llm(cfg)), Decimal(cfg.daily_budget_usd)
+        if _over(spent, est, limit):
+            raise _denied("provider", f"The daily LLM budget of {cfg.name}", "day", spent, est, limit)
+        if cfg.monthly_budget_usd is not None:
+            spent, limit = await _committed(db, _of_llm(cfg), unit="month"), Decimal(cfg.monthly_budget_usd)
+            if _over(spent, est, limit):
+                raise _denied("monthly", f"The monthly LLM budget of {cfg.name}", "month", spent, est, limit)
+        total = await db.get(LLMProviderBudget, cfg.provider)
+        for unit, limit in (("day", total.daily_budget_usd), ("month", total.monthly_budget_usd)) if total else ():
+            if limit is None:
+                continue
+            spent = await _committed(db, _of_provider(cfg.provider), unit=unit)
+            if _over(spent, est, Decimal(limit)):
+                raise _denied(f"total_{'daily' if unit == 'day' else 'monthly'}",
+                              f"The {'daily' if unit == 'day' else 'monthly'} total for all {cfg.provider} LLMs", unit, spent, est, Decimal(limit))
         if user_id and s.llm_user_daily_budget_usd is not None and est > 0:
             mine = await _committed(db, (LLMUsage.user_id == user_id, LLMReservation.user_id == user_id))
             if mine + est > Decimal(str(s.llm_user_daily_budget_usd)):
@@ -168,3 +212,46 @@ async def embed(provider: Provider, cfg: LLMConfig, texts: list[str], *, user_id
     EMBED_LATENCY.labels(cfg.provider).observe(time.monotonic() - start)
     await settle(rid, cfg, est, sum(len(t) for t in texts) // CHARS_PER_TOKEN, 0)
     return out
+
+
+def _usd(v: Any) -> str | None:
+    return None if v is None else str(Decimal(v).quantize(Decimal("0.0001")))
+
+
+async def overview(db) -> dict[str, Any]:
+    """Spend against every budget, today and this month (UTC), counted the way admission counts it: settled cost plus
+    open holds. For Settings → LLM providers and FinOps. The forecast assumes the rest of the month spends at the
+    average daily rate so far (at least one day, so an early burst does not read as a whole month of it)."""
+    day, month = _start("day"), _start("month")
+    open_ = LLMReservation.status.in_(("held", "uncertain"))
+    used = (await db.execute(select(LLMUsage.llm_config_id, LLMUsage.provider, func.sum(case((LLMUsage.created_at >= day, LLMUsage.cost_usd), else_=0)),
+                                    func.sum(LLMUsage.cost_usd)).where(LLMUsage.created_at >= month).group_by(LLMUsage.llm_config_id, LLMUsage.provider))).all()
+    held = (await db.execute(select(LLMReservation.llm_config_id, LLMConfig.provider,
+                                    func.sum(case((LLMReservation.created_at >= day, LLMReservation.estimated_usd), else_=0)), func.sum(LLMReservation.estimated_usd))
+                             .join(LLMConfig, LLMConfig.id == LLMReservation.llm_config_id).where(LLMReservation.created_at >= month, open_)
+                             .group_by(LLMReservation.llm_config_id, LLMConfig.provider))).all()
+    llms: dict[Any, list[Decimal]] = {}
+    providers: dict[str, list[Decimal]] = {}
+    for lid, prov, today, mon in [*used, *held]:
+        for box in ([llms.setdefault(lid, [Decimal(0), Decimal(0)])] if lid else []) + [providers.setdefault(prov, [Decimal(0), Decimal(0)])]:
+            box[0] += Decimal(today or 0)
+            box[1] += Decimal(mon or 0)
+    configs = (await db.execute(select(LLMConfig))).scalars().all()
+    totals = {t.provider: t for t in (await db.execute(select(LLMProviderBudget))).scalars()}
+    now = datetime.now(timezone.utc)
+    first = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    days = (resets_at("month", now) - first).days
+    elapsed = max((now - first).total_seconds() / 86400, 1.0)
+    names = sorted({c.provider for c in configs} | set(totals) | set(providers))
+    out_providers = []
+    for p in names:
+        today, mon = providers.get(p, [Decimal(0), Decimal(0)])
+        t = totals.get(p)
+        out_providers.append({"provider": p, "llms": sum(1 for c in configs if c.provider == p),
+                              "daily_budget_usd": _usd(t.daily_budget_usd) if t else None, "monthly_budget_usd": _usd(t.monthly_budget_usd) if t else None,
+                              "spent_today_usd": _usd(today), "spent_month_usd": _usd(mon),
+                              "forecast_month_usd": _usd(mon / Decimal(str(elapsed)) * days)})
+    return {"day_resets_at": resets_at("day", now).isoformat(), "month_resets_at": resets_at("month", now).isoformat(), "month_start": first.date().isoformat(),
+            "llms": {str(c.id): {"spent_today_usd": _usd(llms.get(c.id, [Decimal(0)] * 2)[0]), "spent_month_usd": _usd(llms.get(c.id, [Decimal(0)] * 2)[1])}
+                     for c in configs},
+            "providers": out_providers}

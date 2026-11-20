@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api, apiForm, qs } from "../api";
 import { useAuth } from "../auth";
 import { Badge, DataTable, type Env, ErrorBox, FormDrawer, FormSection, LineChart, ListHeader, Loading, PageHead, Stat, Time, useInterval, useLoad } from "../components";
@@ -8,6 +8,7 @@ import { fmtBytesMi, fmtCores, recsOf } from "../rightsizing";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
 import { RIGHTSIZING_CSV, RightsizingList, rightsizingCsvRows } from "./Rightsizing";
 import { CredentialInput, credFromRef, NO_CRED, saveCred } from "../credentials";
+import { spendClass, spentOf } from "../budget";
 
 // ---- Knowledge ----------------------------------------------------------------------------------
 
@@ -759,6 +760,7 @@ export function FinOps() {
           {!d.llm.by_model.length && <div className="empty">No LLM calls in this window.</div>}
           {d.llm.series.length > 0 && <LineChart series={d.llm.series} />}
         </div>
+        {d.llm.budgets && <LLMBudgets b={d.llm.budgets} />}
         <div className="card" style={{ marginTop: 14 }}>
           <div className="row between"><h2>Workloads ({shownWorkloads.length})</h2>{shownWorkloads.length > 0 && <button className="ghost small" onClick={exportWorkloads}>Export CSV</button>}</div>
           <div className="table-wrap" role="region" aria-label="Workload costs" tabIndex={0}>
@@ -899,5 +901,32 @@ export function Evals() {
         </div>
       ))}
     </>
+  );
+}
+
+/** Each LLM's budgets and each provider's totals against what was spent today and this month (UTC). Only LLM
+ * administrators get these from the API, since they cover every environment. Limits are set in Settings → LLM providers. */
+export function LLMBudgets({ b }: { b: any }) {
+  const providers: any[] = b.providers ?? [];
+  const llms: any[] = b.llms ?? [];
+  return (
+    <div className="card" style={{ marginTop: 14 }}>
+      <h2>LLM budgets (this month, from {b.month_start})</h2>
+      <div className="small muted" style={{ marginBottom: 6 }}>Spend counts finished calls plus calls in progress. Set the limits in <Link to="/settings/llm">Settings → LLM providers</Link>; empty is no limit.</div>
+      <div className="table-wrap" role="region" aria-label="LLM provider totals" tabIndex={0}><table>
+        <thead><tr><th>Provider (all its LLMs)</th><th>Today</th><th>This month</th><th>Month-end forecast</th></tr></thead>
+        <tbody>{providers.map((p) => <tr key={p.provider}><td className="mono small">{p.provider}</td>
+          <td className={spendClass(p.spent_today_usd, p.daily_budget_usd)}>{spentOf(p.spent_today_usd, p.daily_budget_usd)}</td>
+          <td className={spendClass(p.spent_month_usd, p.monthly_budget_usd)}>{spentOf(p.spent_month_usd, p.monthly_budget_usd)}</td>
+          <td className={spendClass(p.forecast_month_usd, p.monthly_budget_usd)}>${money(Number(p.forecast_month_usd ?? 0))}</td></tr>)}</tbody>
+      </table></div>
+      <div className="table-wrap" role="region" aria-label="LLM budgets" tabIndex={0} style={{ marginTop: 10 }}><table>
+        <thead><tr><th>LLM</th><th>Provider / model</th><th>Today</th><th>This month</th></tr></thead>
+        <tbody>{llms.map((m) => <tr key={m.name}><td className="small">{m.name}{!m.is_active && <span className="muted"> (inactive)</span>}</td><td className="mono small">{m.provider} / {m.model}</td>
+          <td className={spendClass(m.spent_today_usd, m.daily_budget_usd)}>{spentOf(m.spent_today_usd, m.daily_budget_usd)}</td>
+          <td className={spendClass(m.spent_month_usd, m.monthly_budget_usd)}>{spentOf(m.spent_month_usd, m.monthly_budget_usd)}</td></tr>)}</tbody>
+      </table></div>
+      {!llms.length && <div className="empty">No LLM is configured.</div>}
+    </div>
   );
 }
