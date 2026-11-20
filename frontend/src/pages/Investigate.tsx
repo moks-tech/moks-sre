@@ -10,7 +10,8 @@ import { CopyButton, Dialog, Drawer, Truncate } from "../ui";
 import { proposalPlan } from "./Conversations";
 import { PlanForm } from "./Ops";
 import { Judge, SimilarIncidents, SkillRecommendations } from "./MLParts";
-import { CrewAIForm, CrewAIPanel, type CrewCapability } from "./CrewAI";
+import { CrewAIForm, CrewAIPanel, type CrewCapability, type UnifiedCapability } from "./CrewAI";
+import { LivePipeline, UnifiedPanel } from "../intelligence/UnifiedPanel";
 
 const SUGGESTIONS = [
   "Why is checkout returning 502 errors?",
@@ -30,7 +31,7 @@ export function NewInvestigation() {
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const [everywhere, setEverywhere] = useState(false);
-  const config = useLoad(() => api<{ llm: { provider: string; model: string } | null; skills: string[]; environments?: string[]; crewai?: CrewCapability }>("/investigate/config"), []);
+  const config = useLoad(() => api<{ llm: { provider: string; model: string } | null; skills: string[]; environments?: string[]; crewai?: CrewCapability; unified?: UnifiedCapability }>("/investigate/config"), []);
   const [flow, setFlow] = useState<"standard" | "crewai">("standard");
   const crewai = config.data?.crewai?.available ? config.data.crewai : null;
 
@@ -99,7 +100,7 @@ export function NewInvestigation() {
         </>}
         <ErrorBox error={error} />
       </form>
-      {crewai && flow === "crewai" && <CrewAIForm capability={crewai} environments={config.data?.environments ?? []} minutes={minutes} />}
+      {crewai && flow === "crewai" && <CrewAIForm capability={crewai} unified={config.data?.unified} environments={config.data?.environments ?? []} minutes={minutes} />}
       <div className="small muted" style={{ marginTop: 10 }}>
         Investigations are read-only. Remediation runs only through an approved action plan. Evidence and tool calls are recorded in the audit log.
       </div>
@@ -219,7 +220,8 @@ export function InvestigationView() {
           {inv.error && <div className="alert error" style={{ marginBottom: 12 }}>{inv.error}</div>}
           <div className="grid inv-layout">
             <div className="stack">
-              <Stages current={inv.stage} done={TERMINAL.has(inv.status)} />
+              {!events.some((e) => e.type === "pipeline") && <Stages current={inv.stage} done={TERMINAL.has(inv.status)} />}
+              {!report?.unified && <LivePipeline events={events} />}
               {inv.parent_id && <div className="small">Follow-up of <Link to={`/investigations/${inv.parent_id}`}>an earlier investigation</Link>.</div>}
               {inv.trace_id && TERMINAL.has(inv.status) && (
                 <div className="small muted">Trace <code>{inv.trace_id}</code> <CopyButton text={inv.trace_id} label="Copy trace id" /> finds this run in Jaeger and its log lines in Loki.</div>
@@ -481,6 +483,7 @@ export function Report({ report, evidence = [], hideSummary, onCite, onPropose, 
       <Routing report={report} />
       {!hideSummary && <div className="rs static"><h3>Summary</h3><Markdown text={report.summary ?? ""} /><div className="small muted">{report.generated_by === "llm" ? "Written by the LLM from cited evidence" : "Rule-based report"}</div></div>}
       <CrewAIPanel crew={report.crewai} onCite={onCite} />
+      <UnifiedPanel unified={report.unified} onCite={onCite} />
       {report.missing_evidence.length > 0 && <div className="rs missing"><strong>Missing evidence</strong><ul>{report.missing_evidence.map((m: string, i: number) => <li key={i}><ClaimLabel kind="missing" /> {m}</li>)}</ul></div>}
       <Section title="Observed facts" count={report.observed_facts.length}>
         {report.observed_facts.length ? <ul>{report.observed_facts.map((f: any, i: number) => <li key={i}><ClaimLabel kind="observed" /> {FACT_KINDS[f.kind] && <><Badge kind="neutral">{FACT_KINDS[f.kind]}</Badge> </>}{f.statement}<Cites refs={f.evidence} onCite={onCite} />
@@ -583,7 +586,7 @@ export function Timeline({ events }: { events: Ev[] }) {
   if (!events.length) return <div className="muted small">Waiting for the worker…</div>;
   return (
     <ul className="timeline">
-      {events.filter((e) => e.type !== "llm_usage").map((e) => {
+      {events.filter((e) => e.type !== "llm_usage" && e.type !== "pipeline").map((e) => {
         let dot = "", text: React.ReactNode = e.type;
         if (e.type === "queued") text = `Queued (window ${e.window_minutes} min)`;
         if (e.type === "scope") { text = <>Scope: {e.environment}/{e.namespace}; connectors {e.connectors.join(", ") || "none"}{Object.keys(e.unavailable_connectors ?? {}).length ? ` (unavailable: ${Object.keys(e.unavailable_connectors).join(", ")})` : ""}</>; }

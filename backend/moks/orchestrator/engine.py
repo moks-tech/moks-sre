@@ -29,6 +29,7 @@ from .. import audit
 from ..config import get_settings
 from ..connectors import registry
 from ..crew import CrewUnavailable
+from ..intelligence import FLOW as UNIFIED_FLOW
 from ..db import session_scope
 from ..auth.revocation import CHECK_SECONDS as WATCH_SECONDS, AccessGuard, AccessRevoked
 from ..llm.lc import MoksChatModel
@@ -162,6 +163,7 @@ class Investigator:
         self.llm_failures: tuple = (Exception,)
         self.knowledge: dict[str, Any] = knowledge.new_state()  # the retrieval stage: queries, passages, why each was or was not used
         self.similar: dict[str, Any] = {"status": "not_attempted", "calls": 0}  # similar approved incidents (moks/ml/similar.py)
+        self.partial_payload: dict[str, Any] | None = None  # what an engine leaves for the partial report if the run is cancelled or times out
         self.started = time.monotonic()
 
     def time_left(self) -> float:
@@ -260,7 +262,8 @@ class Investigator:
             if status != "completed" and status != "abandoned":
                 # Keep the partial evidence useful: write a rule-based report of what was collected.
                 partial = rules_report("", self.findings, self.evidence, self.notes + [f"Investigation {status}: {error}"])
-                if not await self._finish(status, partial.model_dump() if self.evidence and not self.revoked else None, error):
+                kept = {**partial.model_dump(), **(self.partial_payload or {})} if self.evidence and not self.revoked else None  # an engine's own state so far (moks/intelligence)
+                if not await self._finish(status, kept, error):
                     status = "abandoned"
                 else:
                     await self._emit("error" if status == "failed" else "cancelled", {"message": error})
@@ -530,7 +533,11 @@ class Investigator:
             executor = ToolExecutor(db, ctx, next_ref=self._next_ref, timeout_seconds=min(45, self.settings.max_duration_seconds))
             if resumed:
                 await self._recollect(executor, resumed.get("namespace") or namespace)
-            if crew_request:  # the opt-in CrewAI flow (moks/crew); the graph stays the default
+            if crew_request and crew_request.get("flow") == UNIFIED_FLOW:  # the unified pipeline (moks/intelligence), a CrewAI console flow
+                from ..intelligence import engine as unified
+
+                final = await unified.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request)
+            elif crew_request:  # the opt-in CrewAI flow (moks/crew); the graph stays the default
                 from ..crew import runner as crew_runner
 
                 final = await crew_runner.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request)
@@ -566,6 +573,8 @@ class Investigator:
         payload["request"] = req.trace()
         if final.get("crewai"):
             payload["crewai"] = final["crewai"]
+        if final.get("unified"):
+            payload["unified"] = final["unified"]
         await self._knowledge_outcome(report, payload, ledger, env_name, namespace)
         if self.similar.get("status") not in (None, "not_attempted") or self.similar.get("reason"):
             from ..ml.similar import NOTE as SIMILAR_NOTE

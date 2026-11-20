@@ -140,9 +140,11 @@ async def start_run(request: Request, ctx: AuthContext, db: AsyncSession, flow: 
         if errors:
             raise HTTPException(422, "The crew configuration does not pass its checks: " + "; ".join(f"{e['field']}: {e['message']}" for e in errors[:3]))
     block = await console.queue_block(db, flow, draft)
-    question = clean.get("question") or f"Why is {clean['kind']} {clean['workload']} in namespace {clean['namespace']} unhealthy?"
+    # the workload is optional for flows that find it themselves (the unified investigation)
+    question = clean.get("question") or (f"Why is {clean['kind']} {clean['workload']} in namespace {clean['namespace']} unhealthy?" if clean.get("workload")
+                                         else f"What is wrong in namespace {clean['namespace']}, and why?")
     inner = CreateIn(question=question, environment=clean["environment"], namespace=clean["namespace"], minutes=clean.get("minutes"))
-    out = await start_investigation(inner, request, ctx, db, crewai={"workload": clean["workload"], "kind": clean["kind"], "trigger": trigger,
+    out = await start_investigation(inner, request, ctx, db, crewai={**{k: clean[k] for k in ("workload", "kind") if clean.get(k)}, "trigger": trigger,
                                                                      **{k: v for k, v in block.items() if k != "config_digest"}})
     run = await console.record_run(db, uuid.UUID(out["id"]), flow=flow, trigger=trigger, inputs=clean, created_by=ctx.user.id, block=block,
                                    schedule_id=schedule_id, rerun_of=rerun_of)

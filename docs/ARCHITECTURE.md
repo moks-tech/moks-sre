@@ -326,6 +326,13 @@ through `backup_runs`, so an alert fires on the age of the last success: a job t
 as well as one that fails. There is no point-in-time recovery; see [LIMITATIONS.md](LIMITATIONS.md).
 
 
+## Unified investigation
+
+A CrewAI console flow that runs fifteen stages over every source MOKS reads (Kubernetes, metrics, logs, traces,
+deployments, Git, ML anomalies, past incidents, runbooks). Every engine's evidence is served in one contract
+(`moks.evidence/v1`), and hypotheses are ranked by stated, non-probabilistic scores. See
+[UNIFIED_INVESTIGATION.md](UNIFIED_INVESTIGATION.md).
+
 ## Investigation graph
 
 An investigation runs as a LangGraph state machine (`orchestrator/graph.py`):

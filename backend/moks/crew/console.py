@@ -245,7 +245,9 @@ async def queue_scheduled(db: AsyncSession, sched: CrewSchedule, now: datetime) 
     if len(queued) >= s.investigation_queue_limit:
         raise ValueError("too many investigations are waiting; the next firing tries again")
     window = min(timedelta(minutes=inputs.get("minutes") or s.default_query_window_minutes), timedelta(minutes=min(env.max_query_window_minutes, s.max_query_window_minutes)))
-    question = inputs.get("question") or f"Why is {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']} unhealthy?"
+    question = inputs.get("question") or (f"Why is {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']} unhealthy?" if inputs.get("workload")
+                                          else f"What is wrong in namespace {inputs['namespace']}, and why?")  # the unified flow finds the workload itself
+    target = {k: inputs[k] for k in ("workload", "kind") if inputs.get(k)}
     owner = await db.get(User, sched.owner_id)
     inv = Investigation(created_by=sched.owner_id, environment_id=env.id, namespace=inputs["namespace"], question=question, time_from=now - window, time_to=now,
                         status="queued", trigger="schedule")
@@ -255,10 +257,10 @@ async def queue_scheduled(db: AsyncSession, sched: CrewSchedule, now: datetime) 
     db.add(InvestigationEvent(investigation_id=inv.id, seq=0, type="queued", payload={
         "window_minutes": int(window.total_seconds() // 60), "requested_minutes": inputs.get("minutes"), "environment": env.name, "environment_reason": "the schedule's",
         "namespace": inputs["namespace"], "namespace_reason": "the schedule's", "traceparent": traceparent(), "trigger": "schedule", "schedule_id": str(sched.id),
-        "crewai": {"workload": inputs["workload"], "kind": inputs["kind"], **{k: v for k, v in block.items() if k != "config_digest"}}}))
+        "crewai": {**target, **{k: v for k, v in block.items() if k != "config_digest"}}}))
     await audit.record(db, action="investigation.create", actor_id=sched.owner_id, actor_email=owner.email if owner else None, resource_type="investigation",
                        resource_id=str(inv.id), environment=env.name, namespace=inputs["namespace"], decision="allow",
-                       details={"workflow": "crewai", "trigger": "schedule", "schedule_id": str(sched.id), "schedule": sched.name, "workload": inputs["workload"], "kind": inputs["kind"]})
+                       details={"workflow": "crewai", "trigger": "schedule", "schedule_id": str(sched.id), "schedule": sched.name, **target})
     await conversations.start(db, inv)
     await record_run(db, inv.id, flow=sched.flow, trigger="schedule", inputs=inputs, created_by=sched.owner_id, block=block, schedule_id=sched.id)
     return inv.id

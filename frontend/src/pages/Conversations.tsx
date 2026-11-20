@@ -13,6 +13,7 @@ import { useHeaderScope } from "../shell";
 import { StateView } from "../states";
 import { ActionMenu, Dialog, Empty, Icon, Skeleton, Truncate, useFeedback, useIsMobile, useModal } from "../ui";
 import { EvidenceBody, Report, Timeline } from "./Investigate";
+import { LivePipeline } from "../intelligence/UnifiedPanel";
 import { PlanForm } from "./Ops";
 
 const TERMINAL = new Set(["completed", "failed", "cancelled"]);
@@ -270,6 +271,7 @@ function RunningTurn({ id, onChange, onActivity, stopping }: { id: string; onCha
       <div className="msg-body stack">
         <div className="progress"><span className="spin" aria-hidden="true" /><span>{stopping ? "Stopping" : label}…</span></div>
         {STREAM[stream] && <div className="small muted">{STREAM[stream]}</div>}
+        <LivePipeline events={events} />
         <details><summary className="small">Tool activity ({events.filter((e) => e.type === "tool_call").length})</summary><Timeline events={events} /></details>
       </div>
     </div>
