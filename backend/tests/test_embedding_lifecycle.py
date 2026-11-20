@@ -12,7 +12,7 @@ from sqlalchemy.exc import DBAPIError
 
 from moks.connectors.base import ConnectorError
 from moks.db import session_scope
-from moks.models import Document, EmbeddingIndex, EvalRun, KnowledgeSource, LLMConfig
+from moks.models import Document, EmbeddingCache, EmbeddingIndex, EvalRun, KnowledgeSource, LLMConfig
 from moks.rag import service
 
 from .conftest import login, make_user
@@ -46,6 +46,7 @@ async def pg(monkeypatch):
     async def clean():
         async with session_scope() as db:
             await db.execute(delete(EmbeddingIndex).where(EmbeddingIndex.backend == "postgres"))
+            await db.execute(delete(EmbeddingCache))  # each test counts what its model is sent, so none starts with cached vectors
             await db.execute(delete(LLMConfig).where(LLMConfig.purpose == "embedding"))
             await db.execute(delete(EvalRun).where(EvalRun.kind == "embedding"))
             await db.execute(delete(KnowledgeSource).where(KnowledgeSource.name.like("life-%")))
