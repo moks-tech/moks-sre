@@ -375,8 +375,7 @@ async def update_durability_metrics() -> None:
         DATABASE_VOLUME.set(s.database_volume_gib * 1024**3)
         latest = (await db.execute(select(BackupRun).order_by(BackupRun.started_at.desc()).limit(1))).scalars().first()
         good = (await db.execute(select(BackupRun).where(BackupRun.status == "success").order_by(BackupRun.finished_at.desc()).limit(1))).scalars().first()
-    if latest is not None:
-        BACKUP_LAST_RUN_OK.set(1 if latest.status == "success" else 0)
+    BACKUP_LAST_RUN_OK.set(float("nan") if latest is None else 1 if latest.status == "success" else 0)
     if good is not None:
         BACKUP_LAST_SUCCESS.set(good.finished_at.timestamp())
 

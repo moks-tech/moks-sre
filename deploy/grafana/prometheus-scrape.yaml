@@ -1,17 +1,43 @@
-# Add to the Prometheus scrape_configs in the tools repository (observability/prometheus),
-# next to the jithendar-com job. The headless Service moks-metrics resolves to every MOKS pod.
+# Add to the Prometheus scrape_configs in the tools repository (kubernetes: deploy/minikube/observability/prometheus/values.yaml),
+# next to the jithendar-com job. Pod discovery, so each series says which process it came from: instance and pod are the pod
+# name, component is api, worker, crewai, executor, terminal, reranker or embedder (the dashboards' Component variable).
+# Needs pods get/list/watch in the release namespace (mk4's Prometheus ClusterRole has it for the envoy-stats job). Meshed
+# pods are scraped through Prometheus's sidecar: the headless Services moks-metrics, moks-reranker-metrics and
+# moks-embedder-metrics are what let it send mTLS to their :9464.
 - job_name: moks
   metrics_path: /metrics
-  dns_sd_configs:
-    - names: [moks-metrics.moks-sre.svc.cluster.local]
-      type: A
-      port: 9464
+  kubernetes_sd_configs:
+    - role: pod
+      namespaces:
+        names: [moks-sre]
   relabel_configs:
-    - {target_label: service, replacement: moks}
+    # MOKS processes (app=moks) and the reranker and embedder services, on their metrics port only. Session pods
+    # (app=moks-diagnostic, moks-terminal) and the sidecars' own ports are left out.
+    - source_labels: [__meta_kubernetes_pod_label_app, __meta_kubernetes_pod_container_port_number]
+      regex: moks(-reranker|-embedder)?;9464
+      action: keep
+    - source_labels: [__meta_kubernetes_pod_phase]
+      regex: Pending|Succeeded|Failed
+      action: drop
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: instance
+    - source_labels: [__meta_kubernetes_pod_name]
+      target_label: pod
+    - source_labels: [__meta_kubernetes_namespace]
+      target_label: namespace
+    - source_labels: [__meta_kubernetes_pod_label_app]
+      regex: moks-(.+)
+      target_label: component
+    - source_labels: [__meta_kubernetes_pod_label_component]
+      regex: (.+)
+      target_label: component
+    - target_label: service
+      replacement: moks
 
-# moks-search, once its image has the exporter (docs/OPENSEARCH.md). The worker's moks_search_backend gauges
-# need only the job above. This one needs the moks_monitor password and the CA in a Secret mounted into
-# Prometheus, and NetworkPolicy already allows the monitoring namespace. It carries no document text.
+# moks-search, once its image has the exporter (docs/OPENSEARCH.md), for installs with rag.backend opensearch (mk4 searches
+# PostgreSQL). The worker's moks_search_backend gauges need only the job above. This one needs the moks_monitor password and
+# the CA in a Secret mounted into Prometheus, and NetworkPolicy already allows the monitoring namespace. It carries no
+# document text.
 - job_name: moks-search
   scheme: https
   metrics_path: /_prometheus/metrics

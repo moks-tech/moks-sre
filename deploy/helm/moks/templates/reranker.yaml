@@ -23,6 +23,19 @@ spec:
   ports:
     - {name: http, port: 8090, targetPort: 8090}
 ---
+# Headless, for Prometheus (job moks): its sidecar sends mTLS only to pod addresses a Service names, and this pod's
+# :9464 is STRICT once mesh.metricsMtls is true. Without it the scrape is plain text and the sidecar here resets it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: moks-reranker-metrics
+  labels: {{- include "moks.labels" $ | nindent 4 }}
+spec:
+  clusterIP: None
+  selector: {app: moks-reranker}
+  ports:
+    - {name: metrics, port: 9464, targetPort: 9464}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:

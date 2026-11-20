@@ -37,7 +37,7 @@ from ..llm.providers import LLMError, provider_for
 from ..models import Environment, Evidence, Investigation, InvestigationCheckpoint, InvestigationEvent, LLMConfig, LLMUsage, RoleBinding, SkillVersion, User
 from opentelemetry import trace as trace_api
 
-from ..observability import INVESTIGATION_DURATION, INVESTIGATIONS, INVESTIGATIONS_RUNNING, bind, bound, continue_trace, error_fields, llm_answer_unused, mark_failed, span
+from ..observability import CREWAI_RUNS, INVESTIGATION_DURATION, INVESTIGATIONS, INVESTIGATIONS_RUNNING, bind, bound, continue_trace, error_fields, llm_answer_unused, mark_failed, span
 from ..rbac import Binding, P, Principal
 from ..redaction import redact_obj
 from ..scope import ScopeError, effective_scope
@@ -534,23 +534,8 @@ class Investigator:
             executor = ToolExecutor(db, ctx, next_ref=self._next_ref, timeout_seconds=min(45, self.settings.max_duration_seconds))
             if resumed:
                 await self._recollect(executor, resumed.get("namespace") or namespace)
-            if crew_request and crew_request.get("flow") == UNIFIED_FLOW:  # the unified pipeline (moks/intelligence), a CrewAI console flow
-                from ..intelligence import engine as unified
-
-                final = await unified.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request)
-            elif crew_request:  # the opt-in CrewAI flows (moks/crew); the graph stays the default
-                from ..crew import runner as crew_runner
-                from ..crew.incident import CrewFallback
-
-                try:
-                    final = await crew_runner.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request, resumed)
-                except CrewFallback as exc:  # the incident flow could not start: the standard investigation answers instead
-                    self.notes.append(f"{exc}. MOKS ran its standard investigation instead.")
-                    await self._emit("note", {"message": self.notes[-1]})
-                    final = await graph.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, (LLMError, BudgetExceeded), None)
-                    final["crewai"] = {"version": None, "flow": crew_request.get("flow"), "status": "fallback", "fallback": "langgraph", "stopped": str(exc),
-                                       "agents": [], "tool_calls": 0, "gaps": [], "validation": {}, "evidence": [], "registry": [],
-                                       "errors": [{"code": "fallback", "task": None, "message": str(exc)}]}
+            if crew_request:
+                final = await self._crew(crew_request, executor, ctx, question, namespace, scope_info, provider, llm_cfg, resumed)
             else:
                 final = await graph.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, (LLMError, BudgetExceeded), resumed)
             await db.commit()
@@ -618,6 +603,46 @@ class Investigator:
 
     def _ledger(self, namespace: str) -> Ledger:
         return Ledger.build(self.evidence, namespace=namespace, max_age_seconds=self.settings.evidence_max_age_seconds)
+
+    async def _crew(self, crew_request: dict[str, Any], executor: Any, ctx: Any, question: str, namespace: str, scope_info: dict, provider: Any, llm_cfg: Any,
+                    resumed: dict[str, Any] | None) -> dict[str, Any]:
+        """A CrewAI console flow: the unified pipeline or a crew. Counts each run once, by flow and how it ended."""
+        from ..crew.config import FLOW, FLOWS
+
+        flow = crew_request.get("flow") or FLOW
+        outcome = "failed"
+        try:
+            if crew_request.get("flow") == UNIFIED_FLOW:  # the unified pipeline (moks/intelligence), a CrewAI console flow
+                from ..intelligence import engine as unified
+
+                final = await unified.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request)
+            else:  # the opt-in CrewAI flows (moks/crew); the graph stays the default
+                from ..crew import runner as crew_runner
+                from ..crew.incident import CrewFallback
+
+                try:
+                    final = await crew_runner.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request, resumed)
+                except CrewFallback as exc:  # the incident flow could not start: the standard investigation answers instead
+                    self.notes.append(f"{exc}. MOKS ran its standard investigation instead.")
+                    await self._emit("note", {"message": self.notes[-1]})
+                    final = await graph.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, (LLMError, BudgetExceeded), None)
+                    final["crewai"] = {"version": None, "flow": crew_request.get("flow"), "status": "fallback", "fallback": "langgraph", "stopped": str(exc),
+                                       "agents": [], "tool_calls": 0, "gaps": [], "validation": {}, "evidence": [], "registry": [],
+                                       "errors": [{"code": "fallback", "task": None, "message": str(exc)}]}
+            block = final.get("crewai") or final.get("unified") or {}
+            outcome = "fallback" if block.get("fallback") else str(block.get("status") or "completed")
+            return final
+        except CrewUnavailable:
+            outcome = "unavailable"
+            raise
+        except OwnershipLost:
+            outcome = "abandoned"
+            raise
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            CREWAI_RUNS.labels(flow if flow in FLOWS else "other", outcome).inc()
 
     def _with_history(self, question: str) -> str:
         """Earlier turns give the model context. They are data: one person's text must not instruct it."""

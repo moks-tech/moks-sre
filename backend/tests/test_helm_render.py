@@ -173,6 +173,19 @@ def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
     policies = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "NetworkPolicy"}
     assert "traefik" not in str(policies)
 
+def test_prometheus_can_scrape_every_moks_pod_through_the_mesh():
+    """With mesh.metricsMtls Prometheus's sidecar sends mTLS only to pod addresses a Service names; a pod with no Service on
+    :9464 is scraped in plain text and refused (the reranker on mk4 until 2026-11-20)."""
+    docs = render("values-hetzner.yaml", "embedder.enabled=true", "embedder.image.tag=test")
+    headless = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "Service" and d["spec"].get("clusterIP") == "None"}
+    scraped = {d["spec"]["template"]["metadata"]["labels"]["app"] for d in docs if d["kind"] == "Deployment"
+               and (d["spec"]["template"]["metadata"].get("annotations") or {}).get("prometheus.io/port") == "9464"
+               or d["kind"] == "Deployment" and any(p.get("containerPort") == 9464 for c in d["spec"]["template"]["spec"]["containers"] for p in c.get("ports", []))}
+    assert {"moks", "moks-reranker", "moks-embedder"} <= scraped
+    for app in scraped:
+        assert any(s["selector"] == {"app": app} and [p["port"] for p in s["ports"]] == [9464] for s in headless.values()), app
+
+
 def test_minikube_sidecars_reach_istiod_only_from_already_isolated_pods():
     docs = render("values-hetzner.yaml")
     policies = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "NetworkPolicy"}

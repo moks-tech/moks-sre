@@ -15,7 +15,7 @@ send prompts holding redacted evidence to a third party. The Langfuse Cloud set-
 | --- | --- | --- | --- | --- |
 | JSON logs on stdout | `observability.JsonFormatter`, every process | Alloy (`monitoring`), allowlisted fields only | Loki | Grafana Explore, `kubectl logs` for the full line |
 | Traces | OTel SDK, OTLP/HTTP to `OTEL_EXPORTER_OTLP_ENDPOINT` | OpenTelemetry Collector (`observability`), strips URLs, SQL and exception text | Jaeger 2.22, in memory | Jaeger UI (port-forward), Jaeger API `/api/v3` |
-| Metrics | `prometheus_client` on `:9464` | Prometheus job `moks` through headless Service `moks-metrics` | Prometheus, 7 days | Grafana folder MOKS, Prometheus alerts |
+| Metrics | `prometheus_client` on `:9464` | Prometheus job `moks`, pod discovery in `moks-sre` (`instance`/`pod` = pod name, `component`) | Prometheus, 7 days | Grafana folder MOKS, Prometheus alerts |
 
 Service names: `moks` (API), `moks-worker`, `moks-executor`, `moks-terminal`. Each line also carries `service` and
 `version` (package version plus commit), but Alloy forwards only its allowlist, so those two are in
@@ -87,6 +87,9 @@ histogram_quantile(0.95, sum by (le, mode) (rate(moks_investigation_duration_sec
 sum by (tool, outcome) (rate(moks_tool_calls_total[5m]))
 sum by (reason) (rate(moks_retrieval_fallbacks_total[15m]))
 sum(moks_sse_streams_open)
+sum by (flow, outcome) (increase(moks_crewai_runs_total[1d]))                      # CrewAI flows, how they ended
+histogram_quantile(0.95, sum by (le, task) (rate(moks_crewai_task_duration_seconds_bucket[1d])))
+sum by (stage, status) (increase(moks_unified_stages_total{status!="completed"}[1d]))
 ```
 
 Jaeger API (no ingress; read through the API server):
@@ -97,11 +100,31 @@ kubectl --context mk4 get --raw "/api/v1/namespaces/observability/services/jaege
 
 ## Dashboards and alerts
 
-- Dashboard: `deploy/grafana/moks-dashboard.json`, copied to the tools repository as
-  `deploy/minikube/observability/grafana/dashboards/moks-overview.json` (Grafana folder MOKS). Edit it here, then copy it.
+Grafana folder MOKS has six dashboards, linked to each other from the top of each one:
+
+| Dashboard (uid) | What it answers |
+|---|---|
+| MOKS · Overview (`moks-overview`) | Is it up, answering, keeping up, and what does it cost; firing MOKS alerts; warnings and errors |
+| MOKS · Investigations and CrewAI (`moks-crewai`) | Investigations by engine, CrewAI flows, the incident flow's steps and agents, graded conclusions, validation, unified-pipeline stages, tools |
+| MOKS · Models and spend (`moks-llm`) | Model calls, failures, latency, retries, unused answers, tokens and cost; embedding calls and cache |
+| MOKS · Knowledge and retrieval (`moks-knowledge`) | Search modes and latency, what a search was missing, reranking, the reranker and embedder services, documents per source |
+| MOKS · Jobs, connectors and data (`moks-platform`) | Job queue, connectors, approvals and actions, database and backups, processes, the trace pipeline |
+| MOKS · ML anomaly detection (`moks-ml`) | MOKS's own models in shadow mode: scoring, flags, drift, champions to review, correlation |
+
+- They are built by `deploy/grafana/build.py` into `deploy/grafana/dashboards/moks-*.json`. Edit the script, run
+  `python3 deploy/grafana/build.py`, and commit both: `tests/test_grafana_dashboards.py` fails when they disagree,
+  when a panel reads a metric or label MOKS does not export, when panels overlap, and when a metric is on no dashboard.
+- Copy the JSON files to the tools repository's `deploy/minikube/observability/grafana/dashboards/` (the chart loads
+  every `moks-*.json` there into the MOKS folder). Check new queries against mk4's Prometheus before copying
+  ([mk4 queries](#useful-queries)); an empty panel usually means the event has not happened in the time range.
+- The scrape job is pod discovery (`deploy/grafana/prometheus-scrape.yaml`): `component` and the pod name come from it.
+  The DNS job it replaced gave every series a pod IP only. The Component variable's "All" is `.*`, which also matches
+  series without the label. Prometheus scrapes through its own sidecar, so every pod it scrapes needs a headless Service on
+  `:9464` (`moks-metrics`, `moks-reranker-metrics`, `moks-embedder-metrics`); without one the scrape is reset.
 - Scrape job and alerts live in the tools repository: `prometheus/values.yaml` job `moks`, and `files/alerts.yml`
-  groups `moks`, `moks-durability`, `moks-search`. `deploy/grafana/prometheus-scrape.yaml` and `moks-alerts.yaml` here
-  are the reference copies.
+  groups `moks`, `moks-durability`, `moks-search`, `moks-ml`. `deploy/grafana/prometheus-scrape.yaml` and
+  `moks-alerts.yaml` here are the reference copies. Gauges that only a worker sets (backups, database size) are exported
+  by every process, so their rules take `max()` over the job.
 - mk4 has no Alertmanager, so alerts show in Prometheus and Grafana and notify no one.
 
 ## Troubleshooting a slow or failed investigation

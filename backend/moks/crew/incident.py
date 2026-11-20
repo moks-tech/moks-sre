@@ -27,7 +27,8 @@ from typing import Any
 from opentelemetry import trace as trace_api
 
 from ..config import get_settings
-from ..observability import mark_failed, span
+from ..observability import (CREWAI_CONCLUSIONS, CREWAI_ERRORS, CREWAI_EVIDENCE_REQUESTS, CREWAI_TASK_SECONDS, CREWAI_TASKS, CREWAI_VALIDATION, mark_failed,
+                             span)
 from . import CrewUnavailable
 from . import incident_config as ic
 from . import validation as val
@@ -192,6 +193,7 @@ class IncidentRun(Run):
             if owner is None:
                 case.requests.append(EvidenceRequest(round=round_, tool=r.tool, args=r.args, reason=r.reason, for_=r.for_, status="refused",
                                                      why="no specialist in this crew's configuration has that tool"))
+                CREWAI_EVIDENCE_REQUESTS.labels("refused").inc()
                 continue
             refs, refused = set(self.registry.records), len(self.refused)
             text = await self._call_tool(BY_NAME[r.tool], r.args, owner)
@@ -206,6 +208,7 @@ class IncidentRun(Run):
             else:
                 status, ref, why = "not_run", None, text.split("\n", 1)[0][:300]
             case.requests.append(EvidenceRequest(round=round_, tool=r.tool, args=r.args, reason=r.reason, for_=r.for_, status=status, evidence=ref, why=why))
+            CREWAI_EVIDENCE_REQUESTS.labels(status).inc()
             self.history.line(f"Review request {r.tool} {json.dumps(r.args, sort_keys=True)[:200]}: {status}" + (f" ({ref})" if ref else f" ({why})" if why else ""),
                               "info" if status == "collected" else "warning", {"event": "evidence_request", "tool": r.tool, "status": status, "evidence": ref}, step=self.step)
         return new
@@ -288,6 +291,8 @@ class IncidentRun(Run):
         tr.tool_calls = self.tool_calls - tools0
         tr.tokens_in, tr.tokens_out = self.inv.tokens_in - tok0[0], self.inv.tokens_out - tok0[1]
         self.task_runs.append(tr)
+        CREWAI_TASKS.labels(task, tr.status).inc()
+        CREWAI_TASK_SECONDS.labels(task).observe(tr.seconds)
         self.answers[self.step] = text[:ANSWER_CHARS]
         await self.bridge.flush()
         await self.history.finish(self.step, "failed" if tr.status == "failed" else "succeeded", tr.ended_by if tr.status != "done" else None)
@@ -543,6 +548,7 @@ async def run(inv: Any, executor: Any, ctx: Any, question: str, namespace: str, 
         review={"rounds": sum(1 for t in r.task_runs if t.task == "review"), "verdicts": case.verdicts, "conflicts": case.conflicts, "missing_telemetry": case.missing},
         requests=case.requests, unsupported=case.unsupported, impact=case.rca.impact if case.rca else "", tasks=r.task_runs, errors=r.errors)
     _log(history, result, decided)
+    _count(result, decided)
     await history.close("succeeded")
     cited = {ref for f in result.findings for ref in f.citations} | {ref for h in result.hypotheses for ref in h.supporting + h.contradicting}
     cited |= {ref for c in result.changes for ref in c.evidence} | {ref for e in result.timeline for ref in e.evidence}
@@ -562,6 +568,19 @@ async def run(inv: Any, executor: Any, ctx: Any, question: str, namespace: str, 
              "evidence": [r.registry.records[x] for x in sorted(cited, key=lambda x: int(x[1:])) if x in r.registry.records],
              "registry": [{k: v for k, v in e.items() if k != "excerpt"} for e in r.registry.records.values()]}
     return {"namespace": namespace, "report": report, "mode": mode, "crewai": block}
+
+
+def _count(result: IncidentResult, decided: dict[str, Any]) -> None:
+    """Prometheus counts of what MOKS graded and what validation changed (fixed status names and codes only)."""
+    for f in result.findings:
+        CREWAI_CONCLUSIONS.labels("finding", f.status).inc()
+    for h in result.hypotheses:
+        CREWAI_CONCLUSIONS.labels("hypothesis", h.status).inc()
+    for key, decision in (("citations_rejected", "citation_rejected"), ("claims_removed", "claim_removed"), ("confidence_lowered", "confidence_lowered")):
+        if decided.get(key):
+            CREWAI_VALIDATION.labels(decision).inc(len(decided[key]))
+    for e in result.errors:
+        CREWAI_ERRORS.labels(e.code).inc()
 
 
 def _log(history: History, result: IncidentResult, decided: dict[str, Any]) -> None:

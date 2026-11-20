@@ -174,6 +174,46 @@ async def run_one(client, steps: dict, **extra):
     return inv, ev, events
 
 
+def _samples(name: str) -> dict[tuple, float]:
+    from prometheus_client import REGISTRY
+
+    return {tuple(sorted(x.labels.items())): x.value for m in REGISTRY.collect() for x in m.samples if x.name == name}
+
+
+def _delta(after: dict[tuple, float], before: dict[tuple, float], **labels: str) -> float:
+    want = set(labels.items())
+    return sum(v - before.get(k, 0.0) for k, v in after.items() if want <= set(k))
+
+
+async def test_the_run_is_counted_for_prometheus(client, incident_on):
+    names = ("moks_crewai_runs_total", "moks_crewai_tasks_total", "moks_crewai_task_duration_seconds_count", "moks_crewai_tokens_total",
+             "moks_crewai_conclusions_total", "moks_crewai_validation_total", "moks_crewai_errors_total")
+    before = {n: _samples(n) for n in names}
+    incident_on.setattr(budget, "complete", ScriptedSRE(HAPPY))
+    r, _ = await start(client)
+    await Investigator(uuid.UUID(r.json()["id"]), "t").run()
+    inv, _, _ = await result(r.json()["id"])
+    assert inv.status == "completed", inv.error
+    after = {n: _samples(n) for n in names}
+    crew = inv.report["crewai"]
+    res = crew["investigation"]
+    d = lambda n, **labels: _delta(after[n], before[n], **labels)  # noqa: E731
+    assert d("moks_crewai_runs_total", flow="incident_investigation", outcome="completed") == 1
+    assert d("moks_crewai_runs_total") == 1  # once per run, whatever the flow
+    assert d("moks_crewai_tasks_total") == len(res["tasks"]) and d("moks_crewai_tasks_total", task="plan", status="done") == 1
+    assert d("moks_crewai_task_duration_seconds_count", task="rca") == 1
+    by_agent = crew["usage"]["by_agent"]
+    assert d("moks_crewai_tokens_total", direction="input") == sum(v["tokens_in"] for v in by_agent.values())
+    assert d("moks_crewai_tokens_total", agent="reviewer", direction="output") == by_agent["reviewer"]["tokens_out"]
+    assert d("moks_crewai_conclusions_total", kind="hypothesis") == len(res["hypotheses"])
+    assert d("moks_crewai_conclusions_total", kind="finding", status="confirmed_observation") == sum(1 for f in res["findings"] if f["status"] == "confirmed_observation")
+    assert d("moks_crewai_validation_total", decision="citation_rejected") == len(crew["validation"]["citations_rejected"]) >= 2
+    assert d("moks_crewai_errors_total") == len(crew["errors"])
+    from prometheus_client import REGISTRY
+
+    assert REGISTRY.get_sample_value("moks_crewai_running") == 0  # the slot is given back
+
+
 async def test_the_review_asks_for_evidence_and_moks_collects_it_within_its_bounds(client, incident_on):
     kube = {"tools": ["workload_pods", ["describe_pod", {"pod": POD}]],
             "answer": {"findings": [{"observation": f"Pod {POD} is in CrashLoopBackOff with 7 restarts", "resource": f"pod/{POD}", "cite": ["k8s_describe_pod"]}]}}
@@ -290,6 +330,7 @@ async def test_langgraph_answers_when_the_crew_cannot_start(client, incident_on)
 
     incident_on.setattr(budget, "complete", ScriptedSRE(HAPPY))
     r, _ = await start(client)
+    runs = _samples("moks_crewai_runs_total")
     async with session_scope() as db:
         uid = (await db.execute(select(Investigation.created_by).where(Investigation.id == uuid.UUID(r.json()["id"])))).scalar_one()
         await console.set_flow(db, "incident_investigation", False, "maintenance", uid)
@@ -301,6 +342,7 @@ async def test_langgraph_answers_when_the_crew_cannot_start(client, incident_on)
             await console.set_flow(db, "incident_investigation", True, None, uid)
     assert inv.status == "completed", inv.error
     assert inv.report["crewai"]["status"] == "fallback" and inv.report["crewai"]["fallback"] == "langgraph"
+    assert _delta(_samples("moks_crewai_runs_total"), runs, flow="incident_investigation", outcome="fallback") == 1
     assert any("standard investigation" in n for n in inv.report["notes"])
     assert "triage" in [e.payload.get("phase") for e in events if e.type == "phase"]  # the LangGraph graph ran
 
