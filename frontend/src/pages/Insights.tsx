@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, apiForm, qs } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, type Env, ErrorBox, FormDrawer, FormSection, LineChart, Loading, PageHead, Stat, Time, useInterval, useLoad } from "../components";
+import { Badge, DataTable, type Env, ErrorBox, FormDrawer, FormSection, LineChart, ListHeader, Loading, PageHead, Stat, Time, useInterval, useLoad } from "../components";
 import { useUrlFilters } from "../filters";
 import { fmtBytesMi, fmtCores, recsOf } from "../rightsizing";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
@@ -64,7 +64,7 @@ function IndexHealth({ s }: { s: any }) {
       <div className="stat-row">
         <Stat value={e.coverage == null ? "—" : `${Math.round(e.coverage * 100)}%`} label={e.coverage == null ? "no vectors in this index" : "documents with vectors"} />
         <Stat value={o.pending + o.retrying} label={o.retrying ? `index changes pending, ${o.retrying} retrying` : "index changes pending"} />
-        <Stat value={o.dead} label="index changes given up on" />
+        <Stat value={o.dead} label="index changes given up on" tone={o.dead ? "bad" : undefined} />
         <Stat value={o.documents_behind} label="documents behind the index" />
         <Stat value={s.pipeline.documents_behind} label={`on an older pipeline than v${s.pipeline.version}`} />
       </div>
@@ -90,7 +90,7 @@ function SearchBackend() {
     <div className="stack">
       <h3>Search backend</h3>
       <div className="stat-row">
-        <Stat value={health} label={d.cluster ? `cluster ${d.cluster}` : d.backend} />
+        <Stat value={health} label={d.cluster ? `cluster ${d.cluster}` : d.backend} tone={p && !p.reachable ? "bad" : undefined} />
         <Stat value={active?.index ?? "—"} label="active generation" />
         <Stat value={active ? (active.dimensions ? `${active.dimensions}` : "keyword only") : "—"} label={active?.model ?? "embedding model"} />
         <Stat value={c ? `${c.chunks_written} of ${c.chunks_expected}` : "—"} label="chunks in this generation" />
@@ -224,6 +224,7 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
     <div className="card stack" style={{ marginTop: 14 }}>
       <div className="row between"><h2>Sources</h2><div className="row">{can("knowledge.index") && <button className="ghost small" onClick={() => api("/knowledge/reindex", { method: "POST" }).then(() => toast("Reindex queued"), (e) => toast(e.message, "bad"))}>Rebuild index (embedding change)</button>}<button className="small" onClick={() => setAdding(true)}>Add source</button></div></div>
       <Loading load={list} rows={4} />
+      {list.data && list.data.length > 0 && <ListHeader shown={list.data.length} noun={["source", "sources"]} load={list} />}
       {list.data && <DataTable label="Knowledge sources" rows={list.data} rowKey={(s) => s.id} empty={<Empty title="No sources yet.">Use Add source to index a GitHub repository, web pages or files you upload.</Empty>}
         menu={(s) => ({ label: `Actions for ${s.name}`, items: [
           ...(s.syncable ? [{ label: s.sync_state === "idle" ? "Sync now" : "Sync in progress", disabled: s.sync_state !== "idle", run: () => { api(`/knowledge/sources/${s.id}/sync`, { method: "POST" }).then(list.reload); } }] : []),

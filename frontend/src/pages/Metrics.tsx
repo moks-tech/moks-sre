@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { api, qs } from "../api";
-import { Badge, ErrorBox, LineChart, Loading, PageHead, type Scope, Time, useInterval, useLoad, useRequest, useScopes, rowAction } from "../components";
+import { Badge, ErrorBox, LineChart, Loading, PageHead, PartialErrors, type Scope, Time, useInterval, useLoad, useRequest, useScopes, rowAction } from "../components";
 import { type Chip, FilterPanel, MultiSelect } from "../filters";
 import { Empty, Truncate } from "../ui";
 
@@ -31,7 +31,7 @@ function Results({ data, loading, unit }: { data?: Response; loading: boolean; u
           </div>
           <div className="tabs flat">{(["chart", "table"] as const).map((v) => <button type="button" key={v} className={view === v ? "active" : ""} onClick={() => setView(v)}>{v}</button>)}</div>
         </div>
-        {[...data.errors.map((e) => `${e.environment}: ${e.error}`), ...data.results.filter((r) => !r.ok).map((r) => `${r.source.environments.join(", ")}: ${r.error}`)].map((m, i) => <div key={i} className="alert warn small" style={{ marginTop: 8 }}>{m}</div>)}
+        <div style={{ marginTop: 8 }}><PartialErrors errors={[...data.errors, ...data.results.filter((r) => !r.ok).map((r) => ({ environment: r.source.environments.join(", "), namespace: r.namespace, error: r.error ?? "no answer" }))]} /></div>
       </div>
       {ok.map((r, i) => {
         const instant = r.result_type !== "matrix";
@@ -175,7 +175,7 @@ function Explore({ environments, connectors, scopes, sources, onQuery }: { envir
         <MultiSelect label="Namespaces" allLabel="All namespaces" options={allNamespaces.map((n) => ({ value: n }))} value={namespaces} onChange={setNamespaces} />
       </FilterPanel>
       <ErrorBox error={catalog.error} onRetry={catalog.reload} />
-      {catalog.data?.errors?.map((e: any, i: number) => <div key={i} className="alert warn small" style={{ marginTop: 8 }}>{e.environment}: {e.error}</div>)}
+      {catalog.data?.errors?.length > 0 && <div style={{ marginTop: 8 }}><PartialErrors errors={catalog.data.errors} /></div>}
       <div className="grid metrics-layout" style={{ marginTop: 14 }}>
         <div className="card metric-list">
           <table>
