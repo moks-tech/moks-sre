@@ -30,12 +30,12 @@ from ..connectors.base import ConnectorError
 from ..db import session_scope
 from ..llm import budget
 from ..llm.providers import LLMError, provider_for
-from ..models import Chunk, Document, DocumentIndexState, EmbeddingCache, EmbeddingIndex, IndexOutbox, KnowledgeSource, LLMConfig, SearchBackendStatus
+from ..models import Chunk, Document, DocumentIndexState, EmbeddingCache, EmbeddingIndex, EvalRun, IndexOutbox, KnowledgeSource, LLMConfig, SearchBackendStatus
 from ..observability import EMBEDDING_INPUTS, RETRIEVAL_FALLBACKS, RETRIEVAL_LATENCY, RETRIEVAL_MODES, SEARCH_BACKEND, span as traced
 from ..rbac import Principal
-from . import access, doctypes, eligibility, query as understanding_rules, rerank as reranking, structure
+from . import access, doctypes, eligibility, embeddings as emb, query as understanding_rules, rerank as reranking, structure
 from .backends import MAPPING_VERSION, Narrow, OpenSearchBackend, PineconeBackend, PostgresBackend, rrf
-from .query import parts, understand
+from .query import entities, exact_terms, expansion_terms, normalize_query, parts, services as named_services, understand
 from .chunking import MAX_CHUNKS, PIPELINE_VERSION, chunk, current_versions, kind_of, lifecycle_of, structured, title_of, version_for
 from .secrets import clean, exclusion_reason
 
@@ -112,7 +112,12 @@ async def embedding_config(db: AsyncSession) -> LLMConfig | None:
 
 
 def model_key(cfg: LLMConfig | None) -> str:
-    return f"{cfg.provider}/{cfg.model}/{cfg.embedding_dimensions or 'default'}" if cfg else "keyword-only"
+    """provider/model/dimensions, plus a fingerprint once embedding options are set (rag/embeddings.py)."""
+    return emb.model_key(cfg)
+
+
+def _embedder(cfg: LLMConfig) -> emb.Embedder:
+    return emb.Embedder(cfg, provider_for(cfg))
 
 
 async def active_index(db: AsyncSession) -> EmbeddingIndex | None:
@@ -122,10 +127,7 @@ async def active_index(db: AsyncSession) -> EmbeddingIndex | None:
 
 async def embedding_dimensions(cfg: LLMConfig) -> int:
     """The model's real output size. A configured size must agree: a vector mapping cannot change."""
-    vec = (await budget.embed(provider_for(cfg), cfg, ["dimension probe"], purpose="dimension_probe"))[0]
-    if cfg.embedding_dimensions and cfg.embedding_dimensions != len(vec):
-        raise ConnectorError("config", f"{cfg.name} is configured for {cfg.embedding_dimensions} dimensions but returns {len(vec)}")
-    return len(vec)
+    return await _embedder(cfg).probe()
 
 
 async def ensure_index(db: AsyncSession) -> EmbeddingIndex:
@@ -152,7 +154,7 @@ async def ensure_index(db: AsyncSession) -> EmbeddingIndex:
             error = f"embedding model unavailable: {getattr(exc, 'message', exc)}"
             log.warning("index created keyword-only", extra={"event": "embedding_failed", "errorType": type(exc).__name__})
             cfg = None
-    idx = EmbeddingIndex(backend=backend_name(), llm_config_id=cfg.id if cfg else None, model_key=model_key(cfg),
+    idx = EmbeddingIndex(backend=backend_name(), llm_config_id=cfg.id if cfg else None, model_key=model_key(cfg), spec=_spec_of(cfg, dims),
                          dimensions=dims, index_name="", status="active", activated_at=datetime.now(timezone.utc), error=error, mapping_version=MAPPING_VERSION)
     db.add(idx)
     await db.flush()
@@ -162,10 +164,15 @@ async def ensure_index(db: AsyncSession) -> EmbeddingIndex:
     return idx
 
 
-async def _embed_batch(provider, cfg: LLMConfig, texts: list[str], tries: int) -> list[list[float]]:
+def _spec_of(cfg: LLMConfig | None, dims: int | None) -> dict:
+    """What a generation records about the model that made its vectors, so a rollback can be checked against it."""
+    return {**emb.EmbeddingSpec.of(cfg).describe(), "returned_dimensions": dims} if cfg else {}
+
+
+async def _embed_batch(embedder: emb.Embedder, texts: list[str], tries: int) -> list[list[float]]:
     for attempt in range(tries):
         try:
-            return await budget.embed(provider, cfg, texts, purpose="indexing")
+            return await embedder.documents(texts, purpose="indexing")
         except LLMError as exc:
             if exc.kind != "rate_limited" or attempt == tries - 1:
                 raise
@@ -173,8 +180,13 @@ async def _embed_batch(provider, cfg: LLMConfig, texts: list[str], tries: int) -
     raise LLMError("rate_limited", "embedding retries exhausted")
 
 
+REUSED = "moks_reused_vectors"  # session.info key: how many vectors a rebuild took from the embedding cache
+
+
 def embed_text(heading: str | None, text_: str) -> str:
-    """What a chunk's vector is computed from. The embedding cache's key is this text's SHA-256."""
+    """What a chunk's vector is computed from, before the model's document prefix. The embedding cache's key is this
+    text's SHA-256 under the model key, and the model key covers prefixes, truncation and revision (rag/embeddings.py),
+    so a cached vector is the one the model would return again."""
     return f"{heading or ''}\n{text_}"
 
 
@@ -213,12 +225,22 @@ async def _remember(db: AsyncSession, idx: EmbeddingIndex, vectors: dict[str, li
                          .on_conflict_do_nothing(index_elements=["model_key", "input_hash"]))
 
 
-async def _embed(db: AsyncSession, idx: EmbeddingIndex, texts: list[str], tries: int = 2) -> list[list[float]] | None:
-    """Vectors for these texts. Text this model has embedded before comes from the cache, and each distinct text is
-    sent once, so a document that changes in one section costs one section's embedding, not the whole document's."""
+async def _index_config(db: AsyncSession, idx: EmbeddingIndex) -> LLMConfig | None:
+    """The configuration that made this generation's vectors, while it still makes the same ones. A changed
+    configuration would write vectors that do not compare with the rest of the index, so it writes none."""
     if not idx.llm_config_id or not idx.dimensions:
         return None  # keyword-only index: a vector field does not exist to write to
     cfg = await db.get(LLMConfig, idx.llm_config_id)
+    if cfg is not None and model_key(cfg) != idx.model_key:
+        raise LLMError("config", f"{cfg.name} is now {model_key(cfg)} but {idx.index_name} holds {idx.model_key}; rebuild the index")
+    return cfg
+
+
+async def _embed(db: AsyncSession, idx: EmbeddingIndex, texts: list[str], tries: int = 2) -> list[list[float]] | None:
+    """Vectors for these texts in this generation. Text this model key has embedded before comes from the cache, and
+    each distinct text is sent once, so a document that changes in one section costs one section's embedding, and a
+    rebuild with the same model costs none."""
+    cfg = await _index_config(db, idx)
     if cfg is None:
         return None
     hashes = [_input_hash(t) for t in texts]
@@ -226,17 +248,19 @@ async def _embed(db: AsyncSession, idx: EmbeddingIndex, texts: list[str], tries:
     by_hash = dict(zip(hashes, texts))
     missing = [h for h in dict.fromkeys(hashes) if h not in known]
     if missing:
-        provider = provider_for(cfg)
+        embedder = _embedder(cfg)
         fresh: list[list[float]] = []
         for i in range(0, len(missing), EMBED_BATCH):
-            fresh.extend(await _embed_batch(provider, cfg, [by_hash[h] for h in missing[i:i + EMBED_BATCH]], tries))
+            fresh.extend(await _embed_batch(embedder, [by_hash[h] for h in missing[i:i + EMBED_BATCH]], tries))
         if any(len(v) != idx.dimensions for v in fresh):
             raise LLMError("bad_response", f"embedding size differs from the index's {idx.dimensions} dimensions; reindex after a model change")
         new = dict(zip(missing, fresh))
         await _remember(db, idx, new)
         known.update(new)
+    reused = len(texts) - len(missing)
     EMBEDDING_INPUTS.labels("computed").inc(len(missing))
-    EMBEDDING_INPUTS.labels("reused").inc(len(texts) - len(missing))
+    EMBEDDING_INPUTS.labels("reused").inc(reused)
+    db.info[REUSED] = db.info.get(REUSED, 0) + reused
     return [known[h] for h in hashes]
 
 
@@ -637,8 +661,13 @@ async def activate_generation(db: AsyncSession, index_name: str) -> dict:
     if target is None or target.status != "retired":
         raise ConnectorError("conflict", f"{index_name} is not a retired generation of {backend_name()}")
     cfg = await embedding_config(db)
-    if cfg and target.dimensions and target.model_key != model_key(cfg):
-        raise ConnectorError("config", f"{index_name} holds vectors from {target.model_key}, and the active embedding model is {model_key(cfg)}; a query vector would not compare")
+    restore = None
+    if target.dimensions and (cfg is None or target.model_key != model_key(cfg)):
+        own = await db.get(LLMConfig, target.llm_config_id) if target.llm_config_id else None
+        if own is None or model_key(own) != target.model_key:
+            raise ConnectorError("config", f"{index_name} holds vectors from {target.model_key}, and that embedding configuration has been deleted or changed; "
+                                           "a query vector would not compare")
+        restore = own  # rolling back the index rolls back the model that reads it
     ext = external()
     if ext is not None:
         found = await ext.mapping(index_name) if hasattr(ext, "mapping") else {}
@@ -653,13 +682,16 @@ async def activate_generation(db: AsyncSession, index_name: str) -> dict:
         current.status, current.cleanup_pending, current.retired_at = "retired", True, now
         await db.flush()
     target.status, target.cleanup_pending, target.retired_at, target.activated_at = "active", False, None, now
+    if restore is not None:
+        await _make_active(db, restore)
     await db.flush()
     gaps = await _coverage(db, target)  # what it was at retirement says nothing about what changed since
     target.activation = "degraded" if gaps else "complete"
     target.error = f"activated with {len(gaps)} incomplete documents" if gaps else None
     if is_live():
         await _adopt_states(db, target, gaps)
-    return {"active": index_name, "replaced": current.index_name if current else None, "activation": target.activation, "incomplete_documents": len(gaps)}
+    return {"active": index_name, "replaced": current.index_name if current else None, "activation": target.activation, "incomplete_documents": len(gaps),
+            "model": target.model_key, "model_restored": restore.name if restore is not None else None}
 
 
 async def verify_index(sample: int = 50) -> dict[str, int]:
@@ -833,15 +865,66 @@ async def _adopt_states(db: AsyncSession, idx: EmbeddingIndex, gaps: dict[uuid.U
         await db.execute(update(Document).where(Document.id == document_id).values(vector_state="missing" if idx.dimensions else "not_applicable", vector_error=why[:300]))
 
 
-async def reindex(db: AsyncSession, job_id: uuid.UUID | None = None) -> dict:
+async def evaluation_for(db: AsyncSession, key: str) -> EvalRun | None:
+    """The newest finished embedding evaluation of this exact model key (prefixes and revision included)."""
+    rows = (await db.execute(select(EvalRun).where(EvalRun.kind == "embedding", EvalRun.status == "completed").order_by(EvalRun.created_at.desc()).limit(50))).scalars().all()
+    return next((r for r in rows if ((r.versions or {}).get("candidate") or {}).get("key") == key), None)
+
+
+def _passed(run: EvalRun | None) -> bool:
+    return run is not None and bool(run.gates) and all(g.get("state") in ("passed", "not_applicable") for g in run.gates)
+
+
+async def replacement_check(db: AsyncSession, cfg: LLMConfig | None) -> dict:
+    """Whether `cfg` may replace the model serving search. Only a replacement is gated: a first index, a rebuild
+    with the same model and a keyword-only index have nothing to lose. A model replaces one with vectors after it
+    passed the embedding evaluation, unless an administrator turned the rule off."""
+    current = await active_index(db)
+    key = model_key(cfg)
+    out: dict[str, Any] = {"model": key, "serving": current.model_key if current else None, "replacement": bool(current and current.dimensions and cfg and current.model_key != key)}
+    if not out["replacement"]:
+        return {**out, "allowed": True, "reason": None}
+    run = await evaluation_for(db, key)
+    out["evaluation"] = {"id": str(run.id), "passed": _passed(run), "at": _when(run.created_at)} if run else None
+    if _passed(run) or not get_settings().rag_require_embedding_evaluation:
+        return {**out, "allowed": True, "reason": None if _passed(run) else "evaluation not required by settings"}
+    why = "its last embedding evaluation failed" if run else "it has not passed the embedding evaluation"
+    return {**out, "allowed": False, "reason": f"{key} cannot replace {current.model_key} yet: {why}. Run the embedding evaluation for it (Settings > Evaluations), "
+                                               "or turn off 'Evaluate a new embedding model before it replaces the current one'."}
+
+
+async def _make_active(db: AsyncSession, cfg: LLMConfig) -> None:
+    """The model a generation was built with becomes the active embedding model in the same transaction as the
+    switch, so search never has an index without the model that reads it."""
+    if cfg.is_active:
+        return
+    await db.execute(update(LLMConfig).where(LLMConfig.purpose == "embedding", LLMConfig.is_active.is_(True)).values(is_active=False))
+    await db.flush()
+    cfg.is_active = True
+
+
+async def reindex(db: AsyncSession, job_id: uuid.UUID | None = None, llm_config_id: uuid.UUID | None = None) -> dict:
     """Build a new index version beside the active one, then switch in one committed transaction.
     Search uses the old index until that commit. A failed build leaves the old index active. The
     old physical index is deleted only after the switch has committed (cleanup_retired).
 
+    `llm_config_id` builds with another embedding model while the current one keeps serving: queries are embedded
+    by the model of the generation they search, so a model migration has no keyword-only window. The switch makes
+    that model the active one. Replacing a model that has vectors needs its evaluation first (replacement_check).
+    Vectors of text the same model key already embedded are copied, not requested again.
+
     Changes during a build: the outbox position is noted first, the copy reads PostgreSQL, and every
     document changed after that position is copied again. Inserts into the outbox are held only for
     the moment of the final check and the switch, so nothing can slip between them."""
-    cfg = await embedding_config(db)
+    if llm_config_id is not None:
+        cfg = await db.get(LLMConfig, llm_config_id)
+        if cfg is None or cfg.purpose != "embedding":
+            raise ConnectorError("config", "that is not an embedding model configuration")
+    else:
+        cfg = await embedding_config(db)
+    gate = await replacement_check(db, cfg)
+    if not gate["allowed"]:
+        raise ConnectorError("conflict", gate["reason"])
     if backend_name() == "postgres" and cfg and not await PostgresBackend(db).enable_vector():
         raise ConnectorError("config", "pgvector is not installed in this database: add it to the CloudNativePG Database's extensions, "
                                        "use a pgvector image, or the opensearch backend")
@@ -850,9 +933,11 @@ async def reindex(db: AsyncSession, job_id: uuid.UUID | None = None) -> dict:
         EmbeddingIndex.heartbeat_at < datetime.now(timezone.utc) - BUILD_STALE).values(status="failed", error="build stopped responding", cleanup_pending=True))
     await db.commit()
     dims = await embedding_dimensions(cfg) if cfg else None
-    new = EmbeddingIndex(backend=backend_name(), llm_config_id=cfg.id if cfg else None, model_key=model_key(cfg),
+    spec = _spec_of(cfg, dims) | ({"evaluation": gate["evaluation"]} if gate.get("evaluation") else {})
+    new = EmbeddingIndex(backend=backend_name(), llm_config_id=cfg.id if cfg else None, model_key=model_key(cfg), spec=spec,
                          dimensions=dims, index_name="", status="building", heartbeat_at=datetime.now(timezone.utc), build_job_id=job_id, mapping_version=MAPPING_VERSION,
                          build_watermark=(await db.execute(select(func.coalesce(func.max(IndexOutbox.id), 0)))).scalar_one())
+    db.info[REUSED] = 0
     db.add(new)
     try:
         await db.flush()
@@ -908,9 +993,13 @@ async def reindex(db: AsyncSession, job_id: uuid.UUID | None = None) -> dict:
     new.status, new.activated_at, new.chunk_count = "active", datetime.now(timezone.utc), len(done)
     new.activation = "degraded" if gaps else "complete"
     new.error = f"activated with {len(gaps)} incomplete documents" if gaps else None
+    new.reused_vectors = db.info.get(REUSED, 0)
+    if cfg is not None:
+        await _make_active(db, cfg)
     if is_live():
         await _adopt_states(db, new, gaps)
-    result = {"index": new.index_name, "model": new.model_key, "chunks": len(done), "replaced": old_name, "activation": new.activation, "incomplete_documents": len(gaps)}
+    result = {"index": new.index_name, "model": new.model_key, "chunks": len(done), "replaced": old_name, "activation": new.activation, "incomplete_documents": len(gaps),
+              "reused_vectors": new.reused_vectors}
     await db.commit()
     return result
 
@@ -966,6 +1055,19 @@ SCORE_NOTE = "score is a relative ranking within this search, not a probability 
 
 def identifiers(query: str) -> list[str]:
     return list(dict.fromkeys(m.group(0) for m in IDENTIFIER.finditer(query) if len(m.group(0)) >= 4))
+
+
+MAX_TOKENS = 12
+
+
+def _exact_tokens(query: str, named: dict[str, list[str]]) -> list[str]:
+    """Identifiers, then whole entities the identifier pattern splits (an ARN, an s3:// URI, a Terraform address with
+    an index). Each is matched exactly as typed; nothing found inside another is added twice."""
+    tokens = identifiers(query)
+    for term in exact_terms(named):
+        if not any(term in t for t in tokens):
+            tokens.append(term)
+    return tokens[:MAX_TOKENS]
 
 
 def _terms(query: str) -> set[str]:
@@ -1046,9 +1148,11 @@ def weights() -> dict[str, float]:
 
 
 async def _rankings(db: AsyncSession, query: str, tokens: list[str], found: list, pool: int, idx: EmbeddingIndex | None, qv: list[float] | None,
-                    retrieval: str = "hybrid", only: list[str] | None = None, narrow: Narrow | None = None, entities: list[str] | None = None) -> tuple[list[list[str]], list[float], bool, str | None]:
+                    retrieval: str = "hybrid", only: list[str] | None = None, narrow: Narrow | None = None, entities: list[str] | None = None,
+                    expansions: list[str] | None = None) -> tuple[list[list[str]], list[float], bool, str | None]:
     """Each ranker's candidates and fusion weight, whether every one of them came through a complete filter, and why
-    any fell back. `only` and `narrow` narrow to named sources, types or times; they never add what the grants do not."""
+    any fell back. `only` and `narrow` narrow to named sources, types or times; they never add what the grants do not.
+    `expansions` add one keyword ranking of related terms beside the question's own, under the same grants."""
     rankings: list[list[str]] = []
     weighting: list[float] = []
     exact, reason = True, None
@@ -1082,6 +1186,9 @@ async def _rankings(db: AsyncSession, query: str, tokens: list[str], found: list
         if entities and w["entity"] > 0:  # "which services depend on redis": a manifest that says REDIS_HOST never says "depend"
             rankings.append(await pg.keyword(" or ".join(entities[:6]), found, pool, only, narrow))
             weighting.append(w["entity"])
+        if expansions and w["keyword"] > 0:
+            rankings.append(await pg.keyword(" or ".join(expansions), found, pool, only, narrow))
+            weighting.append(w["keyword"])
     if qv is not None and idx is not None and retrieval != "keyword":
         if external():
             try:
@@ -1098,19 +1205,23 @@ async def _rankings(db: AsyncSession, query: str, tokens: list[str], found: list
 
 
 async def _query_vector(db: AsyncSession, principal: Principal, query: str, idx: EmbeddingIndex | None) -> tuple[list[float] | None, str | None]:
+    """The query is embedded by the model of the generation it searches, not by whichever model is active, so a
+    rebuild with a new model can run while the old one keeps answering. Deactivating every embedding model is
+    still the switch that stops vector search."""
     if idx is None:
         return None, "nothing has been indexed yet"
-    cfg = await embedding_config(db)
-    if cfg is None:
+    active = await embedding_config(db)
+    if active is None:
         return None, "no embedding model is active"
     if not idx.dimensions:
         return None, "this index has no vectors; run a reindex"
-    if idx.llm_config_id != cfg.id or idx.model_key != model_key(cfg):
-        return None, "the active embedding model differs from the index; run a reindex"
+    cfg = active if active.id == idx.llm_config_id else await db.get(LLMConfig, idx.llm_config_id) if idx.llm_config_id else None
+    if cfg is None or idx.model_key != model_key(cfg):
+        return None, "the embedding model this index was built with has been changed or deleted; run a reindex"
     if not external() and not await PostgresBackend(db).has_vector():
         return None, "pgvector is not installed"
     try:
-        return (await budget.embed(provider_for(cfg), cfg, [query], user_id=uuid.UUID(principal.user_id), purpose="search", wait_seconds=2))[0], None
+        return await _embedder(cfg).query(normalize_query(query), user_id=uuid.UUID(principal.user_id), purpose="search", wait_seconds=2), None
     except (LLMError, ConnectorError) as exc:
         log.warning("vector search unavailable", extra={"event": "vector_search_failed", "errorType": type(exc).__name__})
         return None, f"embedding failed ({getattr(exc, 'kind', 'error')}), so this is keyword only"
@@ -1210,7 +1321,10 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
     idx = await active_index(db)
     if is_opensearch(backend_name()) and idx is None:
         return {**empty, "mode": "empty", "note": "nothing has been indexed yet"}
-    tokens = identifiers(query)
+    query = normalize_query(query)
+    named = entities(query)
+    tokens = _exact_tokens(query, named)
+    expansions = expansion_terms(query) if get_settings().rag_query_expansion and retrieval != "vector" else []
     embedded = 0
     if retrieval == "keyword":
         qv, reason = None, None
@@ -1227,7 +1341,8 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
     fusion = weights()
     understanding, hints = await _understand(db, query, tokens, found, now)
     while True:
-        rankings, weighting, exact, backend_reason = await _rankings(db, query, tokens, found, pool, idx, qv, retrieval, sources, narrow, sorted(hints.get("services") or ()))
+        rankings, weighting, exact, backend_reason = await _rankings(db, query, tokens, found, pool, idx, qv, retrieval, sources, narrow,
+                                                                     sorted(hints.get("services") or ()), expansions)
         reason = backend_reason or reason
         mode = _mode(retrieval, qv, backend_reason)
         fused = rrf(*rankings, weights=weighting, k=fusion["k"])
@@ -1259,8 +1374,12 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
             break  # enough survived, or there is nothing further down
         pool = min(pool * 3, MAX_POOL)  # unreadable or retired documents crowded this page
         expanded += 1
+    if expansions:
+        understanding["expansions"] = expansions
     resources = set(understanding["resource_types"]) | ({resource_type.lower()} if resource_type else set())
-    scored = _score(allowed, query, tokens, service, now, resources, environment, namespace, hints)
+    # services the question spells out (app="checkout-api", "the moks-api service") count even when query signals are off
+    scored = _score(allowed, query, tokens, service, now, resources, environment, namespace,
+                    {**hints, "services": set(hints.get("services") or ()) | named_services(named)})
     client = reranker or reranking.active()
     skipped = None
     if interactive and rerank is None and reranker is None and client is not None and not get_settings().rag_rerank_interactive:
@@ -1577,7 +1696,8 @@ async def stats(db: AsyncSession) -> dict:
                           "coverage": round(vectors.get("complete", 0) / need, 4) if need else None},
             "index": {"name": idx.index_name, "model": idx.model_key, "dimensions": idx.dimensions, "mode": "hybrid" if idx.dimensions else "keyword-only",
                       "activation": idx.activation, "incomplete_documents": len(gaps), "incomplete_sample": [{"document_id": str(d), "reason": why} for d, why in list(gaps.items())[:10]],
-                      "note": idx.error, "reindex_needed": bool(cfg and idx.model_key != model_key(cfg))} if idx else None,
+                      "note": idx.error, "reindex_needed": bool(cfg and idx.model_key != model_key(cfg)), "active_model": model_key(cfg) if cfg else None,
+                      "reused_vectors": idx.reused_vectors, "spec": idx.spec or None} if idx else None,
             "reindex_running": building is not None, "reindex_progress": {"chunks": building.chunk_count, "of": chunks} if building else None}
 
 
@@ -1602,6 +1722,7 @@ async def backend_report(db: AsyncSession) -> dict:
             "probe": {"checked_at": probe.checked_at.isoformat(), **probe.state} if probe else None, "backfill_eligible": backfill,
             "coverage": await _generation_counts(db, active.id) if active else None, "retrieval": RETRIEVAL_SEEN,
             "generations": [{"backend": r.backend, "index": r.index_name, "status": r.status, "activation": r.activation, "model": r.model_key, "dimensions": r.dimensions, "chunks": r.chunk_count, "mapping_version": r.mapping_version,
+                             "reused_vectors": r.reused_vectors, "evaluation": (r.spec or {}).get("evaluation"),
                              "activated_at": _when(r.activated_at), "retired_at": _when(r.retired_at), "cleanup_pending": r.cleanup_pending, "serving": r.backend == name and r.status == "active"} for r in rows]}
 
 
@@ -1671,11 +1792,11 @@ async def validate_generation(sample: int = 5) -> dict:
         ranked, _ = await ext.keyword(name, "the", [access.Grant("moks-no-such-environment", "moks-no-such-namespace")], 100)
         leaked = (await db.execute(select(func.count()).select_from(Chunk).join(Document, Document.id == Chunk.document_id).where(Chunk.id.in_([uuid.UUID(c) for c in ranked]), Document.environment != "*", Document.namespace != "*"))).scalar_one() if ranked else 0
         check("scope_filter", leaked == 0, {"returned": len(ranked), "outside_scope": leaked})
-        cfg = await embedding_config(db)
+        cfg = await db.get(LLMConfig, idx.llm_config_id) if idx.llm_config_id else None
         if dims and cfg and idx.model_key == model_key(cfg) and rows:
             c, _ = rows[0]
             try:
-                vec = (await budget.embed(provider_for(cfg), cfg, [f"{c.heading}\n{c.text}"], purpose="dimension_probe"))[0]
+                vec = (await _embedder(cfg).documents([embed_text(c.heading, c.text)], purpose="dimension_probe"))[0]
                 ranked, _ = await ext.vector(name, vec, everyone, 10)
                 check("vector_search", str(c.id) in ranked, {"results": len(ranked)})
             except LLMError as exc:

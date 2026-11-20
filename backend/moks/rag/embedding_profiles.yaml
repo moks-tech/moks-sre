@@ -1,0 +1,63 @@
+# Suggestions that fill in the embedding form (Settings > Models) and the benchmark's candidate list.
+# Nothing reads this file when indexing or searching: a configuration's own embedding_options decide, and the
+# vector size is whatever the model returns. Prefixes come from each model's card; `measured` says what
+# MOKS's SRE benchmark found (docs/EMBEDDINGS.md), so a suggestion is never just a model card's claim.
+#
+# match: the model's name as it appears at the end of a Hugging Face id, a local path or an Ollama tag.
+profiles:
+  - model: BAAI/bge-small-en-v1.5
+    match: [bge-small-en-v1.5]
+    query_prefix: "Represent this sentence for searching relevant passages: "
+    document_prefix: ""
+    max_input_tokens: 512
+    license: mit
+    measured: true
+  - model: BAAI/bge-base-en-v1.5
+    match: [bge-base-en-v1.5]
+    query_prefix: "Represent this sentence for searching relevant passages: "
+    document_prefix: ""
+    max_input_tokens: 512
+    license: mit
+    measured: true
+  - model: intfloat/e5-base-v2
+    match: [e5-base-v2]
+    query_prefix: "query: "
+    document_prefix: "passage: "
+    max_input_tokens: 512
+    license: mit
+    measured: true
+  - model: sentence-transformers/all-MiniLM-L6-v2
+    match: [all-minilm-l6-v2, all-minilm]
+    query_prefix: ""
+    document_prefix: ""
+    max_input_tokens: 256
+    license: apache-2.0
+    measured: true
+  - model: BAAI/bge-m3
+    match: [bge-m3]
+    query_prefix: ""
+    document_prefix: ""
+    max_input_tokens: 8192
+    license: mit
+    measured: true
+  - model: nomic-ai/nomic-embed-text-v1.5
+    match: [nomic-embed-text-v1.5, nomic-embed-text]
+    query_prefix: "search_query: "
+    document_prefix: "search_document: "
+    max_input_tokens: 8192
+    license: apache-2.0
+    measured: false
+  - model: mixedbread-ai/mxbai-embed-large-v1
+    match: [mxbai-embed-large-v1, mxbai-embed-large]
+    query_prefix: "Represent this sentence for searching relevant passages: "
+    document_prefix: ""
+    max_input_tokens: 512
+    license: apache-2.0
+    measured: false
+  - model: openai/text-embedding-3-small
+    match: [text-embedding-3-small, text-embedding-3-large]
+    query_prefix: ""
+    document_prefix: ""
+    max_input_tokens: 8191
+    license: proprietary
+    measured: false

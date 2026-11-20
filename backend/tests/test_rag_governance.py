@@ -614,7 +614,7 @@ async def test_a_document_indexed_without_vectors_is_visible_and_backfilled(monk
         return [[0.1, 0.2]] * len(texts)
     monkeypatch.setattr(service, "_embed", embed)
     written = []
-    monkeypatch.setattr("moks.rag.backends.PostgresBackend.index_chunks", lambda self, idx, rows, emb: _record(written, emb))
+    monkeypatch.setattr("moks.rag.backends.PostgresBackend.index_chunks", lambda self, idx, rows, emb, hashes=None: _record(written, emb))
     async with session_scope() as db:
         idx = await service.ensure_index(db)
         old = idx.dimensions

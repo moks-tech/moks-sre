@@ -4,7 +4,9 @@ The orchestrator only needs "complete this conversation, preferably as JSON", wh
 supported provider offers. Tool use is negotiated in our own JSON protocol (see
 moks.orchestrator.prompts) rather than each vendor's function-calling API, so the same
 policy-checked tool loop works with Anthropic, OpenAI, Azure OpenAI, Gemini, Bedrock, Ollama and any
-server that speaks the OpenAI chat API (see presets in the admin page).
+server that speaks the OpenAI chat API (see presets in the admin page). Embedding models can also come from a
+Hugging Face Text Embeddings Inference API or Sentence Transformers in-process; moks.rag.embeddings wraps every
+embedding provider in one interface.
 
 The LLM never receives infrastructure credentials: it sees redacted evidence and returns
 tool *requests*, which the executor validates and authorizes.
@@ -476,10 +478,97 @@ class BedrockProvider(Provider):
             raise LLMError("unavailable", f"bedrock embedding failed ({type(exc).__name__})") from None
 
 
+class EmbeddingOnly(Provider):
+    async def complete(self, system, messages, *, json_mode, max_tokens, temperature=0.1):
+        raise LLMError("config", f"{self.name} serves embedding models only; choose another provider for chat")
+
+
+class HuggingFaceProvider(EmbeddingOnly):
+    """A Hugging Face Text Embeddings Inference API: a TEI server, a Hugging Face Inference Endpoint, or MOKS's own
+    embedding service (embedder/, which speaks the same /embed and /info). The server decides the model; `model`
+    must match what its /info reports, which the connection test checks."""
+
+    name = "huggingface"
+
+    def _base(self) -> str:
+        if not self.cfg.endpoint:
+            raise LLMError("config", "huggingface needs the embedding server's endpoint, e.g. http://moks-embedder:8090")
+        return self.cfg.endpoint.rstrip("/")
+
+    def _headers(self) -> dict[str, str]:
+        key = self._key(required=False)
+        return {"Authorization": f"Bearer {key}"} if key else {}
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        data = await self._post(f"{self._base()}/embed", {"inputs": texts, "normalize": True, "truncate": True}, self._headers())
+        if not isinstance(data, list) or (data and not isinstance(data[0], list)):
+            raise LLMError("bad_response", "huggingface /embed did not return a list of vectors")
+        return data
+
+    async def info(self) -> dict[str, Any]:
+        """What the server says it runs: model_id and model_sha (the revision), as TEI reports them."""
+        try:
+            async with httpx.AsyncClient(timeout=self.cfg.timeout_seconds, transport=self.transport) as c:
+                r = await c.get(f"{self._base()}/info", headers=self._headers())
+        except httpx.HTTPError as exc:
+            raise LLMError("unavailable", f"cannot reach huggingface ({type(exc).__name__})") from None
+        if r.status_code in (401, 403):
+            raise LLMError("auth", f"huggingface rejected the credentials (HTTP {r.status_code})")
+        if r.status_code >= 400:
+            raise LLMError("unavailable", f"huggingface /info returned HTTP {r.status_code}")
+        try:
+            return r.json()
+        except ValueError:
+            raise LLMError("bad_response", "huggingface /info returned non-JSON") from None
+
+
+class SentenceTransformersProvider(EmbeddingOnly):
+    """A Sentence Transformers model loaded in this process. For development, single-node installs and the
+    benchmark (moks.evals.embedding_bench); a cluster serves the same models through the embedding service and the
+    huggingface provider instead, so API pods stay small. Remote code is never run; with a revision set, only that
+    revision loads. sentence-transformers is not in the MOKS image."""
+
+    name = "sentence_transformers"
+    _loaded: dict[tuple[str, str], Any] = {}
+    _lock = asyncio.Lock()
+
+    async def _model(self) -> Any:
+        revision = str((getattr(self.cfg, "embedding_options", None) or {}).get("revision") or "")
+        key = (self.cfg.model, revision)
+        if key not in self._loaded:
+            async with self._lock:
+                if key not in self._loaded:
+                    self._loaded[key] = await asyncio.to_thread(self._load, self.cfg.model, revision)
+        return self._loaded[key]
+
+    @staticmethod
+    def _load(model: str, revision: str) -> Any:
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise LLMError("config", "sentence-transformers is not installed here; serve the model with the MOKS embedding service and use the huggingface provider") from None
+        try:
+            return SentenceTransformer(model, device="cpu", revision=revision or None, trust_remote_code=False)
+        except Exception as exc:
+            raise LLMError("config", f"cannot load {model} ({type(exc).__name__})") from None
+
+    async def embed(self, texts: list[str]) -> list[list[float]]:
+        model = await self._model()
+
+        def encode() -> list[list[float]]:
+            return model.encode(texts, batch_size=32, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False).tolist()
+
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(encode), self.cfg.timeout_seconds)
+        except asyncio.TimeoutError:
+            raise LLMError("timeout", f"sentence_transformers did not finish within {self.cfg.timeout_seconds}s") from None
+
+
 PROVIDERS: dict[str, type[Provider]] = {
     "anthropic": AnthropicProvider, "openai": OpenAIProvider, "azure_openai": AzureOpenAIProvider, "gemini": GeminiProvider,
-    "ollama": OllamaProvider, "bedrock": BedrockProvider,
+    "ollama": OllamaProvider, "bedrock": BedrockProvider, "huggingface": HuggingFaceProvider, "sentence_transformers": SentenceTransformersProvider,
 }
+EMBEDDING_ONLY = ("huggingface", "sentence_transformers")
 
 
 def provider_for(cfg: LLMConfig, transport: httpx.AsyncBaseTransport | None = None) -> Provider:

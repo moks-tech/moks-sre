@@ -41,7 +41,9 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:17-alpine
+        # pgvector, as mk4's CloudNativePG image has it (0.8.6), so vector search, the vector(N) size guard and
+        # vector reuse are tested on the real extension and not only on the keyword-only path.
+        image: pgvector/pgvector:0.8.6-pg17
         env: {POSTGRES_USER: moks, POSTGRES_PASSWORD: moks, POSTGRES_DB: postgres}
         ports: ["5432:5432"]
         options: >-
@@ -364,7 +366,9 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:17-alpine
+        # pgvector, as mk4's CloudNativePG image has it (0.8.6), so vector search, the vector(N) size guard and
+        # vector reuse are tested on the real extension and not only on the keyword-only path.
+        image: pgvector/pgvector:0.8.6-pg17
         env: {POSTGRES_USER: moks, POSTGRES_PASSWORD: moks, POSTGRES_DB: postgres}
         ports: ["5432:5432"]
         options: >-
@@ -447,6 +451,63 @@ jobs:
         with:
           name: release-moks-reranker-${{ github.sha }}
           path: release/moks-reranker.json
+          retention-days: 400
+
+  # The same service built around the embedding model in embedder.lock.json (docs/EMBEDDINGS.md). Moves latest.
+  # Nothing changes live until the moks-embedder Deployment restarts, and search uses it only after an index is
+  # rebuilt with an embedding configuration that points at it.
+  embedder-image:
+    if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    needs: [reranker]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      REGISTRY: registry.jithendar.com/jithendar
+      REPOSITORY: moks-embedder
+    steps:
+      - uses: actions/checkout@v7
+      - name: Log in to Harbor
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: printf '%s' "$HARBOR_PASSWORD" | docker login registry.jithendar.com --username "$HARBOR_USERNAME" --password-stdin
+      - name: Build, smoke-test and push
+        working-directory: reranker
+        run: |
+          IMAGE="$REGISTRY/$REPOSITORY:latest"
+          docker build --build-arg GIT_COMMIT=${{ github.sha }} --build-arg MODEL_LOCK=embedder.lock.json -t "$IMAGE" .
+          # No network, so a runtime download would fail here rather than in production. A real /embed proves the
+          # image serves vectors of the size and unit length search expects.
+          docker run -d --name smoke -e RERANKER_TOKEN=ci -e RERANKER_METRICS_PORT=0 --network none --read-only --tmpfs /tmp --user 10001:10001 "$IMAGE"
+          docker exec smoke python -c "
+          import json, math, time, urllib.request
+          for _ in range(60):
+              try:
+                  print(urllib.request.urlopen('http://127.0.0.1:8090/readyz').read()); break
+              except Exception:
+                  time.sleep(2)
+          else:
+              raise SystemExit('never ready')
+          req = urllib.request.Request('http://127.0.0.1:8090/embed', data=json.dumps({'inputs': ['why is my pod restarting']}).encode(),
+                                       headers={'Authorization': 'Bearer ci', 'Content-Type': 'application/json'})
+          v = json.loads(urllib.request.urlopen(req).read())[0]
+          assert abs(math.sqrt(sum(x * x for x in v)) - 1) < 1e-3, 'not unit length'
+          print('embedding of', len(v), 'dimensions')
+          "
+          docker rm -f smoke
+          docker images "$IMAGE" --format 'image size {{ .Size }}' >> "$GITHUB_STEP_SUMMARY"
+          docker push "$IMAGE"
+          DIGEST="$(docker inspect --format '{{index .RepoDigests 0}}' "$IMAGE" | cut -d@ -f2)"
+          echo "pushed $IMAGE (commit ${{ github.sha }}, $DIGEST). Restart moks-embedder to run it." >> "$GITHUB_STEP_SUMMARY"
+          MODEL="$(python3 -c 'import json; l=json.load(open("embedder.lock.json")); print(l["model_id"] + "@" + l["revision"])')"
+          mkdir -p ../release && printf '{"component":"moks-embedder","commit":"%s","repository":"%s","tag":"%s","digest":"%s","model":"%s","run":"%s"}\n' \
+            "${{ github.sha }}" "$REPOSITORY" latest "$DIGEST" "$MODEL" "${{ github.run_id }}" > ../release/moks-embedder.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-moks-embedder-${{ github.sha }}
+          path: release/moks-embedder.json
           retention-days: 400
 
   # moks-search with its S3 and metrics plugins, as moks-opensearch:latest. Changes nothing until

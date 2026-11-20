@@ -60,6 +60,8 @@ SCENARIOS = {
     "backup-split": (BACKUP + SPLIT, {"backup", "migrate"}, set()),
     "reranker-on": (RERANKER, {"reranker"}, set()),
     "reranker-off": (["--set", "reranker.enabled=false"], set(), {"reranker"}),
+    "embedder-on": (["--set", "reranker.enabled=false", "--set", "embedder.enabled=true", "--set", "embedder.image.digest=sha256:" + "c" * 64], {"reranker"}, set()),
+    "models-off": (["--set", "reranker.enabled=false", "--set", "embedder.enabled=false"], set(), {"reranker"}),
     "crewai-on": (["--set", "crewai.enabled=true"], {"crewai"}, set()),
     "crewai-off": (["--set", "crewai.enabled=false"], set(), {"crewai"}),
     "custom-skills": (["--set", "customSkills.runbook=body"], {"foundation"}, set()),
