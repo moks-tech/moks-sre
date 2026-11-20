@@ -297,7 +297,7 @@ class TaskRun(BaseModel):
 
 
 class CrewError(BaseModel):
-    code: Literal["crew_unavailable", "task_timeout", "task_failed", "invalid_output", "run_timeout", "budget_exhausted", "tool_limit",
+    code: Literal["crew_unavailable", "task_timeout", "iteration_limit", "task_failed", "invalid_output", "run_timeout", "budget_exhausted", "tool_limit",
                   "provider_error", "cancelled", "fallback"]
     task: str | None = None
     message: str

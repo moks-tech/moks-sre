@@ -323,11 +323,14 @@ def grade(case: Case, registry: Any, views: dict[str, Any]) -> None:
     confirmed = {f.id for f in case.findings if f.status == "confirmed_observation"}
     change_refs = {r for c in case.changes if c.before_symptoms for r in c.evidence}
     for h in case.hypotheses:
+        v = case.verdicts.get(h.id)
+        if v and v["verdict"] in ("supported", "contradicted"):  # what the reviewer cites for its verdict joins the hypothesis's evidence
+            side = h.supporting if v["verdict"] == "supported" else h.contradicting
+            side += [r for r in v["evidence"] if r in registry.records and r not in h.supporting and r not in h.contradicting]
         entries = [registry.records[r] for r in h.supporting if r in registry.records]
         live = [e for e in entries if _live(e)]
         signals = sorted({signal_of(e["source"]) for e in live})
         against = [r for r in h.contradicting if r in registry.records and registry.records[r].get("ok")]
-        v = case.verdicts.get(h.id)
         h.review = v
         contradicted = bool(against) or (v is not None and v["verdict"] == "contradicted") or any(h.id in c["ids"] for c in case.conflicts)
         upheld = v is not None and v["verdict"] == "supported"

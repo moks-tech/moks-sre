@@ -43,6 +43,7 @@ TASK_RETRIES = 1  # a step that fails for a reason other than a limit runs once 
 RETRYABLE = {"timeout", "unavailable", "bad_response"}  # LLMError kinds worth one more attempt; budget refusals are not
 COLLECTION_SHARE = 0.75  # planning and the specialists may spend this share of the token budget; the rest is kept for hypotheses, review and RCA
 ANSWER_CHARS = 20_000
+GRACE_SECONDS = 5  # past a step's time limit, how long MOKS waits for a call in flight before it ends the step itself
 
 EMPTY = {"plan": {"severity": None, "affected": [], "symptom_start": None, "objectives": []}, "hypotheses": {"hypotheses": []},
          "review": {"verdicts": [], "conflicts": [], "missing_telemetry": [], "evidence_requests": []},
@@ -115,7 +116,7 @@ class IncidentRun(Run):
             self.bridge.post(self._note(f"{self.labels[agent]}: {why}; MOKS ended the step with what it has", self.step, "warning"))
             return synthetic(self.task_name or "", why)
         wanted = self.limits["report_tokens"] if self.task_name in ic.STRUCTURED else self.limits["step_tokens"]
-        return self.bridge.run(self._complete_retrying(agent, system, turns, wanted), self.limits["task_timeout_seconds"] + 30)
+        return self.bridge.run(self._complete_retrying(agent, system, turns, wanted), self.limits["task_timeout_seconds"] + GRACE_SECONDS)
 
     def task_tool(self, epoch: int, agent: str, name: str, raw: dict[str, Any]) -> str:
         if epoch != self.epoch:
@@ -235,12 +236,14 @@ class IncidentRun(Run):
             self.task_context = trace_api.set_span_in_context(self.task_span, self.root_context)
             outcome = "done"
             try:
-                left = max(1.0, self.limits["task_timeout_seconds"] + 15 - (time.monotonic() - started))
+                left = max(1.0, self.limits["task_timeout_seconds"] + GRACE_SECONDS - (time.monotonic() - started))
                 async with asyncio.timeout(left):
                     result = await crew.akickoff()
                 text = str(getattr(result, "raw", "") or "")
                 if self.ended_by:
                     tr.status, tr.ended_by, outcome = "partial", self.ended_by, "partial"
+                    code = "budget_exhausted" if "token budget" in self.ended_by else "iteration_limit" if "iterations" in self.ended_by else "task_timeout"
+                    self.errors.append(CrewError(code=code, task=task, message=self.ended_by))
                 break
             except TimeoutError:
                 self.epoch += 1
