@@ -184,7 +184,7 @@ class CrewIn(BaseModel):
     environment: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,99}$")
     namespace: str = Field(pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
     workload: str = Field(pattern=r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
-    kind: Literal["Deployment", "StatefulSet", "DaemonSet"] = "Deployment"
+    kind: Literal["Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "ReplicaSet", "Pod"] = "Deployment"  # crew.config.KINDS
     question: str | None = Field(default=None, min_length=3, max_length=2000)
     minutes: int | None = Field(default=None, ge=5, le=10080)
 

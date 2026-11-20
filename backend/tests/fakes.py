@@ -140,7 +140,7 @@ class FakeKubernetes:
         return [{"type": "Warning", "reason": "BackOff", "object": "Pod/payments-5c4-xyz", "message": "Back-off restarting failed container",
                  "count": 12, "firstSeen": None, "lastSeen": "2026-10-30T10:01:00Z"}]
 
-    async def workloads(self, namespace):
+    async def workloads(self, namespace, kinds=None):
         out = []
         for d in self._ns(namespace)["deployments"]:
             out.append(summarize_workload("Deployment", {

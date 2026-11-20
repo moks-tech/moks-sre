@@ -9,6 +9,7 @@ Results are compact summaries (not raw objects) so evidence stays small and expl
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import time
@@ -19,7 +20,12 @@ from .. import argocd, cnpg, velero
 from ..redaction import redact
 from .base import ConnectorError, resolve_credential, resolve_credential_path
 
+log = logging.getLogger("moks.connectors.kubernetes")
+
 LIST_PAGE = 250
+# What workloads() lists, in this order. CronJobs and Jobs run to completion; the ReplicaSets listed are only those no
+# Deployment controls.
+WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "ReplicaSet")
 # Literal env values under names like these are masked: a value alone ("s3cr3t") has no
 # recognisable shape, so pattern redaction cannot catch it.
 SENSITIVE_ENV = re.compile(r"(?i)(pass|secret|token|key|credential|auth|cert|private|dsn|salt|signature|cookie|session)")
@@ -167,6 +173,11 @@ class KubernetesConnector:
 
         return client.AppsV1Api(await self._client())
 
+    async def batch(self):
+        from kubernetes_asyncio import client
+
+        return client.BatchV1Api(await self._client())
+
     async def custom(self):
         from kubernetes_asyncio import client
 
@@ -289,13 +300,37 @@ class KubernetesConnector:
         out.sort(key=lambda e: e.get("lastSeen") or "", reverse=True)
         return out[:limit]
 
-    async def workloads(self, namespace: str) -> list[dict]:
+    async def workloads(self, namespace: str, kinds: tuple[str, ...] = WORKLOAD_KINDS) -> list[dict]:
+        """Deployments, StatefulSets and DaemonSets, then CronJobs, Jobs and the ReplicaSets nothing controls. A kind
+        this identity may not list (an older RBAC without batch) is left out rather than failing the whole call."""
         apps = await self.apps()
-        deps, _ = await self._list(f"list deployments in {namespace}", apps.list_namespaced_deployment, namespace)
-        sts, _ = await self._list(f"list statefulsets in {namespace}", apps.list_namespaced_stateful_set, namespace)
-        dss, _ = await self._list(f"list daemonsets in {namespace}", apps.list_namespaced_daemon_set, namespace)
-        return [summarize_workload("Deployment", d) for d in deps] + [summarize_workload("StatefulSet", s) for s in sts] + \
-            [summarize_workload("DaemonSet", d) for d in dss]
+        out: list[dict] = []
+        if "Deployment" in kinds:
+            deps, _ = await self._list(f"list deployments in {namespace}", apps.list_namespaced_deployment, namespace)
+            out += [summarize_workload("Deployment", d) for d in deps]
+        if "StatefulSet" in kinds:
+            sts, _ = await self._list(f"list statefulsets in {namespace}", apps.list_namespaced_stateful_set, namespace)
+            out += [summarize_workload("StatefulSet", s) for s in sts]
+        if "DaemonSet" in kinds:
+            dss, _ = await self._list(f"list daemonsets in {namespace}", apps.list_namespaced_daemon_set, namespace)
+            out += [summarize_workload("DaemonSet", d) for d in dss]
+        extra = [("CronJob", "list cronjobs", "list_namespaced_cron_job", True), ("Job", "list jobs", "list_namespaced_job", True),
+                 ("ReplicaSet", "list replicasets", "list_namespaced_replica_set", False)]
+        for kind, what, method, batch in extra:
+            if kind not in kinds:
+                continue
+            api = await self.batch() if batch else apps
+            try:
+                items, _ = await self._list(f"{what} in {namespace}", getattr(api, method), namespace)
+            except ConnectorError as exc:
+                if exc.kind != "forbidden":
+                    raise
+                log.info("workload kind not readable", extra={"event": "k8s_kind_forbidden", "operation": kind})
+                continue
+            if kind == "ReplicaSet":  # a Deployment's ReplicaSets are its revisions, not workloads of their own
+                items = [i for i in items if not any(o.get("controller") for o in i["metadata"].get("ownerReferences") or [])]
+            out += [summarize_workload(kind, i) for i in items]
+        return out
 
     async def controller_of(self, namespace: str, replica_set: str) -> str:
         """What owns a ReplicaSet, from its ownerReferences: "Deployment/x", or "" if nothing does."""
@@ -576,8 +611,23 @@ def summarize_workload(kind: str, w: dict) -> dict:
     meta, spec, st = w.get("metadata", {}), w.get("spec", {}), w.get("status", {})
     conds = [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason"), "message": (c.get("message") or "")[:200]}
              for c in st.get("conditions") or []]
+    template = spec.get("template", {})
+    extra: dict = {}
     if kind == "DaemonSet":
         desired, ready = st.get("desiredNumberScheduled", 0), st.get("numberReady", 0)
+    elif kind in ("Job", "CronJob"):
+        desired, ready = 0, 0  # runs to completion: replica counts do not apply, so it is never "below desired"
+        if kind == "CronJob":
+            template = spec.get("jobTemplate", {}).get("spec", {}).get("template", {})
+            extra = {"schedule": spec.get("schedule"), "suspend": bool(spec.get("suspend")), "active": len(st.get("active") or []),
+                     "lastScheduleTime": st.get("lastScheduleTime"), "lastSuccessfulTime": st.get("lastSuccessfulTime")}
+        else:
+            done = {c.get("type") for c in st.get("conditions") or [] if c.get("status") == "True"}
+            state = "Failed" if "Failed" in done else "Complete" if "Complete" in done else "Suspended" if spec.get("suspend") else "Running"
+            owner = next((o for o in meta.get("ownerReferences") or [] if o.get("controller")), {})
+            extra = {"state": state, "active": st.get("active", 0), "succeeded": st.get("succeeded", 0), "failed": st.get("failed", 0),
+                     "startTime": st.get("startTime"), "completionTime": st.get("completionTime"),
+                     "ownerKind": owner.get("kind"), "ownerName": owner.get("name"), "ownerUid": owner.get("uid")}
     else:
         desired, ready = spec.get("replicas", 0), st.get("readyReplicas", 0)
     return {
@@ -591,10 +641,11 @@ def summarize_workload(kind: str, w: dict) -> dict:
         "generation": meta.get("generation"),
         "observedGeneration": st.get("observedGeneration"),
         "revision": (meta.get("annotations") or {}).get("deployment.kubernetes.io/revision"),
-        "images": [c.get("image") for c in spec.get("template", {}).get("spec", {}).get("containers", [])],
+        "images": [c.get("image") for c in template.get("spec", {}).get("containers", [])],
         "selector": spec.get("selector", {}).get("matchLabels") or {},
         "conditions": conds,
         "age": _age(meta.get("creationTimestamp")),
+        **extra,
     }
 
 

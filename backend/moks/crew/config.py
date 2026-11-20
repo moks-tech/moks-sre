@@ -26,7 +26,7 @@ from .tools import TOOLS
 CREW = "workload"
 FLOW = "workload_investigation"
 AGENT_KEYS = ("workload", "change", "review")
-KINDS = ("Deployment", "StatefulSet", "DaemonSet")
+KINDS = ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "ReplicaSet", "Pod")
 PLACEHOLDERS = ("{target}", "{question}")
 TEXT_LIMITS = {"role": 120, "goal": 1500, "backstory": 4000, "description": 6000, "expected_output": 2000}
 TOOLS_BY_AGENT = {k: [t.name for t in TOOLS if t.agent == k] for k in ("workload", "change")}
@@ -49,9 +49,9 @@ FLOWS: dict[str, dict[str, Any]] = {
                        "read-only tools; every finding cites recorded evidence.",
         "inputs": [
             {"name": "environment", "label": "Environment", "type": "environment", "required": True},
-            {"name": "namespace", "label": "Namespace", "type": "string", "required": True, "pattern": r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", "max": 63},
+            {"name": "namespace", "label": "Namespace", "type": "namespace", "required": True, "pattern": r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", "max": 63},
             {"name": "kind", "label": "Kind", "type": "choice", "choices": list(KINDS), "default": "Deployment"},
-            {"name": "workload", "label": "Workload", "type": "string", "required": True, "pattern": r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$", "max": 253},
+            {"name": "workload", "label": "Workload", "type": "workload", "required": True, "pattern": r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$", "max": 253},
             {"name": "minutes", "label": "Window (minutes)", "type": "integer", "min": 5, "max": 10080},
             {"name": "question", "label": "Question", "type": "text", "max": 2000, "help": "Optional. Default: why is the workload unhealthy?"},
         ],

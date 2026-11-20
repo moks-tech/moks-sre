@@ -38,7 +38,7 @@ from . import CrewUnavailable
 from . import config as crew_config
 from .evidence import Registry, cited, validate
 from .history import History
-from .tools import BY_NAME, NEEDS_MEMBERS, NOBODY, CrewTool, Empty, Members, Refused, Target, bind, focus, mine, owned_by
+from .tools import BY_NAME, NEEDS_MEMBERS, NOBODY, CrewTool, Empty, Members, Refused, Target, bind, controllers_for, focus, mine, owned_by
 
 log = logging.getLogger("moks.crewai")
 
@@ -250,9 +250,16 @@ class Run:
 
     async def resolve_members(self) -> Members:
         """The target's pods by owner reference, read through the ToolExecutor like any other call (so they are
-        evidence too): the ReplicaSets the Deployment owns (k8s_rollout_history checks the Deployment's UID), or the
-        StatefulSet or DaemonSet itself by UID (k8s_workloads), then the namespace's pods those controllers own."""
+        evidence too): the ReplicaSets the Deployment owns (k8s_rollout_history checks the Deployment's UID), the Jobs
+        a CronJob owns, or the StatefulSet, DaemonSet, Job or ReplicaSet itself by UID (k8s_workloads), then the
+        namespace's pods those controllers own. A Pod target is that pod alone."""
         t = self.target
+        if t.kind == "Pod":
+            pods = await self._read("k8s_list_pods", {"namespace": t.namespace})
+            if pods is None or not pods.ok:
+                return Members(frozenset(), frozenset(), f"the pods could not be read ({(pods.error if pods else None) or 'not run'})")
+            found = any(p.get("name") == t.workload for p in pods.data or [])
+            return Members(frozenset({t.workload}) if found else frozenset(), frozenset(), "" if found else f"there is no pod {t.workload} in {t.namespace}")
         if t.kind == "Deployment":
             out = await self._read("k8s_rollout_history", {"namespace": t.namespace, "deployment": t.workload})
             if out is None or not out.ok:
@@ -262,10 +269,9 @@ class Run:
             out = await self._read("k8s_workloads", {"namespace": t.namespace})
             if out is None or not out.ok:
                 return Members(frozenset(), frozenset(), f"the workloads could not be read ({(out.error if out else None) or 'not run'})")
-            found = next((w for w in out.data or [] if w.get("kind") == t.kind and w.get("name") == t.workload), None)
-            if found is None:
-                return Members(frozenset(), frozenset(), f"there is no {t.kind} {t.workload} in {t.namespace}")
-            owners = frozenset({(t.kind, t.workload, found.get("uid"))})
+            owners, why = controllers_for(t, out.data or [])
+            if not owners:
+                return Members(frozenset(), owners, why)
         if not owners:
             return Members(frozenset(), owners, "it owns no ReplicaSets")
         pods = await self._read("k8s_list_pods", {"namespace": t.namespace})

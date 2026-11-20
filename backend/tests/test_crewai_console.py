@@ -87,7 +87,7 @@ def test_the_code_defaults_pass_their_own_checks_and_an_overlay_keeps_only_edits
     ({"limits": {"max_tool_calls": 10_000}}, "limits.max_tool_calls", "a whole number"),
     ({"limits": {"timeout_seconds": True}}, "limits.timeout_seconds", "a whole number"),
     ({"structure": "hierarchical"}, "structure", "unknown section"),
-    ({"defaults": {"kind": "Pod"}}, "defaults.kind", "one of"),
+    ({"defaults": {"kind": "Service"}}, "defaults.kind", "one of"),
 ])
 def test_checks_refuse_what_is_code_owned_or_out_of_bounds(overlay, field, needle):
     errors, _ = crew_config.check(overlay)
@@ -182,7 +182,7 @@ async def test_bad_inputs_are_refused_with_the_field(client, on):
     env, tag = await people(client)
     h = await as_(client, f"inv-{tag}@example.com")
     for inputs, needle in (({"environment": env, "namespace": "Shop!", "workload": "x"}, "namespace"), ({"environment": env, "namespace": "shop"}, "workload: required"),
-                           ({"environment": env, "namespace": "shop", "workload": "x", "kind": "Pod"}, "kind"),
+                           ({"environment": env, "namespace": "shop", "workload": "x", "kind": "Service"}, "kind"),
                            ({"environment": env, "namespace": "shop", "workload": "x", "command": "rm"}, "not an input")):
         r = await client.post(f"/moks/api/crewai/flows/{FLOW}/run", json={"inputs": inputs}, headers=h)
         assert r.status_code == 422 and needle in r.json()["detail"], r.text

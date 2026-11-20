@@ -175,8 +175,9 @@ async def k8s_events(ctx: ToolContext, a: EventArgs) -> ToolResult:
 async def k8s_workloads(ctx: ToolContext, a: NamespaceArgs) -> ToolResult:
     w = await ctx.connector("kubernetes").workloads(a.namespace)
     degraded = [x for x in w if x["desired"] and (x["ready"] or 0) < x["desired"]]
-    return ToolResult(f"{len(w)} workloads in {a.namespace}; {len(degraded)} below desired replicas", w,
-                      {"api": f"GET deployments, statefulsets, daemonsets in {a.namespace}"})
+    failed = [x for x in w if x["kind"] == "Job" and x.get("state") == "Failed"]
+    return ToolResult(f"{len(w)} workloads in {a.namespace}; {len(degraded)} below desired replicas" + (f"; {len(failed)} failed jobs" if failed else ""), w,
+                      {"api": f"GET deployments, statefulsets, daemonsets, cronjobs, jobs, replicasets in {a.namespace}"})
 
 
 async def k8s_rollout_history(ctx: ToolContext, a: DeploymentArgs) -> ToolResult:
@@ -608,7 +609,7 @@ TOOLS: list[ToolSpec] = [
     ToolSpec("k8s_events", "Kubernetes events in a namespace, optionally for one object.", "kubernetes", EventArgs, k8s_events),
     ToolSpec("k8s_config_audit", "Configuration hygiene per workload: requests/limits, probes, image pinning, security context, literal secret-looking env vars, Secret/ConfigMap references and missing ones (contents never read).",
              "kubernetes", NamespaceArgs, k8s_config_audit),
-    ToolSpec("k8s_workloads", "Deployments, StatefulSets and DaemonSets with replica health and images.", "kubernetes", NamespaceArgs, k8s_workloads),
+    ToolSpec("k8s_workloads", "Deployments, StatefulSets, DaemonSets, CronJobs, Jobs and standalone ReplicaSets with health and images.", "kubernetes", NamespaceArgs, k8s_workloads),
     ToolSpec("k8s_rollout_history", "Deployment revisions (ReplicaSets) with images and creation times.", "kubernetes", DeploymentArgs, k8s_rollout_history),
     ToolSpec("k8s_services", "Services with selectors, ports, ready endpoints and matching pods.", "kubernetes", NamespaceArgs, k8s_services),
     ToolSpec("k8s_ingresses", "Ingress rules and backends.", "kubernetes", NamespaceArgs, k8s_ingresses),

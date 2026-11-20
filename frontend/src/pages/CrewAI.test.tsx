@@ -6,6 +6,9 @@ const state = vi.hoisted(() => ({ crewai: null as any, posts: [] as any[] }));
 vi.mock("../auth", () => ({ useAuth: () => ({ can: () => true, me: { email: "s@x" } }) }));
 vi.mock("../api", async (orig) => ({ ...(await orig<any>()), api: vi.fn(async (path: string, opts?: any) => {
   if (path === "/investigate/config") return { llm: { provider: "openai", model: "m" }, skills: [], environments: ["mk4"], crewai: state.crewai };
+  if (path === "/explore/mk4/namespaces") return { namespaces: ["crewai-demo", "shop"], cluster_wide: false };
+  if (path.startsWith("/explore/mk4/workloads?namespace=crewai-demo")) return { data: [{ kind: "Deployment", name: "web" }, { kind: "Deployment", name: "api" }, { kind: "CronJob", name: "nightly" }] };
+  if (path.startsWith("/explore/mk4/pods?namespace=crewai-demo")) return { data: [{ name: "web-7d9-abc", owner: "ReplicaSet/web-7d9" }] };
   if (opts?.method === "POST") { state.posts.push({ path, body: opts.body }); return { id: "i1", conversation_id: "c1" }; }
   return {};
 }) }));
@@ -38,11 +41,37 @@ describe("the CrewAI investigation option", () => {
     state.crewai = on;
     page();
     fireEvent.click(await screen.findByLabelText("CrewAI investigation"));
-    fireEvent.change(screen.getByLabelText("Namespace"), { target: { value: "crewai-demo" } });
-    fireEvent.change(screen.getByLabelText("Workload"), { target: { value: "web" } });
+    const ns = await screen.findByRole("combobox", { name: "Namespace" });
+    await waitFor(() => expect([...(ns as HTMLSelectElement).options].map((o) => o.value)).toContain("crewai-demo"));
+    fireEvent.change(ns, { target: { value: "crewai-demo" } });
+    const wl = screen.getByRole("combobox", { name: "Workload" }) as HTMLSelectElement;
+    await waitFor(() => expect([...wl.options].map((o) => o.value)).toEqual(["", "api", "web", "__type__"]));  // Deployments only, sorted
+    expect(screen.getByRole("option", { name: "CronJob (1)" })).toBeTruthy();
+    fireEvent.change(wl, { target: { value: "web" } });
     fireEvent.click(screen.getByText("Run CrewAI investigation"));
     await waitFor(() => expect(state.posts).toHaveLength(1));
     expect(state.posts[0]).toEqual({ path: "/investigations/crewai", body: { environment: "mk4", namespace: "crewai-demo", workload: "web", kind: "Deployment", minutes: undefined } });
+  });
+
+  it("offers more kinds, lists that kind's workloads, and still lets a name be typed", async () => {
+    state.crewai = on;
+    page();
+    fireEvent.click(await screen.findByLabelText("CrewAI investigation"));
+    const ns = await screen.findByRole("combobox", { name: "Namespace" });
+    await waitFor(() => expect((ns as HTMLSelectElement).options.length).toBeGreaterThan(2));
+    fireEvent.change(ns, { target: { value: "crewai-demo" } });
+    const kind = screen.getByRole("combobox", { name: /Kind/ }) as HTMLSelectElement;
+    expect([...kind.options].map((o) => o.value)).toEqual(["Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "ReplicaSet", "Pod"]);
+    fireEvent.change(kind, { target: { value: "CronJob" } });
+    const wl = screen.getByRole("combobox", { name: "Workload" }) as HTMLSelectElement;
+    await waitFor(() => expect([...wl.options].map((o) => o.value)).toEqual(["", "nightly", "__type__"]));
+    fireEvent.change(kind, { target: { value: "Pod" } });
+    await waitFor(() => expect([...(screen.getByRole("combobox", { name: "Workload" }) as HTMLSelectElement).options].map((o) => o.value)).toContain("web-7d9-abc"));
+    fireEvent.change(screen.getByRole("combobox", { name: "Workload" }), { target: { value: "__type__" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Workload" }), { target: { value: "not-created-yet" } });
+    fireEvent.click(screen.getByText("Run CrewAI investigation"));
+    await waitFor(() => expect(state.posts).toHaveLength(1));
+    expect(state.posts[0].body).toMatchObject({ namespace: "crewai-demo", kind: "Pod", workload: "not-created-yet" });
   });
 });
 

@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { ErrorBox, Time } from "../components";
+import { KindOptions, NamespaceSelect, WorkloadSelect } from "../targets";
 
 // The CrewAI console (docs/crewai-console.md). Shared parts: run status, durations, the console's tabs, and the
 // Run with parameters form built from a flow's own input list.
@@ -15,7 +16,7 @@ export interface RunRow {
 }
 export interface Step { step: string; label: string; status: string; started_at: string | null; finished_at: string | null; seconds: number | null; error: string | null;
   model_calls: number; tool_calls: number; tokens_in: number; tokens_out: number; cost_usd: string }
-export interface InputSpec { name: string; label: string; type: "environment" | "string" | "choice" | "integer" | "text"; required?: boolean; pattern?: string;
+export interface InputSpec { name: string; label: string; type: "environment" | "namespace" | "workload" | "string" | "choice" | "integer" | "text"; required?: boolean; pattern?: string;
   max?: number; min?: number; choices?: string[]; default?: string; help?: string }
 
 /** One status for a run, as GitHub Actions shows it: a finished run whose crew stopped early is a warning, not a pass. */
@@ -93,6 +94,14 @@ export function Section({ title, actions, children }: { title: ReactNode; action
   return <section className="card stack"><div className="row between"><h2 className="cw-h2">{title}</h2>{actions && <div className="row">{actions}</div>}</div>{children}</section>;
 }
 
+/** What changing one input empties: a namespace belongs to its environment, and a workload to its namespace and kind. */
+function clears(spec: InputSpec[], name: string): Record<string, string> {
+  const type = spec.find((f) => f.name === name)?.type;
+  const of = (t: string) => spec.filter((f) => f.type === t).map((f) => f.name);
+  const names = type === "environment" ? [...of("namespace"), ...of("workload")] : type === "namespace" || name === "kind" ? of("workload") : [];
+  return Object.fromEntries(names.map((n) => [n, ""]));
+}
+
 /** The form for a flow's inputs. `values` seeds it (a re-run, a schedule); `onSubmit` gets only what was filled in. */
 export function InputsForm({ spec, environments, values = {}, submitLabel, busy, onSubmit, children }: {
   spec: InputSpec[]; environments: string[]; values?: Record<string, any>; submitLabel: string; busy?: boolean;
@@ -117,9 +126,15 @@ export function InputsForm({ spec, environments, values = {}, submitLabel, busy,
     <div className="cw-inputs">
       {spec.map((f) => {
         const id = `in-${f.name}`;
-        const common = { id, value: v[f.name] ?? "", onChange: (e: any) => setV({ ...v, [f.name]: e.target.value }), required: f.required };
+        const set = (value: string) => setV({ ...v, [f.name]: value, ...clears(spec, f.name) });
+        const common = { id, value: v[f.name] ?? "", onChange: (e: any) => set(e.target.value), required: f.required };
+        const env = String(v[spec.find((x) => x.type === "environment")?.name ?? "environment"] ?? "");
+        const ns = String(v[spec.find((x) => x.type === "namespace")?.name ?? "namespace"] ?? "");
         let ctl: ReactNode;
         if (f.type === "environment") ctl = <select {...common}>{environments.map((n) => <option key={n}>{n}</option>)}</select>;
+        else if (f.type === "namespace") ctl = <NamespaceSelect id={id} environment={env} value={v[f.name] ?? ""} onChange={set} />;
+        else if (f.type === "workload") ctl = <WorkloadSelect id={id} environment={env} namespace={ns} kind={String(v.kind ?? "Deployment")} value={v[f.name] ?? ""} onChange={set} />;
+        else if (f.type === "choice" && f.name === "kind") ctl = <select {...common}><KindOptions environment={env} namespace={ns} kinds={f.choices} /></select>;
         else if (f.type === "choice") ctl = <select {...common}>{(f.choices ?? []).map((c) => <option key={c}>{c}</option>)}</select>;
         else if (f.type === "integer") ctl = <input {...common} type="number" inputMode="numeric" min={f.min} max={f.max} placeholder="default" />;
         else if (f.type === "text") ctl = <textarea {...common} rows={2} maxLength={f.max} placeholder={f.help} />;

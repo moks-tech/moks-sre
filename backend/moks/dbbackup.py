@@ -100,7 +100,7 @@ async def discover(k8s: Any, env: Environment) -> tuple[list[dict[str, Any]], li
     enabled = allowed_namespaces()
     found, skipped = [], []
     for ns in sorted(n for n in await k8s.list_namespaces() if in_policy(env, n)):
-        for w in await k8s.workloads(ns):
+        for w in await k8s.workloads(ns, ("Deployment", "StatefulSet")):
             if w["kind"] not in ("Deployment", "StatefulSet"):
                 continue
             images = w.get("images") or []
