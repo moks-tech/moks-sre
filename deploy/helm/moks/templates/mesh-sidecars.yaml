@@ -17,13 +17,14 @@ spec:
     mode: STRICT
 {{- /* Ports that still take plain text from outside the mesh: :9464 unless mesh.metricsMtls (Prometheus scrapes
        through its own sidecar), and unless mesh.edgeMtls the ports an edge outside the mesh routes to (8080 api and
-       terminal, 9200 and 5601 the OpenSearch routes). The Istio ingress gateway sends mTLS. All four are always
+       terminal, 9200 and 5601 the OpenSearch routes). The Istio ingress gateway sends mTLS. All of them are always
        rendered, with no port exception once both are true: Argo CD never prunes here, so a policy that stopped
        rendering would stay live with its old exceptions. Two PeerAuthentications on one selector conflict. */}}
 {{- $edge := not .Values.mesh.edgeMtls }}
 {{- $metrics := ternary (list) (list 9464) .Values.mesh.metricsMtls }}
 {{- $plain := list (dict "name" "moks-metrics" "app" "moks" "ports" (ternary (append $metrics 8080) $metrics $edge))
                    (dict "name" "moks-reranker-metrics" "app" "moks-reranker" "ports" $metrics)
+                   (dict "name" "moks-embedder-metrics" "app" "moks-embedder" "ports" $metrics)
                    (dict "name" "moks-opensearch-edge" "app" "moks-opensearch" "ports" (ternary (list 9200) (list) $edge))
                    (dict "name" "moks-opensearch-dashboards-edge" "app" "moks-opensearch-dashboards" "ports" (ternary (list 5601) (list) $edge)) }}
 {{- range $plain }}
@@ -83,7 +84,7 @@ spec:
     matchExpressions:
       - key: app
         operator: In
-        values: [moks, moks-postgres, moks-opensearch, moks-opensearch-dashboards, moks-reranker, moks-search, moks-search-dashboards]
+        values: [moks, moks-postgres, moks-opensearch, moks-opensearch-dashboards, moks-reranker, moks-embedder, moks-search, moks-search-dashboards]
   policyTypes: [Ingress, Egress]
   ingress:
     # 15020: health checks and merged metrics; 15090: Envoy's own (Prometheus job envoy-stats).
@@ -93,7 +94,7 @@ spec:
         {{- end }}
       ports: [{port: 15020, protocol: TCP}, {port: 15090, protocol: TCP}]
   egress:
-    # The proxy finds istiod by name (istiod.istio-system.svc). Postgres, OpenSearch and the reranker have no
+    # The proxy finds istiod by name (istiod.istio-system.svc). Postgres, OpenSearch, the reranker and the embedder have no
     # DNS rule of their own, so without this their proxies never start, and neither do they.
     - to: [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: kube-system}}, podSelector: {matchLabels: {k8s-app: kube-dns}}}]
       ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]

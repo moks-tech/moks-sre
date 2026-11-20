@@ -265,3 +265,94 @@ def test_fetching_detects_a_tampered_file(tmp_path):
     (tmp_path / "f").write_bytes(b"weights")
     with pytest.raises(SystemExit):
         fetch_model.verify({"files": {"f": "0" * 64}}, tmp_path)
+
+
+# ---- embedding mode ---------------------------------------------------------------------------
+
+from engine import Embedded  # noqa: E402
+
+
+class FakeEmbedder:
+    kind, id, revision, max_length, dimensions = "embedding", "BAAI/bge-base-en-v1.5", "a5beb1e3", 512, 3
+
+    def __init__(self, hold=None, out=None):
+        self.hold, self.out, self.calls = hold, out, []
+
+    def load(self):
+        pass
+
+    def warm_up(self):
+        pass
+
+    def too_long(self, text):
+        return len(text) > 100
+
+    def embed(self, texts, deadline, normalize=True):
+        self.calls.append((list(texts), normalize))
+        if self.hold:
+            self.hold.wait(5)
+        vectors = self.out if self.out is not None else [[1.0, float(len(t)), 0.0] for t in texts]
+        return Embedded(vectors, sum(1 for t in texts if self.too_long(t)), self.max_length)
+
+
+def test_embedding_mode_answers_like_text_embeddings_inference(run):
+    model = FakeEmbedder()
+    with run(model) as c:
+        r = c.post("/embed", json={"inputs": ["a", "bbb"], "normalize": True, "truncate": True}, headers=AUTH)
+        single = c.post("/embed", json={"inputs": "one"}, headers=AUTH)
+        info = c.get("/info", headers=AUTH).json()
+        assert c.post("/rerank", json=body(), headers=AUTH).status_code == 404  # one service, one job
+    assert r.status_code == 200 and r.json() == [[1.0, 1.0, 0.0], [1.0, 3.0, 0.0]] and r.headers["X-Truncated-Inputs"] == "0"
+    assert single.json() == [[1.0, 3.0, 0.0]]
+    assert info["model_id"] == "BAAI/bge-base-en-v1.5" and info["model_sha"] == "a5beb1e3" and info["max_input_length"] == 512 and info["dimensions"] == 3
+
+
+def test_embedding_mode_needs_the_token_everywhere_but_the_probes(run):
+    with run(FakeEmbedder()) as c:
+        assert c.post("/embed", json={"inputs": ["a"]}).status_code == 401
+        assert c.get("/info").status_code == 401
+        assert c.get("/readyz").json()["kind"] == "embedding"
+
+
+def test_embedding_mode_bounds_what_it_accepts(run, monkeypatch):
+    monkeypatch.setenv("EMBEDDER_MAX_INPUTS", "2")
+    with run(FakeEmbedder()) as c:
+        assert c.post("/embed", json={"inputs": ["a", "b", "c"]}, headers=AUTH).status_code == 422
+        assert c.post("/embed", json={"inputs": []}, headers=AUTH).status_code == 422
+        assert c.post("/embed", json={"inputs": [""]}, headers=AUTH).status_code == 422
+        assert c.post("/embed", json={"inputs": ["a"], "model": "other"}, headers=AUTH).status_code == 422  # a request cannot pick a model
+        too_long = c.post("/embed", json={"inputs": ["x" * 200], "truncate": False}, headers=AUTH)
+        assert too_long.status_code == 413
+        cut = c.post("/embed", json={"inputs": ["x" * 200]}, headers=AUTH)
+        assert cut.status_code == 200 and cut.headers["X-Truncated-Inputs"] == "1"
+
+
+def test_embedding_mode_refuses_output_it_cannot_trust(run):
+    with run(FakeEmbedder(out=[[1.0, float("nan"), 0.0]])) as c:
+        assert c.post("/embed", json={"inputs": ["a"]}, headers=AUTH).status_code == 500
+    with run(FakeEmbedder(out=[[1.0, 0.0]])) as c:
+        assert c.post("/embed", json={"inputs": ["a", "b"]}, headers=AUTH).status_code == 500
+
+
+def test_embedding_mode_sheds_load_instead_of_queueing_forever(run):
+    hold = threading.Event()
+    model = FakeEmbedder(hold=hold)
+    with run(model, Gate(1, 0)) as c:
+        first = threading.Thread(target=lambda: c.post("/embed", json={"inputs": ["a"]}, headers=AUTH))
+        first.start()
+        for _ in range(100):
+            if model.calls:
+                break
+            time.sleep(0.01)
+        busy = c.post("/embed", json={"inputs": ["b"]}, headers=AUTH)
+        hold.set()
+        first.join()
+    assert busy.status_code == 429 and busy.headers["Retry-After"] == "1"
+
+
+def test_the_kind_comes_from_the_lock_file(tmp_path, monkeypatch):
+    (tmp_path / "model.lock.json").write_text('{"kind": "embedding", "model_id": "m", "revision": "r", "files": {}}')
+    monkeypatch.setenv("RERANKER_MODEL_DIR", str(tmp_path))
+    assert service.kind_of() == "embedding"
+    (tmp_path / "model.lock.json").write_text('{"model_id": "m", "revision": "r", "files": {}}')
+    assert service.kind_of() == "cross-encoder"

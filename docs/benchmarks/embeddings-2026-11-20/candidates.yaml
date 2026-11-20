@@ -1,0 +1,17 @@
+# The run behind report.md and results.json (docs/EMBEDDINGS.md). Reproduce, from backend/ with sentence-transformers
+# and torch installed (reranker/requirements.txt pins both):
+#   python -m moks.evals.embedding_bench ../docs/benchmarks/embeddings-2026-11-20/candidates.yaml --out /tmp/embeddings
+# Each model downloads at the pinned revision. The original run used local copies of these exact revisions.
+threads: 4
+reference: bge-m3 (serving today)
+candidates:
+  - {name: all-MiniLM-L6-v2, provider: sentence_transformers, model: sentence-transformers/all-MiniLM-L6-v2, model_id: sentence-transformers/all-MiniLM-L6-v2, revision: 1110a243fdf4706b3f48f1d95db1a4f5529b4d41}
+  - {name: bge-small-en-v1.5, provider: sentence_transformers, model: BAAI/bge-small-en-v1.5, model_id: BAAI/bge-small-en-v1.5, revision: 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a, query_prefix: "Represent this sentence for searching relevant passages: "}
+  - {name: bge-small-en-v1.5 (no instruction), provider: sentence_transformers, model: BAAI/bge-small-en-v1.5, model_id: BAAI/bge-small-en-v1.5, revision: 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a}
+  - {name: bge-base-en-v1.5, provider: sentence_transformers, model: BAAI/bge-base-en-v1.5, model_id: BAAI/bge-base-en-v1.5, revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a, query_prefix: "Represent this sentence for searching relevant passages: "}
+  - {name: bge-base-en-v1.5 (no instruction), provider: sentence_transformers, model: BAAI/bge-base-en-v1.5, model_id: BAAI/bge-base-en-v1.5, revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a}
+  - {name: e5-base-v2, provider: sentence_transformers, model: intfloat/e5-base-v2, model_id: intfloat/e5-base-v2, revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd, query_prefix: "query: ", document_prefix: "passage: "}
+  - {name: e5-base-v2 (no prefixes), provider: sentence_transformers, model: intfloat/e5-base-v2, model_id: intfloat/e5-base-v2, revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd}
+  # bge-m3 is what mk4 serves today through Ollama (bge-m3:567m, F16 GGUF of these weights). Here it runs in torch, so
+  # its quality is comparable and its speed and memory are not: docs/EMBEDDINGS.md has the mk4 measurements.
+  - {name: bge-m3 (serving today), provider: sentence_transformers, model: BAAI/bge-m3, model_id: BAAI/bge-m3, revision: 5617a9f61b028005a4858fdac845db406aefb181}

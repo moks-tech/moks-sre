@@ -209,7 +209,7 @@ async def test_a_reindex_waits_out_a_rate_limit_and_gives_up_eventually(monkeypa
             if Flaky.calls < 3:
                 raise LLMError("rate_limited", "429")
             return [[0.1]]
-    assert await service._embed_batch(Flaky(), cfg, ["x"], 5) == [[0.1]] and Flaky.calls == 3
+    assert await service._embed_batch(service.emb.Embedder(cfg, Flaky()), ["x"], 5) == [[1.0]] and Flaky.calls == 3  # unit length
 
     class Always:
         calls = 0
@@ -218,7 +218,7 @@ async def test_a_reindex_waits_out_a_rate_limit_and_gives_up_eventually(monkeypa
             Always.calls += 1
             raise LLMError("rate_limited", "429")
     with pytest.raises(LLMError):
-        await service._embed_batch(Always(), cfg, ["x"], 3)
+        await service._embed_batch(service.emb.Embedder(cfg, Always()), ["x"], 3)
     assert Always.calls == 3
 
     class Auth:
@@ -228,7 +228,7 @@ async def test_a_reindex_waits_out_a_rate_limit_and_gives_up_eventually(monkeypa
             Auth.calls += 1
             raise LLMError("auth", "denied")
     with pytest.raises(LLMError):
-        await service._embed_batch(Auth(), cfg, ["x"], 5)
+        await service._embed_batch(service.emb.Embedder(cfg, Auth()), ["x"], 5)
     assert Auth.calls == 1  # only a rate limit is worth waiting for
 
 
@@ -292,7 +292,7 @@ def test_mk4_seeds_no_chat_provider():
 
 def test_mk4_seeds_the_shared_bge_m3_embedding_model():
     """miniKube deploy/minikube/embeddings/bge-m3: the model name and dimensions must match its values.yaml."""
-    (emb,) = [l for l in _mk4_seeded_llms() if l.get("purpose") == "embedding"]
+    (emb,) = [l for l in _mk4_seeded_llms() if l.get("purpose") == "embedding" and l["name"] == "bge-m3"]
     assert (emb["name"], emb["provider"], emb["model"], emb["endpoint"], emb["embedding_dimensions"]) == (
         "bge-m3", "ollama", "bge-m3:567m", "http://bge-m3.embeddings:11434", 1024)
     assert not emb.get("credential_ref")  # cluster-internal; the mesh policy admits the moks service account
@@ -310,7 +310,7 @@ async def test_the_seeded_bge_m3_config_embeds_through_ollama(tmp_path):
     from moks.cli import _seed
     from moks.llm.providers import provider_for
 
-    (emb,) = [l for l in _mk4_seeded_llms() if l.get("purpose") == "embedding"]
+    (emb,) = [l for l in _mk4_seeded_llms() if l.get("purpose") == "embedding" and l["name"] == "bge-m3"]
     name = f"bge-m3-{uuid.uuid4().hex[:6]}"
     seed = tmp_path / "seed.yaml"
     seed.write_text(yaml.safe_dump({"llm": [{**emb, "name": name, "is_active": False}]}))

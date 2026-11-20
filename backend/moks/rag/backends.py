@@ -197,19 +197,23 @@ class PostgresBackend:
             ORDER BY e.embedding <=> CAST(:v AS vector) LIMIT :k"""), params)).all()
         return [str(r[0]) for r in rows]
 
-    async def upsert_embeddings(self, index_id: uuid.UUID, items: list[tuple[uuid.UUID, list[float]]]) -> None:
-        for chunk_id, emb in items:
-            await self.db.execute(text("""
-                INSERT INTO chunk_embeddings (chunk_id, index_id, embedding) VALUES (:c, :i, CAST(:v AS vector))
-                ON CONFLICT (chunk_id, index_id) DO UPDATE SET embedding = EXCLUDED.embedding"""),
-                {"c": chunk_id, "i": index_id, "v": json.dumps(emb)})
+    async def upsert_embeddings(self, index_id: uuid.UUID, items: list[tuple[uuid.UUID, list[float]]], dims: int | None = None) -> None:
+        """One statement for the batch. With `dims`, the cast is to vector(dims), so PostgreSQL itself refuses a
+        vector of another size: one generation's vectors can never mix sizes, whatever the caller checked."""
+        if not items:
+            return
+        cast = f"vector({int(dims)})" if dims else "vector"
+        await self.db.execute(text(f"""
+            INSERT INTO chunk_embeddings (chunk_id, index_id, embedding) VALUES (:c, :i, CAST(:v AS {cast}))
+            ON CONFLICT (chunk_id, index_id) DO UPDATE SET embedding = EXCLUDED.embedding"""),
+            [{"c": chunk_id, "i": index_id, "v": json.dumps(emb)} for chunk_id, emb in items])
 
     async def delete_document(self, document_id: uuid.UUID) -> None:
         pass  # chunk rows (and their embeddings) are deleted by FK cascade
 
     async def index_chunks(self, index, rows: list[dict], embeddings: list[list[float]] | None) -> None:
         if embeddings and index is not None:
-            await self.upsert_embeddings(index.id, [(uuid.UUID(r["chunk_id"]), e) for r, e in zip(rows, embeddings)])
+            await self.upsert_embeddings(index.id, [(uuid.UUID(r["chunk_id"]), e) for r, e in zip(rows, embeddings)], index.dimensions)
 
 
 class SigV4(httpx.Auth):

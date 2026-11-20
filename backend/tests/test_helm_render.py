@@ -155,7 +155,7 @@ def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
     assert peer["default"] == {"mtls": {"mode": "STRICT"}}
     # mk4: the Istio gateway is the only edge and Prometheus scrapes through its sidecar, so no port takes plain text.
     # Every name still renders (Argo CD never prunes here, so a dropped policy would keep its old exceptions live).
-    assert set(peer) == {"default", "moks-metrics", "moks-reranker-metrics", "moks-opensearch-edge",
+    assert set(peer) == {"default", "moks-metrics", "moks-reranker-metrics", "moks-embedder-metrics", "moks-opensearch-edge",
                          "moks-opensearch-dashboards-edge"}
     assert all("portLevelMtls" not in spec and spec["mtls"] == {"mode": "STRICT"} for spec in peer.values())
     assert peer["moks-metrics"]["selector"] == {"matchLabels": {"app": "moks"}}
@@ -164,6 +164,7 @@ def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
               if d["kind"] == "PeerAuthentication"}
     assert legacy["moks-metrics"]["portLevelMtls"] == {9464: {"mode": "PERMISSIVE"}, 8080: {"mode": "PERMISSIVE"}}
     assert legacy["moks-reranker-metrics"]["portLevelMtls"] == {9464: {"mode": "PERMISSIVE"}}
+    assert legacy["moks-embedder-metrics"]["portLevelMtls"] == {9464: {"mode": "PERMISSIVE"}}
     assert legacy["moks-opensearch-edge"]["portLevelMtls"] == {9200: {"mode": "PERMISSIVE"}}
     assert legacy["moks-opensearch-dashboards-edge"]["portLevelMtls"] == {5601: {"mode": "PERMISSIVE"}}
     policy = next(d for d in docs if d["kind"] == "AuthorizationPolicy")
@@ -233,7 +234,7 @@ def test_mk4_always_pulls_latest():
     for name, pod in pods(render("values-hetzner.yaml")):
         for c in pod["containers"]:
             if c["image"].split("/")[-1].startswith("moks"):
-                assert c["image"].endswith(("/moks:latest", "/moks-crewai:latest", "/moks-reranker:latest")) and c["imagePullPolicy"] == "Always", name
+                assert c["image"].endswith(("/moks:latest", "/moks-crewai:latest", "/moks-reranker:latest", "/moks-embedder:latest")) and c["imagePullPolicy"] == "Always", name
 
 
 def test_the_chart_ships_the_consistent_dump():
@@ -530,7 +531,7 @@ def test_mk4_seeds_bge_m3_and_lets_the_pods_reach_it():
     moks service account by AuthorizationPolicy; this side needs the seed entry and the egress rule."""
     docs = render("values-hetzner.yaml")
     seed = yaml.safe_load(of(docs, "ConfigMap", "moks-seed")["data"]["seed.yaml"])
-    (emb,) = [l for l in seed["llm"] if l["purpose"] == "embedding"]
+    (emb,) = [l for l in seed["llm"] if l["purpose"] == "embedding" and l["name"] == "bge-m3"]
     assert emb["endpoint"] == "http://bge-m3.embeddings:11434" and emb["model"] == "bge-m3:567m"
     assert {"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "embeddings"}}}],
             "ports": [{"port": 11434, "protocol": "TCP"}]} in of(docs, "NetworkPolicy", "moks")["spec"]["egress"]
@@ -799,3 +800,31 @@ def test_cnpg_status_is_readable_on_mk4_only_and_never_writable():
         return [r for r in reader["rules"] if r["apiGroups"] == ["postgresql.cnpg.io"]]
     assert rule("values-hetzner.yaml") == [{"apiGroups": ["postgresql.cnpg.io"], "resources": ["clusters", "backups", "scheduledbackups"], "verbs": ["get", "list"]}]
     assert rule("values-eks.yaml") == []  # off unless cnpg.enabled
+
+
+def test_mk4_runs_the_embedding_service_beside_bge_m3_without_switching_search():
+    """The benchmark's choice (docs/EMBEDDINGS.md) is deployed and seeded inactive: bge-m3 keeps serving until the new
+    model passes its evaluation and an index is rebuilt with it."""
+    docs = render("values-hetzner.yaml")
+    seed = yaml.safe_load(of(docs, "ConfigMap", "moks-seed")["data"]["seed.yaml"])
+    by_name = {l["name"]: l for l in seed["llm"] if l["purpose"] == "embedding"}
+    assert by_name["bge-m3"]["is_active"] is True
+    new = by_name["bge-base-en-v1-5"]
+    assert new["is_active"] is False and new["provider"] == "huggingface" and new["endpoint"] == "http://moks-embedder:8090"
+    assert new["embedding_options"]["query_prefix"].startswith("Represent this sentence") and new["embedding_options"]["revision"]
+    lock = json.loads((CHART.parents[2] / "reranker" / "embedder.lock.json").read_text())
+    assert (new["model"], new["embedding_options"]["revision"]) == (lock["model_id"], lock["revision"])
+    assert new["embedding_options"]["query_prefix"] == lock["query_prefix"]
+    pod = dict(pods(docs))["moks-embedder"]
+    (c,) = pod["containers"]
+    env = {e["name"]: e for e in c["env"]}
+    assert env["RERANKER_TOKEN"]["valueFrom"]["secretKeyRef"] == {"name": "moks-reranker-secrets", "key": "MOKS_CRED_RERANKER_TOKEN"}
+    assert new["credential_ref"] == {"type": "env", "name": "MOKS_CRED_RERANKER_TOKEN"}
+    assert pod["automountServiceAccountToken"] is False and c["resources"]["limits"]["memory"]
+    policy = of(docs, "NetworkPolicy", "moks-embedder")["spec"]
+    assert policy["egress"] == [] and {"podSelector": {"matchLabels": {"app": "moks", "component": "api"}}} in policy["ingress"][0]["from"]
+    assert {"to": [{"podSelector": {"matchLabels": {"app": "moks-embedder"}}}], "ports": [{"port": 8090, "protocol": "TCP"}]} in of(docs, "NetworkPolicy", "moks")["spec"]["egress"]
+
+
+def test_the_embedding_service_is_off_by_default():
+    assert "moks-embedder" not in dict(pods(render("values.yaml")))

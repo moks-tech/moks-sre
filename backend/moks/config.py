@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     rag_rerank_interactive: bool = True  # false: the Knowledge search page skips the reranker; investigations still use it
     rag_decompose: bool = False  # off: the rag dataset measured no gain from it. Turn on only with a dataset that shows one.
     rag_activation: str = "strict"  # strict: a reindex with any incomplete document fails. degraded: it activates and says so.
+    rag_query_expansion: bool = False  # SRE synonyms as one more keyword ranking (rag/query.py); the query and its identifiers never change
+    rag_require_embedding_evaluation: bool = True  # replacing a model whose index has vectors needs a passed embedding evaluation of the new one
+    rag_embedding_eval_tolerance: float = 0.02  # how far below the serving model a candidate may score (nDCG@10, Recall@5) and still pass
     # Fusion weights for reciprocal rank fusion. 1/1/2 is what search did before they were settings: an exact
     # identifier counted twice. 0 leaves a ranker out. rag/service.py bounds each to 0..5.
     rag_weight_keyword: float = 1.0

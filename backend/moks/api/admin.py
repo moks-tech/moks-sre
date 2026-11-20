@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -25,7 +26,8 @@ from ..connectors.base import describe_credential_ref
 from ..db import get_db
 from ..llm import budget, catalog
 from ..llm.providers import LLMError, provider_for
-from ..models import AuditEvent, Connector, Environment, LLMConfig, RoleBinding, User
+from ..models import AuditEvent, Connector, EmbeddingIndex, Environment, LLMConfig, RoleBinding, User
+from ..rag import embeddings
 from ..rbac import ROLES, P
 from .common import flush_unique
 
@@ -176,10 +178,22 @@ async def discover_datastores(environment: str, ctx: AuthContext = Depends(needs
 
 # ---- LLM ---------------------------------------------------------------------------------------
 
+Providers = Literal["anthropic", "openai", "azure_openai", "gemini", "bedrock", "ollama", "huggingface", "sentence_transformers"]
+
+
+class EmbeddingOptionsIn(BaseModel):
+    """What changes an embedding model's vectors beyond its name (moks/rag/embeddings.py). Any change here is a new
+    model key: an index built before it no longer compares, so the active one cannot be edited this way."""
+    query_prefix: str = Field(default="", max_length=200)
+    document_prefix: str = Field(default="", max_length=200)
+    max_input_chars: int | None = Field(default=None, ge=64, le=200_000)
+    revision: str = Field(default="", max_length=80, pattern=r"^[A-Za-z0-9._/-]*$")
+
+
 class LLMIn(BaseModel):
     name: str = Field(pattern=r"^[a-z0-9][a-z0-9-]{0,99}$")
     purpose: Literal["chat", "embedding"] = "chat"
-    provider: Literal["anthropic", "openai", "azure_openai", "gemini", "bedrock", "ollama"]
+    provider: Providers
     model: str = Field(min_length=1, max_length=200)
     endpoint: str | None = Field(default=None, max_length=500, pattern=r"^https?://")
     region: str | None = Field(default=None, pattern=r"^[a-z]{2}(-[a-z]+)+-\d$")
@@ -190,11 +204,27 @@ class LLMIn(BaseModel):
     input_price_per_mtok: Decimal = Field(default=Decimal("0"), ge=0, le=1000)
     output_price_per_mtok: Decimal = Field(default=Decimal("0"), ge=0, le=1000)
     embedding_dimensions: int | None = Field(default=None, ge=8, le=8192)
+    embedding_options: EmbeddingOptionsIn = Field(default_factory=EmbeddingOptionsIn)
+
+    @model_validator(mode="after")
+    def _purpose_fits(self) -> "LLMIn":
+        from ..llm.providers import EMBEDDING_ONLY
+
+        if self.provider in EMBEDDING_ONLY and self.purpose != "embedding":
+            raise ValueError(f"{self.provider} serves embedding models only")
+        return self
+
+    def row(self) -> dict[str, Any]:
+        from ..rag.embeddings import clean_options
+
+        data = self.model_dump(exclude={"credential_ref", "embedding_options"})
+        data["embedding_options"] = clean_options(self.embedding_options.model_dump()) if self.purpose == "embedding" else {}
+        return data
 
 
 class ModelsIn(BaseModel):
     """The connection part of the provider form, so models can be listed before anything is saved."""
-    provider: Literal["anthropic", "openai", "azure_openai", "gemini", "bedrock", "ollama"]
+    provider: Providers
     endpoint: str | None = Field(default=None, max_length=500, pattern=r"^https?://")
     region: str | None = Field(default=None, pattern=r"^[a-z]{2}(-[a-z]+)+-\d$")
     credential_ref: CredentialRef = Field(default_factory=CredentialRef)
@@ -206,7 +236,8 @@ def llm_out(c: LLMConfig, spent: Decimal | None = None) -> dict[str, Any]:
             "region": c.region, "credential": describe_credential_ref(c.credential_ref), "credential_ref": c.credential_ref,
             "timeout_seconds": c.timeout_seconds, "max_output_tokens": c.max_output_tokens, "daily_budget_usd": str(c.daily_budget_usd),
             "input_price_per_mtok": str(c.input_price_per_mtok), "output_price_per_mtok": str(c.output_price_per_mtok),
-            "embedding_dimensions": c.embedding_dimensions, "is_active": c.is_active,
+            "embedding_dimensions": c.embedding_dimensions, "embedding_options": c.embedding_options or {}, "is_active": c.is_active,
+            "model_key": embeddings.model_key(c) if c.purpose == "embedding" else None,
             "spent_last_24h_usd": str(spent) if spent is not None else None}
 
 
@@ -225,12 +256,18 @@ async def list_llm(ctx: AuthContext = Depends(needs(P.ADMIN_LLM)), db: AsyncSess
 
 @router.post("/llm", status_code=201)
 async def create_llm(body: LLMIn, ctx: AuthContext = Depends(needs(P.ADMIN_LLM)), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
-    c = LLMConfig(**{**body.model_dump(exclude={"credential_ref"}), "credential_ref": body.credential_ref.model_dump(exclude_none=True)})
+    c = LLMConfig(**{**body.row(), "credential_ref": body.credential_ref.model_dump(exclude_none=True)})
     db.add(c)
     await flush_unique(db, f"An LLM provider named {body.name!r} already exists; edit it or choose another name")
     await audit.record(db, action="llm.create", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="llm_config",
                        resource_id=str(c.id), details=body.model_dump(mode="json"))
     return llm_out(c)
+
+
+@router.get("/llm/embedding-profiles")
+async def embedding_profiles(ctx: AuthContext = Depends(needs(P.ADMIN_LLM))) -> list[dict[str, Any]]:
+    """Suggested prefixes for known embedding models, to fill in the form. Applied only when someone saves them."""
+    return embeddings.profiles()
 
 
 @router.post("/llm/models")
@@ -247,9 +284,15 @@ async def update_llm(lid: uuid.UUID, body: LLMIn, ctx: AuthContext = Depends(nee
     c = await db.get(LLMConfig, lid)
     if c is None:
         raise HTTPException(404, "Unknown LLM configuration")
-    if c.purpose == "embedding" and c.is_active and (c.model != body.model or c.embedding_dimensions != body.embedding_dimensions):
-        raise HTTPException(409, "Changing the active embedding model requires a new configuration and a reindex")
-    for k, v in body.model_dump(exclude={"credential_ref"}).items():
+    if c.purpose == "embedding":
+        before = embeddings.model_key(c)
+        after = embeddings.model_key(SimpleNamespace(**{**body.row(), "provider": body.provider}))
+        used = (await db.execute(select(func.count()).select_from(EmbeddingIndex).where(EmbeddingIndex.llm_config_id == c.id,
+                                                                                     EmbeddingIndex.status.in_(("active", "building", "retired"))))).scalar_one()
+        if before != after and (c.is_active or used):
+            raise HTTPException(409, "This embedding configuration made vectors that an index still holds, and the change would make different ones. "
+                                     "Add a new configuration with these settings and rebuild the index with it; the current one keeps serving until the switch.")
+    for k, v in body.row().items():
         setattr(c, k, v)
     c.credential_ref = body.credential_ref.model_dump(exclude_none=True)
     await flush_unique(db, f"An LLM provider named {body.name!r} already exists; edit it or choose another name")
@@ -296,13 +339,21 @@ async def test_llm(lid: uuid.UUID, ctx: AuthContext = Depends(needs(P.ADMIN_LLM)
     extra: dict[str, Any] = {}
     try:
         if c.purpose == "embedding":
-            vectors = await budget.embed(provider_for(c), c, ["connection test"], user_id=ctx.user.id, purpose="connection_test")
-            dims = len(vectors[0]) if vectors and vectors[0] else 0
-            if not dims:
-                raise LLMError("bad_response", f"{c.provider}/{c.model} returned no embedding")
-            extra = {"provider": c.provider, "model": c.model, "dimensions": dims}
+            provider = provider_for(c)
+            embedder = embeddings.Embedder(c, provider)
+            vector = await embedder.query("connection test", user_id=ctx.user.id, purpose="connection_test", wait_seconds=30)
+            dims = len(vector)
+            extra = {"provider": c.provider, "model": c.model, "dimensions": dims, "model_key": embedder.key}
             if c.embedding_dimensions and c.embedding_dimensions != dims:
                 raise LLMError("bad_response", f"{c.provider}/{c.model} returned {dims} dimensions but {c.embedding_dimensions} are configured")
+            served = await provider.info() if hasattr(provider, "info") else None
+            if served is not None:  # a TEI-style server says which model and revision it runs; it must be the configured one
+                extra["served"] = {"model_id": served.get("model_id"), "revision": served.get("model_sha")}
+                if served.get("model_id") and served["model_id"] != c.model:
+                    raise LLMError("bad_response", f"the server runs {served['model_id']}, not {c.model}")
+                wanted = (c.embedding_options or {}).get("revision")
+                if wanted and served.get("model_sha") and served["model_sha"] != wanted:
+                    raise LLMError("bad_response", f"the server runs revision {served['model_sha']}, not {wanted}")
             ok, msg = True, f"{c.provider}/{c.model} returned a {dims}-dimension embedding"
         else:
             resp = await budget.complete(provider_for(c), "Reply with the JSON object {\"ok\": true} and nothing else.",

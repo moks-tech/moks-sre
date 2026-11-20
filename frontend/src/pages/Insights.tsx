@@ -80,8 +80,14 @@ function IndexHealth({ s }: { s: any }) {
 
 function SearchBackend() {
   const { can } = useAuth();
+  const { confirm: ask, toast } = useFeedback();
   const r = useLoad(() => (can("knowledge.index") ? api<any>("/knowledge/backend") : Promise.resolve(null)), []);
   const d = r.data;
+  async function rollback(g: any) {
+    if (!await ask({ title: `Activate ${g.index} again?`, body: `Search switches to it, and to ${g.model}, at once. The generation serving now is kept for the retention window, so this can be undone the same way.`, action: "Activate", danger: true })) return;
+    try { const out = await api<any>(`/knowledge/generations/${encodeURIComponent(g.index)}/activate`, { method: "POST" }); toast(`${out.active} is serving${out.model_restored ? `, with ${out.model_restored}` : ""}.`); r.reload(); }
+    catch (e: any) { toast(e.message, "bad"); }
+  }
   if (!d) return null;
   const p = d.probe, active = d.generations.find((g: any) => g.serving), snap = p?.snapshots, c = d.coverage;
   const fallbacks = Object.entries(d.retrieval.fallbacks) as [string, number][];
@@ -113,9 +119,45 @@ function SearchBackend() {
       {modes.length > 0 && <div className="small muted">Retrieval in this API process: {modes.map(([k, v]) => `${k} ${v}`).join(", ")}.</div>}
       {fallbacks.length > 0 && <div className="small">Fallbacks: {fallbacks.map(([k, v]) => `${k} (${v})`).join("; ")}.</div>}
       {d.generations.length > 1 && <details className="small"><summary>Index generations</summary>
-        <ul>{d.generations.map((g: any) => <li key={`${g.backend}/${g.index}`}>{g.index} ({g.backend}): {g.status}{g.serving ? ", serving" : ""}, {g.chunks} chunks, mapping v{g.mapping_version}{g.retired_at ? `, retired ${new Date(g.retired_at).toLocaleDateString()}` : ""}</li>)}</ul>
+        <ul>{d.generations.map((g: any) => <li key={`${g.backend}/${g.index}`}>{g.index} ({g.backend}): {g.status}{g.serving ? ", serving" : ""}, <span className="mono">{g.model}</span>, {g.chunks} chunks, mapping v{g.mapping_version}
+          {g.reused_vectors ? `, ${g.reused_vectors} vectors reused` : ""}{g.evaluation ? `, evaluation ${g.evaluation.passed ? "passed" : "failed"}` : ""}{g.retired_at ? `, retired ${new Date(g.retired_at).toLocaleDateString()}` : ""}
+          {g.status === "retired" && g.backend === d.backend && <> <button className="ghost small" onClick={() => rollback(g)}>Activate again</button></>}</li>)}</ul>
+        <div className="muted">Activating a retired generation also makes its embedding model the active one again. Documents changed since it was retired are brought up to date afterwards.</div>
       </details>}
     </div>
+  );
+}
+
+/** Rebuild with the active embedding model, or build with another one beside it. A model that would replace one
+ *  with vectors must have passed the embedding evaluation first; the server says so before anything is queued. */
+export function RebuildIndex({ onClose, onQueued }: { onClose: () => void; onQueued: (model: string) => void }) {
+  const models = useLoad(() => api<any[]>("/admin/llm").then((rows) => rows.filter((m) => m.purpose === "embedding")).catch(() => []), []);
+  const [choice, setChoice] = useState("");
+  const check = useLoad(() => api<any>(`/knowledge/reindex/check${qs({ llm_config_id: choice || undefined })}`), [choice]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const c = check.data;
+  async function run(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    try { const out = await api<any>("/knowledge/reindex", { method: "POST", body: choice ? { llm_config_id: choice } : {} }); onQueued(out.model); }
+    catch (err) { setError(err); setBusy(false); }
+  }
+  return (
+    <FormDrawer title="Rebuild the index" submit="Rebuild" busyLabel="Queuing…" busy={busy} blocked={!c?.allowed} error={error} onSubmit={run} onClose={onClose}>
+      <FormSection title="Embedding model" help="The new generation is built beside the one serving search, which keeps answering, with its own model, until the switch.">
+        <label>Model<select value={choice} onChange={(e) => setChoice(e.target.value)}>
+          <option value="">The active embedding model</option>
+          {(models.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name} ({m.provider} / {m.model}){m.is_active ? ", active" : ""}</option>)}
+        </select></label>
+        {c && <div className="small">
+          <div>Builds <span className="mono">{c.model}</span>{c.serving ? <>; search uses <span className="mono">{c.serving}</span> now</> : ""}.</div>
+          {c.replacement && c.evaluation && <div>Embedding evaluation: {c.evaluation.passed ? <Badge kind="ok">passed</Badge> : <Badge kind="bad">failed</Badge>} <Time iso={c.evaluation.at} /></div>}
+          {!c.allowed && <div className="alert warn small">{c.reason}</div>}
+          {c.allowed && c.reason && <div className="muted">{c.reason}.</div>}
+        </div>}
+      </FormSection>
+    </FormDrawer>
   );
 }
 
@@ -193,6 +235,7 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
   const [error, setError] = useState<unknown>();
   const [editing, setEditing] = useState<any>(null);
   const [adding, setAdding] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   function startEdit(s: any) {
     setEditing({ id: s.id, name: s.name, github: s.type === "github", web: s.type === "web", urls: (s.config?.urls ?? []).join("\n"), crawl: !!s.config?.crawl, maxPages: String(s.config?.max_pages ?? 50), repository: s.config?.repository, include: (s.config?.include ?? []).join(", "), profiles: s.config?.profiles ?? [], exclude: (s.config?.exclude ?? []).join(", "),
       scope_environment: s.scope_environment, scope_namespace: s.scope_namespace, owner: s.owner ?? "", service: s.service ?? "", enabled: s.enabled,
@@ -225,7 +268,7 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
   }
   return (
     <div className="card stack" style={{ marginTop: 14 }}>
-      <div className="row between"><h2>Sources</h2><div className="row">{can("knowledge.index") && <button className="ghost small" onClick={() => api("/knowledge/reindex", { method: "POST" }).then(() => toast("Reindex queued"), (e) => toast(e.message, "bad"))}>Rebuild index (embedding change)</button>}<button className="small" onClick={() => setAdding(true)}>Add source</button></div></div>
+      <div className="row between"><h2>Sources</h2><div className="row">{can("knowledge.index") && <button className="ghost small" onClick={() => setRebuilding(true)}>Rebuild index…</button>}<button className="small" onClick={() => setAdding(true)}>Add source</button></div></div>
       <Loading load={list} rows={4} />
       {list.data && list.data.length > 0 && <ListHeader shown={list.data.length} noun={["source", "sources"]} load={list} />}
       {list.data && <DataTable label="Knowledge sources" rows={list.data} rowKey={(s) => s.id} empty={<Empty title="No sources yet.">Use Add source to index a GitHub repository, web pages or files you upload.</Empty>}
@@ -271,6 +314,7 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
         <div className="small muted">Indexed documents are kept. A new scope applies straight away; new include or exclude rules apply at the next sync, which removes files that no longer qualify. The value of a token is never entered here: this names the variable that holds it.</div>
       </FormDrawer>}
       {detail && <SourceDetail s={detail} onClose={() => { setDetail(null); list.reload(); }} />}
+      {rebuilding && <RebuildIndex onClose={() => setRebuilding(false)} onQueued={(m) => { setRebuilding(false); toast(`Rebuild with ${m} queued. The current index keeps serving until the switch.`); onChange(); }} />}
       {adding && <AddSource taken={(list.data ?? []).map((x) => x.name)} onClose={() => setAdding(false)}
         onAdded={(name, synced) => { setAdding(false); toast(synced ? `Added ${name}: first sync queued` : `Added ${name}: use Upload on its row to add files`); list.reload(); onChange(); }} />}
       {!editing && <ErrorBox error={error} />}
@@ -781,13 +825,16 @@ export function FinOps() {
 function RunEvaluation({ datasets, onClose, onQueued }: { datasets: any[]; onClose: () => void; onQueued: (dataset: string, mode: string) => void }) {
   const [dataset, setDataset] = useState(datasets[0]?.name ?? "");
   const [mode, setMode] = useState("rules");
+  const [model, setModel] = useState("");
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const embedding = datasets.find((d) => d.name === dataset)?.kind === "embedding";
+  const models = useLoad(() => (embedding ? api<any[]>("/admin/llm").then((rows) => rows.filter((m) => m.purpose === "embedding")).catch(() => []) : Promise.resolve([])), [embedding]);
   async function run(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    try { await api("/evals/runs", { method: "POST", body: { dataset, mode } }); onQueued(dataset, mode); } catch (err) { setError(err); setBusy(false); }
+    try { await api("/evals/runs", { method: "POST", body: { dataset, mode, ...(embedding && model ? { llm_config_id: model } : {}) } }); onQueued(dataset, mode); } catch (err) { setError(err); setBusy(false); }
   }
   return (
     <FormDrawer title="Run an evaluation" submit="Run" busyLabel="Queuing…" busy={busy} blocked={!dataset} error={error} onSubmit={run} onClose={onClose}>
@@ -799,12 +846,34 @@ function RunEvaluation({ datasets, onClose, onQueued }: { datasets: any[]; onClo
           </label>)}
         </div>
       </FormSection>
-      <FormSection title="Mode">
+      {embedding ? <FormSection title="Embedding model" help="Measured against the model serving search now, on synthetic SRE documents and questions. A pass is what lets this model replace the serving one.">
+        <label>Model<select value={model} onChange={(e) => setModel(e.target.value)}>
+          <option value="">The active embedding model</option>
+          {(models.data ?? []).map((m) => <option key={m.id} value={m.id}>{m.name} ({m.provider} / {m.model})</option>)}
+        </select></label>
+        <div className="small muted">Embeds about {datasets.find((d) => d.name === dataset)?.cases ?? 0} questions and the dataset's documents with each model, through their budgets.</div>
+      </FormSection> : <FormSection title="Mode">
         <label className="inline"><input type="radio" name="eval-mode" checked={mode === "rules"} onChange={() => setMode("rules")} /> Rules only</label>
         <label className="inline"><input type="radio" name="eval-mode" checked={mode === "llm"} onChange={() => setMode("llm")} /> With the active LLM</label>
         {mode === "llm" && <div className="small muted">Uses the active chat model, and counts against its budget.</div>}
-      </FormSection>
+      </FormSection>}
     </FormDrawer>
+  );
+}
+
+const EMBEDDING_MEASURES: [string, string][] = [["ndcg@10", "nDCG@10"], ["recall@5", "Recall@5"], ["mrr@10", "MRR@10"], ["answer@1", "Answer first"]];
+
+/** Candidate against the model serving search, as the gates saw them. */
+export function EmbeddingComparison({ m }: { m: any }) {
+  const rows = [["candidate", m.candidate], ...(m.serving ? [["serving", m.serving]] : [])] as [string, any][];
+  const f = (x: number | undefined) => (x == null ? "—" : x.toFixed(3));
+  return (
+    <div className="table-wrap" role="region" aria-label="Embedding comparison" tabIndex={0}><table>
+      <thead><tr><th>Model</th><th>Dims</th>{EMBEDDING_MEASURES.map(([, l]) => <th key={l}>{l} hybrid</th>)}<th>nDCG@10 vector</th><th>Keyword only</th><th>Query p95</th><th>Docs/s</th></tr></thead>
+      <tbody>{rows.map(([who, x]) => <tr key={who}><td className="small"><strong>{who}</strong> <span className="mono">{x.model}</span></td><td>{x.dimensions}</td>
+        {EMBEDDING_MEASURES.map(([k]) => <td key={k}>{f(x.modes?.hybrid?.overall?.[k])}</td>)}<td>{f(x.modes?.vector?.overall?.["ndcg@10"])}</td><td>{f(x.modes?.keyword?.overall?.["ndcg@10"])}</td>
+        <td>{x.latency?.query_p95_ms} ms</td><td>{x.latency?.documents_per_second ?? "—"}</td></tr>)}</tbody>
+    </table></div>
   );
 }
 
@@ -834,6 +903,7 @@ export function Evals() {
             {r.gates.some((g: any) => g.evidence === "simulated") && <div className="small muted">Simulated, with fixtures and no live service: {r.gates.filter((g: any) => g.evidence === "simulated").map((g: any) => g.name.replace(/_/g, " ")).join(", ")}.</div>}
             <div className="small muted">Gates are checks. The score summarizes quality; a failed or skipped gate fails the run whatever the score says.</div>
           </div>}
+          {r.kind === "embedding" && r.versions?.metrics?.candidate && <EmbeddingComparison m={r.versions.metrics} />}
           {r.versions?.dataset && <div className="small muted mono">dataset {r.versions.dataset} · skills generation {r.versions.skills_generation ?? "none"} · pipeline {r.versions.pipeline} · prompt {r.versions.prompt} · model {r.versions.model ?? "none"} · {r.versions.index}</div>}
           {r.kind === "investigation" && <div className="table-wrap" role="region" aria-label={`Results of ${r.dataset}`} tabIndex={0}><table><thead><tr><th>Case</th><th>Score</th><th>Failed checks</th><th>Findings</th><th>Tools</th></tr></thead>
             <tbody>{r.results.map((c: any) => <tr key={c.case}><td className="mono small">{c.case}</td><td>{c.score.toFixed(2)}</td>

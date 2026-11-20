@@ -23,6 +23,7 @@ router = APIRouter(prefix="/evals", tags=["evals"])
 class RunIn(BaseModel):
     dataset: str = "lab"
     mode: Literal["rules", "llm"] = "rules"
+    llm_config_id: uuid.UUID | None = None  # the embedding model an embedding dataset evaluates; the active one if empty
 
 
 @router.get("/datasets")
@@ -36,7 +37,7 @@ async def start(body: RunIn, ctx: AuthContext = Depends(needs(P.ADMIN_POLICIES))
         raise HTTPException(422, "The CrewAI incident scenarios need the crewai package, which only the CrewAI worker has: run "
                                  f"`moks eval {body.dataset} --mode llm` in the moks-crewai pod (docs/crewai-sre-engine.md)")
     try:
-        rid = await runner.start(body.dataset, body.mode, ctx.user.id)
+        rid = await runner.start(body.dataset, body.mode, ctx.user.id, body.llm_config_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from None
     await jobs.enqueue("eval_run", {"run_id": str(rid)}, created_by=ctx.user.id)

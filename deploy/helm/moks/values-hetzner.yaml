@@ -83,6 +83,24 @@ seed:
       timeout_seconds: 300
       max_concurrency: 1
       is_active: true
+    # The replacement the SRE embedding benchmark chose (docs/EMBEDDINGS.md): bge-base-en-v1.5 with its query
+    # instruction, served by moks-embedder below. Seeded INACTIVE: bge-m3 keeps serving search until this passes
+    # the embedding evaluation (Settings > Evaluations, dataset embedding, this model) and an index is rebuilt with
+    # it (Knowledge > Index > Rebuild with model). The rebuild's switch makes it active; activating the old
+    # generation again restores bge-m3. The token is the reranker's, already in the API and worker environment.
+    - name: bge-base-en-v1-5
+      purpose: embedding
+      provider: huggingface
+      model: BAAI/bge-base-en-v1.5
+      endpoint: http://moks-embedder:8090
+      credential_ref: {type: env, name: MOKS_CRED_RERANKER_TOKEN}
+      embedding_dimensions: 768
+      embedding_options:
+        query_prefix: "Represent this sentence for searching relevant passages: "
+        revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+      timeout_seconds: 120
+      max_concurrency: 2
+      is_active: false
   knowledge_sources:
     - name: moks-docs
       type: github
@@ -196,6 +214,13 @@ reranker:
     tag: latest
   client:
     enabled: true
+
+# docs/EMBEDDINGS.md. Serves bge-base-en-v1.5 for the inactive seeded configuration above; search keeps using bge-m3
+# until an index is rebuilt with it. About 1 GiB, less than the bge-m3 pod it can replace (1.28 GiB measured).
+embedder:
+  enabled: true
+  image:
+    tag: latest
 
 # docs/SECRETS_SYNC.md. The chart makes one Role per name and each must exist; a namespace created
 # later needs adding here. Needs Secret moks/moks-secret-sync first (scripts/create-secret-sync-secret.sh),
