@@ -224,6 +224,7 @@ export function useIsMobile(width = 900): boolean {
 }
 
 const ICONS: Record<string, string> = {
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4.2-4.2", chevron: "M9 6l6 6-6 6", moon: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z", logout: "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10",
   grid: "M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z", chart: "M4 20V4M4 20h16M8 16l4-5 3 3 5-7", lines: "M4 6h16M4 12h16M4 18h10",
   radar: "M12 12l6-6M12 3a9 9 0 1 0 9 9M12 8a4 4 0 1 0 4 4", plus: "M12 5v14M5 12h14", chat: "M4 5h16v11H9l-5 4z", alert: "M12 4l9 16H3zM12 10v4M12 17v.5",
   check: "M4 12l5 5L20 6", terminal: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5", tool: "M15 6a4 4 0 0 0-5 5l-6 6 3 3 6-6a4 4 0 0 0 5-5l-3 3-3-3z", cube: "M12 3l8 4.5v9L12 21l-8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9",
