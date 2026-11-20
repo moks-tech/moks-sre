@@ -9,6 +9,7 @@ function server(created: { status: number; body: unknown } = { status: 201, body
   const calls: { url: string; body: any }[] = [];
   const fetch = vi.fn(async (url: string, init?: RequestInit) => {
     if (String(url).endsWith("/environments")) return new Response(JSON.stringify(ENVS), { status: 200 });
+    if (String(url).includes("/admin/credentials/choices")) return new Response(JSON.stringify({ credentials: [] }), { status: 200 });
     calls.push({ url: String(url), body: init?.body ? JSON.parse(String(init.body)) : null });
     return new Response(JSON.stringify(created.body), { status: created.status });
   });

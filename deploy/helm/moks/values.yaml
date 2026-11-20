@@ -41,8 +41,9 @@ config:
   # Alertmanager/Grafana webhook: put MOKS_ALERT_WEBHOOK_TOKEN in existingSecret (unset = webhook disabled)
 
 # Existing Secret with MOKS_DATABASE_URL, MOKS_SESSION_SECRET and MOKS_OIDC_CLIENT_SECRET. Connector, LLM,
-# knowledge and backup credentials are pasted into Settings and stored encrypted (docs/CREDENTIALS.md); MOKS_CRED_*
-# entries here still work. Optional: MOKS_CREDENTIALS_KEY (otherwise derived from the session secret).
+# knowledge and backup credentials are pasted into Settings and stored encrypted (docs/CREDENTIALS.md); the API
+# copies any MOKS_CRED_* entries here into Settings when it starts, after which they can be deleted.
+# Optional: MOKS_CREDENTIALS_KEY (otherwise derived from the session secret).
 # Never committed; see deploy/secrets/.
 existingSecret: moks-secrets
 # Extra Secret mounted at /var/run/moks-credentials for file credential references (kubeconfigs).

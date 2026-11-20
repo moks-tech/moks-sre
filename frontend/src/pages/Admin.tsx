@@ -31,7 +31,7 @@ const lines = (s: string) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boole
 const REGIONS = ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "eu-west-1", "eu-central-1", "ap-south-1", "ap-southeast-1", "ap-northeast-1"];
 
 interface Field { key: string; label: string; kind?: "number" | "list" | "bool" | "region" | "select"; placeholder?: string; required?: boolean; options?: string[] }
-interface Source { label: string; type: string; hint: string; defaults: any; fields: Field[]; auth?: boolean; cred?: string }
+interface Source { label: string; type: string; hint: string; defaults: any; fields: Field[]; auth?: boolean }
 
 const REGION: Field = { key: "region", label: "Region", kind: "region", required: true };
 const ROLE: Field = { key: "role_arn", label: "Role ARN to assume (optional)", placeholder: "arn:aws:iam::123456789012:role/moks-read" };
@@ -44,11 +44,11 @@ const SOURCES: Record<string, Source> = {
   kubeconfig: { label: "Kubernetes (kubeconfig)", type: "kubernetes", hint: "Paste the kubeconfig as the credential, or point at a mounted file.", defaults: { mode: "kubeconfig", timeout_seconds: 15 }, fields: [{ key: "context", label: "Context (optional)" }] },
   cloudwatch: { label: "CloudWatch Logs", type: "cloudwatch", hint: "Logs Insights over the listed log groups only.", defaults: { region: "us-east-1", allowed_log_groups: [], max_window_minutes: 360, max_concurrent_queries: 2, poll_timeout_seconds: 60 },
     fields: [REGION, { key: "allowed_log_groups", label: "Allowed log groups", kind: "list", required: true, placeholder: "/aws/eks/prod/*" }, ROLE, { key: "max_window_minutes", label: "Max window (min)", kind: "number" }] },
-  prometheus: { label: "Prometheus", type: "prometheus", hint: "PromQL over HTTP, from a server the MOKS pods can reach; usually its in-cluster service URL, with any path prefix. FinOps and rightsizing need this server to scrape cAdvisor.", auth: true, cred: "MOKS_CRED_PROMETHEUS_PASSWORD", defaults: { base_url: "http://prometheus.monitoring.svc:9090/prometheus", public_url: "https://jithendar.com/prometheus", timeout_seconds: 15, auth: "none" }, fields: URLS },
-  loki: { label: "Loki", type: "loki", hint: "LogQL over HTTP.", auth: true, cred: "MOKS_CRED_LOKI_PASSWORD", defaults: { base_url: "http://loki.monitoring.svc:3100", timeout_seconds: 20, namespace_label: "namespace", auth: "none" },
+  prometheus: { label: "Prometheus", type: "prometheus", hint: "PromQL over HTTP, from a server the MOKS pods can reach; usually its in-cluster service URL, with any path prefix. FinOps and rightsizing need this server to scrape cAdvisor.", auth: true, defaults: { base_url: "http://prometheus.monitoring.svc:9090/prometheus", public_url: "https://jithendar.com/prometheus", timeout_seconds: 15, auth: "none" }, fields: URLS },
+  loki: { label: "Loki", type: "loki", hint: "LogQL over HTTP.", auth: true, defaults: { base_url: "http://loki.monitoring.svc:3100", timeout_seconds: 20, namespace_label: "namespace", auth: "none" },
     fields: [URLS[0], { key: "namespace_label", label: "Namespace label" }, { key: "tenant_id", label: "Tenant ID (optional)" }] },
-  grafana: { label: "Grafana", type: "grafana", hint: "Dashboards and annotations. Use a service account token as the credential.", cred: "MOKS_CRED_GRAFANA_TOKEN", defaults: { base_url: "http://grafana.monitoring.svc.cluster.local/grafana", public_url: "https://jithendar.com/grafana", timeout_seconds: 15 }, fields: URLS },
-  git: { label: "GitHub", type: "git", hint: "Compares deployed revisions and syncs runbooks. Use a read-only token as the credential.", cred: "MOKS_CRED_GITHUB_TOKEN", defaults: { provider: "github", repositories: [] },
+  grafana: { label: "Grafana", type: "grafana", hint: "Dashboards and annotations. Use a service account token as the credential.", defaults: { base_url: "http://grafana.monitoring.svc.cluster.local/grafana", public_url: "https://jithendar.com/grafana", timeout_seconds: 15 }, fields: URLS },
+  git: { label: "GitHub", type: "git", hint: "Compares deployed revisions and syncs runbooks. Use a read-only token as the credential.", defaults: { provider: "github", repositories: [] },
     fields: [{ key: "repositories", label: "Repositories", kind: "list", required: true, placeholder: "owner/repo" }] },
   aws_cost: { label: "AWS Cost Explorer", type: "aws_cost", hint: "Each uncached request costs $0.01, so results are cached and capped.", defaults: { metric: "UnblendedCost", cache_minutes: 60, max_requests_per_hour: 60, allocation_tag_keys: [] },
     fields: [{ key: "cache_minutes", label: "Cache (min)", kind: "number" }, { key: "max_requests_per_hour", label: "Max requests / hour", kind: "number" }, ROLE] },
@@ -58,14 +58,14 @@ const SOURCES: Record<string, Source> = {
       { key: "kubernetes_namespaces", label: "Kubernetes namespaces (empty: all of secretsSync.namespaces)", kind: "list", placeholder: "shop" }, ROLE, { key: "kms_key_id", label: "KMS key for new secrets (optional)" },
       { key: "allow_delete", label: "Allow reviewed deletion of AWS secrets", kind: "bool" }, { key: "recovery_window_days", label: "AWS recovery window (7-30 days)", kind: "number" }] },
   postgres: { label: "PostgreSQL cluster", type: "postgres", hint: "Read-only SRE views: connections, long transactions, lock chains, replication, vacuum and top queries. Use a role holding only pg_monitor; the password is the credential (docs/DATASTORES.md). Add one connector per cluster.",
-    cred: "MOKS_CRED_PG_SHOP", defaults: { host: "", port: 5432, database: "postgres", username: "moks_monitor", sslmode: "prefer", namespace: "", timeout_seconds: 10, query_text: "normalized" },
+    defaults: { host: "", port: 5432, database: "postgres", username: "moks_monitor", sslmode: "prefer", namespace: "", timeout_seconds: 10, query_text: "normalized" },
     fields: [{ key: "host", label: "Host (Service DNS name)", required: true, placeholder: "shop-db-rw.shop.svc" }, { key: "port", label: "Port", kind: "number" },
       { key: "database", label: "Database", required: true }, { key: "username", label: "Monitoring role", required: true },
       { key: "sslmode", label: "TLS (sslmode)", kind: "select", options: ["disable", "prefer", "require", "verify-ca", "verify-full"] },
       { key: "namespace", label: "Kubernetes namespace (scopes who may read it)", placeholder: "shop" }, { key: "service", label: "Service (optional)" },
       { key: "query_text", label: "Query text shown", kind: "select", options: ["normalized", "none", "raw"] }] },
   redis: { label: "Redis / Valkey cluster", type: "redis", hint: "Read-only SRE views: memory, evictions, clients, slowlog, replication, persistence and cluster slots. Use an ACL user limited to the read commands in docs/DATASTORES.md; the password is the credential. Key values are never read.",
-    cred: "MOKS_CRED_REDIS_CACHE", defaults: { host: "", port: 6379, mode: "standalone", username: "moks", namespace: "", tls: false, timeout_seconds: 10 },
+    defaults: { host: "", port: 6379, mode: "standalone", username: "moks", namespace: "", tls: false, timeout_seconds: 10 },
     fields: [{ key: "host", label: "Host (Service DNS name)", required: true, placeholder: "redis-master.cache.svc" }, { key: "port", label: "Port", kind: "number" },
       { key: "mode", label: "Mode", kind: "select", options: ["standalone", "sentinel", "cluster"] }, { key: "sentinel_master", label: "Sentinel master name (Sentinel mode)", placeholder: "mymaster" },
       { key: "username", label: "ACL user (empty: default user)" }, { key: "tls", label: "TLS", kind: "bool" },
@@ -158,10 +158,10 @@ function SourceFields({ value, onChange }: { value: SourceValue; onChange: (v: S
         {auth === "basic" && !value.advanced && <label>Username<input required value={value.config.username ?? ""} onChange={(e) => setCfg("username", e.target.value)} /></label>}
         {value.source !== "aws_secrets" && (!src.auth || auth !== "none" || value.advanced) &&
           <CredentialInput label={value.source === "kubeconfig" ? "Kubeconfig" : auth === "basic" || value.source === "postgres" || value.source === "redis" ? "Password" : auth === "bearer" ? "Bearer token" : "Token"}
-            value={value.cred} onChange={(cred) => onChange({ ...value, cred })} multiline={value.source === "kubeconfig"} envPlaceholder={src.cred}
+            value={value.cred} onChange={(cred) => onChange({ ...value, cred })} multiline={value.source === "kubeconfig"}
             none={src.auth || NEEDS_CRED.has(value.source) ? undefined : src.type === "kubernetes" || src.type === "cloudwatch" || src.type === "aws_cost" ? "Pod identity" : "None"} />}
         {value.source === "aws_secrets" && !value.advanced && <>
-          <CredentialInput label="AWS access key ID" value={aws.access_key_id} none="Pod Identity or IRSA (no keys)" files
+          <CredentialInput label="AWS access key ID" value={aws.access_key_id} none="Pod Identity or IRSA (no keys)"
             onChange={(c) => onChange({ ...value, aws: { access_key_id: c, secret_access_key: c.type === "none" ? NO_CRED : aws.secret_access_key.type === "none" ? PASTE : aws.secret_access_key } })} />
           {aws.access_key_id.type !== "none" && <CredentialInput label="AWS secret access key" value={aws.secret_access_key} onChange={(c) => onChange({ ...value, aws: { ...aws, secret_access_key: c } })} />}
         </>}
@@ -361,7 +361,7 @@ export function Connectors() {
     a.clear();
     setEditing(c.id);
     setEnvironment(c.environment);
-    setForm({ ...blankSource(sourceOf(c)), name: c.name, enabled: c.enabled, config: c.config, cred: credFromRef(c.credential_ref), aws: awsKeysOf(c.config) });
+    setForm({ ...blankSource(sourceOf(c)), name: c.name, enabled: c.enabled, config: c.config, cred: credFromRef(c.credential_ref, c.credential), aws: awsKeysOf(c.config) });
     setOpen(true);
   }
   async function save(e: FormEvent) {
@@ -455,7 +455,7 @@ const LLM_PRESETS: Record<string, Preset> = {
   anthropic: { label: "Anthropic Claude", provider: "anthropic", key: "MOKS_CRED_ANTHROPIC_API_KEY", hint: "Claude has no embedding API, so embeddings need another provider.",
     models: ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     prices: { "claude-opus-5-5": ["4", "20"], "claude-sonnet-5-5": ["2", "10"], "claude-haiku-5-5": ["0.10", "0.50"] } },
-  openai: { label: "OpenAI (GPT)", provider: "openai", key: "MOKS_CRED_OPENAI_API_KEY", models: ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"], embed: ["text-embedding-3-small", "text-embedding-3-large"], hint: "The models your OpenAI account can use are listed once the key reference is set." },
+  openai: { label: "OpenAI (GPT)", provider: "openai", key: "MOKS_CRED_OPENAI_API_KEY", models: ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"], embed: ["text-embedding-3-small", "text-embedding-3-large"], hint: "The models your OpenAI account can use are listed once the API key is pasted or picked." },
   google: { label: "Google AI (Gemini)", provider: "gemini", key: "MOKS_CRED_GEMINI_API_KEY", models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"], embed: ["gemini-embedding-001", "text-embedding-004"], hint: "Uses the Gemini API with an API key; its chat and embedding models are listed." },
   azure: { label: "Azure OpenAI", provider: "azure_openai", endpoint: "https://YOUR-RESOURCE.openai.azure.com", key: "MOKS_CRED_AZURE_OPENAI_API_KEY", hint: "Model is your deployment name." },
   bedrock: { label: "Amazon Bedrock", provider: "bedrock", models: ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0", "us.amazon.nova-pro-v1:0", "us.amazon.nova-lite-v1:0", "us.amazon.nova-micro-v1:0", "us.meta.llama3-3-70b-instruct-v1:0"],
@@ -510,7 +510,7 @@ export function LLMProviders() {
   const edit = (c: any) => {
     a.clear();
     setEditing(c.id);
-    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", cred: credFromRef(c.credential_ref) });
+    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", cred: credFromRef(c.credential_ref, c.credential) });
     setOpen(true);
   };
   async function save(e: FormEvent) {
@@ -576,8 +576,7 @@ export function LLMProviders() {
             {form.provider === "bedrock" ? <label>Region<input list="aws-regions" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></label> :
               <label>Endpoint{form.provider === "ollama" ? " (required)" : " (optional)"}<input value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder={form.provider === "ollama" ? "http://ollama.ollama:11434" : "default"} /></label>}
             {form.provider !== "bedrock" && (
-              <CredentialInput label="API key" value={form.cred} onChange={(cred) => setForm({ ...form, cred })} none="None (no key)" files={false}
-                envPlaceholder={LLM_PRESETS[presetOf(form)].key} storeAs={`API key for ${LLM_PRESETS[presetOf(form)].label}${form.name ? ` (${form.name})` : ""}`} />
+              <CredentialInput label="API key" value={form.cred} onChange={(cred) => setForm({ ...form, cred })} none="None (no key)" storeAs={`API key for ${LLM_PRESETS[presetOf(form)].label}${form.name ? ` (${form.name})` : ""}`} />
             )}
             <label>Timeout (s)<input type="number" value={form.timeout_seconds} onChange={(e) => setForm({ ...form, timeout_seconds: Number(e.target.value) })} /></label>
             <label>Max output tokens<input type="number" value={form.max_output_tokens} onChange={(e) => setForm({ ...form, max_output_tokens: Number(e.target.value) })} /></label>

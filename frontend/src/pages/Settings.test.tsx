@@ -160,4 +160,34 @@ describe("Credentials page", () => {
     fireEvent.click(within(d).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(posted).toEqual([{ label: "MOKS_CRED_PINECONE_API_KEY", value: "pc-key" }]));
   });
+
+  it("adds a named credential, and fills a variable the deployment never had for everything that names it", async () => {
+    const sent: { method: string; path: string; body: any }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const path = String(url).replace(/^.*\/moks\/api/, "").split("?")[0];
+      if (init?.method === "POST" || init?.method === "PUT") { sent.push({ method: init.method, path, body: JSON.parse(String(init.body)) }); return new Response(JSON.stringify({ ref: { type: "stored", id: "x" }, references: ["r"], stored: [], missing: [] }), { status: 200 }); }
+      if (path === "/admin/credentials") return new Response(JSON.stringify({
+        key: { source: "MOKS_SESSION_SECRET", id: "abcd" }, credentials: [], deployment: [], count: 0,
+        environment_references: [{ name: "MOKS_CRED_PG_SHOP", set_here: false, used_by: ["Connector prod/shop-db"] }] }), { status: 200 });
+      return new Response("{}", { status: 200 });
+    }));
+    render(<MemoryRouter><FeedbackProvider><Credentials /></FeedbackProvider></MemoryRouter>);
+    expect(await screen.findByText("Waiting for a value")).toBeTruthy();
+    expect(screen.getByText("Connector prod/shop-db")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Import from Kubernetes Secret" })).toBeNull();  // nothing here to import
+
+    fireEvent.click(screen.getByRole("button", { name: "Add credential" }));
+    let d = screen.getByRole("dialog", { name: "Add credential" });
+    fireEvent.change(within(d).getByLabelText("Name"), { target: { value: "OpenAI key (prod)" } });
+    fireEvent.change(within(d).getByLabelText("Value"), { target: { value: "sk-1" } });
+    fireEvent.click(within(d).getByRole("button", { name: "Add credential" }));
+    await waitFor(() => expect(sent).toEqual([{ method: "POST", path: "/admin/credentials", body: { label: "OpenAI key (prod)", value: "sk-1" } }]));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Paste value" }));
+    d = screen.getByRole("dialog", { name: "Set MOKS_CRED_PG_SHOP" });
+    expect(d.textContent).toContain("Used by Connector prod/shop-db");
+    fireEvent.change(within(d).getByLabelText("Value"), { target: { value: "pg-pass" } });
+    fireEvent.click(within(d).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(sent[1]).toEqual({ method: "PUT", path: "/admin/credentials/environment/MOKS_CRED_PG_SHOP", body: { value: "pg-pass" } }));
+  });
 });

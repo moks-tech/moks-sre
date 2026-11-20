@@ -67,7 +67,7 @@ export function ModelPicker({ provider, endpoint, region, credential, purpose, v
   const rest = shown.filter((m) => m.purpose !== purpose);
   const list = models.length > 0 && !typing;
   const noun = `${fromProvider ? "" : "Suggested "}${purpose === "embedding" ? "embedding" : "chat"} models`;
-  const why = !ready ? "Fill in the endpoint and API key reference to list your account's models."
+  const why = !ready ? "Fill in the endpoint and API key to list your account's models."
     : listing?.error ? `Could not list your account's models: ${listing.error}.`
     : listing?.note ?? null;
 

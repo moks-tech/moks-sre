@@ -265,7 +265,7 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
         {editing.github && <div className="form-grid">
           <label>Include globs<input value={editing.include} onChange={(e) => ed("include", e.target.value)} placeholder="default set" /></label>
           <label>Exclude globs<input value={editing.exclude} onChange={(e) => ed("exclude", e.target.value)} /></label>
-          <CredentialInput label="GitHub token" value={editing.cred} onChange={(c) => ed("cred", c)} none="Shared token, or none (public)" files={false} envPlaceholder="MOKS_CRED_GITHUB_TOKEN" />
+          <CredentialInput label="GitHub token" value={editing.cred} onChange={(c) => ed("cred", c)} none="Shared token, or none (public)" />
         </div>}
         {editing.github && <Profiles value={editing.profiles} onChange={(v) => ed("profiles", v)} />}
         <div className="small muted">Indexed documents are kept. A new scope applies straight away; new include or exclude rules apply at the next sync, which removes files that no longer qualify. The value of a token is never entered here: this names the variable that holds it.</div>
@@ -361,7 +361,7 @@ export function AddSource({ taken, onClose, onAdded }: { taken: string[]; onClos
       <FormSection title={f.type === "github" ? "Repository" : f.type === "web" ? "Pages" : "Name"}>
         {f.type === "github" && <div className="form-grid">
           <label>Repository<input required autoFocus pattern={REPOSITORY} placeholder="owner/name" title="owner/name, as in github.com/owner/name" value={f.repository} onChange={(e) => set({ repository: e.target.value.trim() })} /></label>
-          <CredentialInput label="Access token" value={f.cred} onChange={(c) => set({ cred: c })} none="None needed (public, or MOKS's shared token)" files={false} envPlaceholder="MOKS_CRED_GITHUB_TOKEN" />
+          <CredentialInput label="Access token" value={f.cred} onChange={(c) => set({ cred: c })} none="None needed (public, or MOKS's shared token)" />
         </div>}
         {f.type === "web" && <WebFields urls={f.urls} crawl={f.crawl} maxPages={f.maxPages} onChange={(c) => set(c)} />}
         <div className="form-grid">

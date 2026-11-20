@@ -22,7 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from . import __version__, errors, jobs, versions
+from . import __version__, credentials, errors, jobs, versions
 from .api import actions, admin, alerts, assist, backups, proposals, conversations, credentials as credentials_api, crewai, detections, diagnostics, environments, evals, explorer, finops, incidents, investigations, knowledge, knowledge_explorer, logs, metrics, ml, multi, secrets, settings, skills
 from .auth import routes as auth_routes
 from .auth.deps import get_auth
@@ -67,10 +67,12 @@ async def lifespan(app: FastAPI):
 
         worker_task = asyncio.create_task(run_worker(stop))
     heartbeat = asyncio.create_task(_follow_skills(stop))
+    moved = asyncio.create_task(credentials.import_on_start())  # off the Secret on first start; never blocks readiness
     log.info("api started", extra={"event": "api_started"})
     yield
     stop.set()
     heartbeat.cancel()
+    moved.cancel()
     if worker_task:
         await asyncio.wait([worker_task], timeout=10)
     await registry.close_all()

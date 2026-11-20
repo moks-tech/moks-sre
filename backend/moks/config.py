@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # that secret then needs the old value here as credentials_key_previous until Settings re-encrypts them.
     credentials_key: str = Field(default="", repr=False)
     credentials_key_previous: str = Field(default="", repr=False)
+    # At start-up the API copies every MOKS_CRED_* value that a connector, LLM provider, knowledge source or backup
+    # storage names into stored credentials and points the reference at the copy, so nothing keeps reading the
+    # Kubernetes Secret. Off: references keep reading the environment until someone imports them in Settings.
+    credentials_import_on_start: bool = True
     session_idle_minutes: int = 480
     session_absolute_hours: int = 12
     cookie_secure: bool = True
