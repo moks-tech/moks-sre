@@ -14,7 +14,7 @@ from moks.rag import access, query, service
 from moks.rag.backends import PostgresBackend
 from moks.rbac import Binding, Principal
 from tests.conftest import login, make_user
-from tests.test_rag_index import _model, os_  # noqa: F401
+from tests.test_rag_index import _model, ext  # noqa: F401
 
 ADMIN = Principal(str(uuid.uuid4()), "root@x", [Binding("admin", "*", "*")])
 
@@ -37,7 +37,7 @@ async def find(q, who=ADMIN, **kw):
         return await service.search(db, who, q, 5, **kw)
 
 
-async def built(os_, monkeypatch):  # noqa: F811
+async def built(ext, monkeypatch):  # noqa: F811
     await _model(monkeypatch)
     sid = await source()
     did = await write(sid, "a.md", "# Runbook\nfirst text about the gateway")
@@ -59,8 +59,8 @@ def fail_during_catch_up(monkeypatch, sid):
     monkeypatch.setattr(service, "_catch_up", catch_up)
 
 
-async def test_strict_activation_refuses_a_build_with_a_gap(os_, monkeypatch):  # noqa: F811
-    sid, _ = await built(os_, monkeypatch)
+async def test_strict_activation_refuses_a_build_with_a_gap(ext, monkeypatch):  # noqa: F811
+    sid, _ = await built(ext, monkeypatch)
     fail_during_catch_up(monkeypatch, sid)
     async with session_scope() as db:
         old = (await service.active_index(db)).id
@@ -71,8 +71,8 @@ async def test_strict_activation_refuses_a_build_with_a_gap(os_, monkeypatch):  
         assert (await service.active_index(db)).id == old
 
 
-async def test_degraded_activation_reports_exactly_what_is_missing(os_, monkeypatch):  # noqa: F811
-    sid, did = await built(os_, monkeypatch)
+async def test_degraded_activation_reports_exactly_what_is_missing(ext, monkeypatch):  # noqa: F811
+    sid, did = await built(ext, monkeypatch)
     fail_during_catch_up(monkeypatch, sid)
     monkeypatch.setattr(service.get_settings(), "rag_activation", "degraded")
     async with session_scope() as db:
@@ -87,8 +87,8 @@ async def test_degraded_activation_reports_exactly_what_is_missing(os_, monkeypa
     assert (state.vectors, state.expected_vectors) == (0, state.expected_chunks) and state.retries >= 1 and state.model_key
 
 
-async def test_coverage_returns_only_when_vectors_really_exist(os_, monkeypatch):  # noqa: F811
-    sid, did = await built(os_, monkeypatch)
+async def test_coverage_returns_only_when_vectors_really_exist(ext, monkeypatch):  # noqa: F811
+    sid, did = await built(ext, monkeypatch)
     real_try = service._try_embed
     fail_during_catch_up(monkeypatch, sid)
     monkeypatch.setattr(service.get_settings(), "rag_activation", "degraded")
@@ -187,7 +187,7 @@ async def test_no_endpoint_shows_evaluation_content(client):
 
 
 async def test_evaluations_do_not_touch_the_outbox(monkeypatch):
-    monkeypatch.setattr(service.get_settings(), "rag_backend", "opensearch")  # an external index is live
+    monkeypatch.setattr(service.get_settings(), "rag_backend", "pinecone")  # an external index is live
     async def count():
         async with session_scope() as db:
             return len((await db.execute(select(IndexOutbox))).all())

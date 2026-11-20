@@ -1,6 +1,6 @@
 """The Knowledge Explorer, retrieval workspace and feedback, with the corrections that came with them.
 
-Every document here is real rows in PostgreSQL. No test reaches OpenSearch: the Explorer never does."""
+Every document here is real rows in PostgreSQL. No test reaches an external index: the Explorer never does."""
 import uuid
 from datetime import datetime, timedelta, timezone
 

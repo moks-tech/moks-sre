@@ -25,11 +25,10 @@ Three more wait in `deploy/argocd/<environment>/optional/`, because each would b
 | Group | Application | Move it to `apps/` when |
 |---|---|---|
 | migrate | `moks-migrate`, `roboshop-demo-moks-migrate` | `secrets.split` is true |
-| opensearch | `moks-opensearch`, `roboshop-demo-moks-opensearch` | `rag.backend` is `opensearch` with no `rag.opensearch.url` |
 | reranker | `moks-reranker`, `roboshop-demo-moks-reranker` | `reranker.enabled` is true (docs/RERANKING.md) |
 | backup | `moks-backup`, `roboshop-demo-moks-backup` | `backup.enabled` is true |
 
-`scripts/validate-argocd-split.py` fails if a group renders something and has no Application in `apps/`, or the reverse. Velero stays its own Application in `deploy/argocd/velero.yaml`. Pinecone and Amazon OpenSearch Service are external, so neither is an Application. The unrelated RoboShop shopping widget keeps the names `moks` and `roboshop-demo-moks`.
+`scripts/validate-argocd-split.py` fails if a group renders something and has no Application in `apps/`, or the reverse. Velero stays its own Application in `deploy/argocd/velero.yaml`. Pinecone is external, so it is not an Application. The unrelated RoboShop shopping widget keeps the names `moks` and `roboshop-demo-moks`.
 
 ### Why some boundaries are where they are
 
@@ -50,7 +49,6 @@ These cross Application boundaries, and Argo CD does not enforce them. The root'
 | database | api, worker, executor, migrate, terminal, backup | Migrations and `wait-schema` need PostgreSQL. Check readiness, because a child that is merely Synced proves nothing |
 | api, or migrate when split | terminal | The gateway always waits in `wait-schema` for the schema |
 | migrate, when split | api, worker, executor | Runtime pods wait in `wait-schema`, then crash-loop until the Job finishes |
-| opensearch, when bundled | api, worker | Search and reindexing need it |
 
 
 ## 1. Old-to-new ownership
@@ -90,15 +88,6 @@ Namespace `moks` itself is not rendered by the chart: the old Application's `man
 | database | Service | moks | `moks-postgres` | moks-portal | roboshop-demo-moks-portal |
 | database | StatefulSet | moks | `moks-postgres` | moks-portal | roboshop-demo-moks-portal |
 | migrate | Job | moks | `moks-migrate-<hash>` | if enabled | if enabled |
-| opensearch | NetworkPolicy | moks | `moks-opensearch` | if enabled | if enabled |
-| opensearch | Service | moks | `moks-opensearch` | if enabled | if enabled |
-| opensearch | StatefulSet | moks | `moks-opensearch` | if enabled | if enabled |
-| opensearch | ConfigMap | moks | `moks-search-config` | if enabled | if enabled |
-| opensearch | CronJob | moks | `moks-search-ops` | if enabled | if enabled |
-| opensearch | Job (PostSync hook) | moks | `moks-search-security` | if enabled | if enabled |
-| opensearch | NetworkPolicy | moks | `moks-search` | if enabled | if enabled |
-| opensearch | Service | moks | `moks-search` | if enabled | if enabled |
-| opensearch | StatefulSet | moks | `moks-search` | if enabled | if enabled |
 | api | Deployment | moks | `moks-api` | moks-portal | roboshop-demo-moks-portal |
 | api | PodDisruptionBudget | moks | `moks-api` | moks-portal | - |
 | api | Service | moks | `moks-api` | moks-portal | roboshop-demo-moks-portal |
@@ -487,9 +476,9 @@ Every consumer hashes the ConfigMaps, so a change shows up as OutOfSync on found
 | What changed | Sync, in this order |
 |---|---|
 | `config.*`, `publicUrl`, `basePath`, `seed`, `customSkills`, `databaseBackups.namespaces`, `diagnostics.namespace` | foundation, then api, worker, executor, terminal. `basePath` also needs routing. `databaseBackups` and `diagnostics` also change executor's own resources |
-| `rag.backend`, `rag.opensearch.url`, `rag.pinecone` | foundation (ConfigMap and NetworkPolicy), opensearch if bundled, then api, worker, executor, terminal |
+| `rag.backend`, `rag.pinecone` | foundation (ConfigMap and NetworkPolicy), then api, worker, executor, terminal |
 | `image.*`, `imagePullSecrets` | api, worker, executor, terminal, plus migrate and backup when present. Sync migrate first |
-| `networkPolicy.*` | foundation, database, executor, terminal, opensearch if bundled |
+| `networkPolicy.*` | foundation, database, executor, terminal |
 | `postgres.*` | database. Never change `postgres.storage` or the volume claim template on a live StatefulSet: they are immutable, and the sync fails |
 | `worker.*`, `api.*`, `executor.*`, `terminal.*` | That child only |
 | `istio.*`, `ingress.*` | routing. `istio.mtls` also changes database |

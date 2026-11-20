@@ -17,10 +17,6 @@ New roles: `knowledge_reviewer`, `knowledge_admin`, `index_operator`, `skill_pub
 
 No new setting is required, and every default keeps today's behavior. With nothing else changed, the mk4 and EKS Helm renders are identical to before this work.
 
-| Setting | Default | Note |
-| --- | --- | --- |
-| `rag.opensearch.secure.dashboards.enabled` | `false` | [OPENSEARCH.md](OPENSEARCH.md#opensearch-dashboards-for-administrators) |
-| `rag.opensearch.secure.dashboards.ingress.enabled` | `false` | Refused while `publicRoute` holds the same path |
 
 ## Migration 0031
 
@@ -38,7 +34,7 @@ Additive, with no long lock on a table this size. It widens the role check, adds
 
 This follows [RELEASES.md](RELEASES.md). An Argo CD sync does not start a release.
 
-1. Check embedding budget and the OpenSearch disk, which was at 96% when last measured. Rewriting every document needs room, and the flood-stage block stops writes.
+1. Check the embedding budget: rewriting every document embeds it again.
 2. Push, and wait for CI to move `latest`.
 3. `kubectl --context mk4 -n moks-sre rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor`. Migration 0031 runs as the new API pods start. With `secrets.split` on, it runs in the `moks-migrate` Job, followed by `moks db-grants`. With it off, nothing runs `db-grants` and nothing needs it.
 4. Confirm: `curl https://jithendar.com/moks/api/health` shows the commit. Open **Knowledge Explorer**. As an admin, check Index health, and that outbox and vector coverage move during the next sync.
@@ -56,6 +52,5 @@ This follows [RELEASES.md](RELEASES.md). An Argo CD sync does not start a releas
 
 **A skill.** **Roll back** on its Versions list makes a new generation with the earlier version.
 
-**An index generation.** `scripts/opensearch-migrate.sh activate <name>`, within the retention window. It now reports `degraded` if that generation missed anything, and `sync` fills it in.
+**An index generation.** Knowledge → Index generations → **Activate again** (`POST /knowledge/generations/{name}/activate`), within the retention window. It now reports `degraded` if that generation missed anything, and `sync` fills it in.
 
-**Dashboards.** Set `enabled: false`, push, sync, and delete the Deployment, Service, ConfigMap and NetworkPolicy by hand, because syncs here never prune.

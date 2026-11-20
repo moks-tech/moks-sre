@@ -521,37 +521,6 @@ jobs:
           path: release/moks-embedder.json
           retention-days: 400
 
-  # moks-search with its S3 and metrics plugins, as moks-opensearch:latest. Changes nothing until
-  # rag.opensearch.secure.image points at it.
-  opensearch-image:
-    if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    env:
-      REGISTRY: registry.jithendar.com/jithendar
-      REPOSITORY: moks-opensearch
-    steps:
-      - uses: actions/checkout@v7
-      # Harbor robot robot$jithendar+moks (push and pull in project jithendar only), set as these repository secrets
-      # by tools deploy/minikube/harbor/registry.py ci-robots.
-      - name: Log in to Harbor
-        env:
-          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
-          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
-        run: printf '%s' "$HARBOR_PASSWORD" | docker login registry.jithendar.com --username "$HARBOR_USERNAME" --password-stdin
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069   # v4.4.1
-      - name: Build, smoke-test and push for arm64 and amd64
-        working-directory: deploy/opensearch
-        run: |
-          IMAGE="$REGISTRY/$REPOSITORY:latest"
-          docker build -t smoke .
-          docker run --rm smoke bin/opensearch-plugin list | tee plugins
-          grep -q repository-s3 plugins && grep -q prometheus-exporter plugins
-          docker buildx build --platform linux/arm64,linux/amd64 --provenance=false --metadata-file meta.json --push -t "$IMAGE" .
-          echo "pushed $IMAGE ($(python3 -c "import json;print(json.load(open('meta.json'))['containerimage.digest'])"))." >> "$GITHUB_STEP_SUMMARY"
-
   # Built and pushed on every push to the default branch as moks-terminal:latest. Each new session pulls it.
   terminal-image:
     if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}

@@ -23,7 +23,7 @@ A document has the environment and namespace of its source. `*` means that axis 
 - A person reads a document when **one binding** matches both axes. With `prod/team-a` and `dev/team-b`,
   `prod/team-b` is not readable.
 - A filter of whole bindings runs before ranking wherever the backend can express it. PostgreSQL always
-  can. OpenSearch can, except character classes. Pinecone cannot express patterns.
+  can. Pinecone cannot express patterns.
 - Where a filter is incomplete, search widens its candidates within a limit of 400, so unreadable documents
   cannot crowd out readable ones. The response reports `candidates.filtered_before_ranking` and `expanded`.
 - Every result is checked again against PostgreSQL. That check is never skipped.
@@ -95,7 +95,7 @@ complete listing.** On a web source that means a pass that visited everything: a
 
 **Sync is not indexing.** A pass that reads every file finishes the upstream half: `last_sync_status` and
 `last_success_at` say so. With PostgreSQL search the chunks are searchable in the same transaction. With
-OpenSearch or Pinecone the changes wait in the outbox, so the sync result and the Sources table carry a separate
+Pinecone the changes wait in the outbox, so the sync result and the Sources table carry a separate
 `indexing` state (`complete | pending | failed`, with pending and dead counts). A source is searchable when both
 halves are done and its documents are active; see [Source readiness](#source-readiness).
 
@@ -172,16 +172,16 @@ PostgreSQL is the authority. Each change adds an outbox event in its own transac
 - A document written while embedding failed has `vector_state: missing`. It is searchable by keyword, shown in
   status, and retried by `backfill_vectors` every minute, stopping at the first failure. The document that failed goes to the back of the queue, so one that always fails cannot hold up the rest. A document with no chunks has nothing to embed, and counts as complete for a strict reindex.
 - `reconcile_index` requeues documents whose revisions disagree. `verify_index` compares chunk counts on a sample
-  (OpenSearch only: Pinecone cannot count by metadata).
+  of an external index that can count by metadata (Pinecone cannot, so there it checks nothing and says so).
 - Dead events are retried one document at a time or in a bounded batch, and every retry is audited.
 
-Deletion and replacement run write-first: new chunks go in, fenced by content revision, then old ones are pruned, and every bulk item's result is read. `sync_generation` repairs a generation from `document_index_state` alone, which is also how a generation catches up after a cutover or rollback. [OPENSEARCH.md](OPENSEARCH.md) covers deployment, migration and recovery.
+Deletion and replacement run write-first: new chunks go in, fenced by content revision, then old ones are pruned, and every bulk item's result is read. `sync_generation` repairs a generation from `document_index_state` alone, which is also how a generation catches up after a cutover or rollback.
 
 ## Embedding cache
 
 `embedding_cache` holds one vector per embedding model and exact input text (a chunk's heading and text), keyed by the
 text's SHA-256. It holds no text. Every path that embeds goes through it: indexing in PostgreSQL, the outbox for
-OpenSearch and Pinecone, vector backfill and a rebuild. So:
+Pinecone, vector backfill and a rebuild. So:
 
 - a document that changes in one section calls the model for that section (and a chunk overlapping it), not the
   whole document; identical chunks in one document are sent once;
@@ -196,8 +196,7 @@ vector of current text is kept however old. If a model's weights change under th
 
 ## Retrieval
 
-Results are fused with weighted reciprocal rank fusion from up to four rankings: keyword (PostgreSQL full text, or
-OpenSearch BM25), vector, exact identifier, and **named services**: a keyword search for the services the question
+Results are fused with weighted reciprocal rank fusion from up to four rankings: keyword (PostgreSQL full text), vector, exact identifier, and **named services**: a keyword search for the services the question
 names, among those the asker can read about, so "which services depend on redis" also finds manifests that say
 `REDIS_HOST` but never "depend". The weights are settings (Settings > Knowledge search, or `MOKS_RAG_WEIGHT_KEYWORD`,
 `_VECTOR`, `_IDENTIFIER`, `_ENTITY`, each 0 to 5, with `MOKS_RAG_RRF_K`); 1, 1, 2 and 60 reproduce search before
@@ -222,7 +221,7 @@ Embedding models, their options, index generations, rebuilding with a new model 
 
 ## Index coverage
 
-`document_index_state` records, per document and index generation, the revision, expected and written chunks and vectors, the model and dimensions, the last error and retries. An index is `complete` or `degraded` from that record, and a degraded one becomes complete only when the record shows every document whole. With Pinecone, written counts are what MOKS recorded, because Pinecone cannot count by metadata; OpenSearch is also sampled by `verify_index`.
+`document_index_state` records, per document and index generation, the revision, expected and written chunks and vectors, the model and dimensions, the last error and retries. An index is `complete` or `degraded` from that record, and a degraded one becomes complete only when the record shows every document whole. With Pinecone, written counts are what MOKS recorded, because Pinecone cannot count by metadata.
 
 ## Document lifecycle and trust
 
@@ -236,7 +235,7 @@ Activating a retained generation recomputes its coverage: it comes back `degrade
 
 One predicate in `rag/explore.py` decides what a person sees. The list, each count, every filter option and each direct link use it, so an unreadable document does not appear in a total, does not offer a filter value, and answers exactly like one that does not exist. Excluded, draft and quarantined documents are for reviewers. Retries and errors are for `knowledge.index`.
 
-Everything comes from PostgreSQL. The Explorer never calls OpenSearch, and there is no proxy to it. Embeddings are never shown: only the model, dimensions and coverage. Per-chunk membership is not recorded, so membership is per document, and `verify_index` samples what the index really holds.
+Everything comes from PostgreSQL. The Explorer never calls an external index, and there is no proxy to one. Embeddings are never shown: only the model, dimensions and coverage. Per-chunk membership is not recorded, so membership is per document, and `verify_index` samples what the index really holds.
 
 ## Retrieval test
 
@@ -440,7 +439,7 @@ With one GitHub repository and one investigation, on a test environment:
    (add Application to index code). The first sync is queued.
 2. **Sync.** When the row's Sync shows complete, open Details. Retrieval readiness should read *searchable*, with
    Sync complete, Index complete, and nonzero searchable documents and chunks. If not, the reasons say which half
-   is unfinished. With OpenSearch, Index may read *indexing* for a minute while the outbox drains.
+   is unfinished. With Pinecone, Index may read *indexing* for a minute while the outbox drains.
 3. **One file.** Type the runbook's path into "Why is this file not found?" and press Explain: it should say
    Searchable, or name the rule, the review state or the index backlog.
 4. **Test retrieval.** In the same drawer, ask what an engineer would ("why is <service> crash-looping") with the

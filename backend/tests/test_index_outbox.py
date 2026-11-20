@@ -48,11 +48,11 @@ class Fake:
 async def ext(monkeypatch):
     fake = Fake()
     monkeypatch.setattr(service, "external", lambda name=None: fake)
-    monkeypatch.setattr(service, "backend_name", lambda: "opensearch")
+    monkeypatch.setattr(service, "backend_name", lambda: "pinecone")
     async with session_scope() as db:
         await db.execute(text("DELETE FROM index_outbox"))
-        await db.execute(text("DELETE FROM embedding_indexes WHERE backend = 'opensearch'"))
-        db.add(EmbeddingIndex(backend="opensearch", model_key="keyword-only", index_name="active-index", status="active"))
+        await db.execute(text("DELETE FROM embedding_indexes WHERE backend = 'pinecone'"))
+        db.add(EmbeddingIndex(backend="pinecone", model_key="keyword-only", index_name="active-index", status="active"))
     yield fake
 
 

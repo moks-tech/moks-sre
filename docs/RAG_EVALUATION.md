@@ -115,4 +115,4 @@ them), run `moks eval sre --mode llm` on mk4 for faithfulness, and compare with 
 
 **The vector store is unchanged.** PostgreSQL with pgvector stays. Nothing measured here favours another store: what
 moved the numbers is what is indexed and how it is ranked and laid out, which any store would need. The embedding
-cache cuts embedding cost the same way in front of PostgreSQL, OpenSearch or Pinecone.
+cache cuts embedding cost the same way in front of PostgreSQL or Pinecone.

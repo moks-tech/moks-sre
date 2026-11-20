@@ -44,20 +44,6 @@ resource "aws_ecr_repository" "reranker" {
   }
 }
 
-resource "aws_ecr_repository" "opensearch" {
-  name                 = "${var.repository_name}-opensearch"
-  image_tag_mutability = "MUTABLE" # latest moves on every build; the chart pins a digest, so that changes nothing that runs
-  force_delete         = false
-
-  encryption_configuration {
-    encryption_type = "AES256"
-  }
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-}
-
 # The MOKS image built with the CrewAI extra (Dockerfile --build-arg MOKS_CREWAI=true, docs/crewai-investigation.md).
 # Its own repository, so the default moks:latest never carries crewai and its dependencies. mk4 runs it only when
 # values-hetzner.yaml points image.repository here.

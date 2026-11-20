@@ -211,7 +211,6 @@ kubectl --context mk4 apply -f deploy/argocd/hetzner/project.yaml
 argocd app diff moks-foundation && argocd app sync moks-foundation
 argocd app diff moks-executor && argocd app sync moks-executor
 kubectl --context mk4 -n moks-sre rollout status deploy/moks-api deploy/moks-worker deploy/moks-executor
-kubectl --context mk4 -n moks-sre rollout status statefulset/moks-opensearch     # rag.backend: opensearch
 ```
 
 The API's init container runs migration `0002` automatically. Take a backup first
@@ -263,40 +262,23 @@ Off by default. [SECRETS_SYNC.md](SECRETS_SYNC.md#configuration) has the chart v
 
 See [TERMINAL.md](TERMINAL.md). It is off until `terminal.enabled` is set, and needs a Terraform apply, a Secret and a database role first.
 
-## Retiring OpenSearch on mk4
+## OpenSearch (removed)
 
-Since 2026-11-19 mk4 sets `rag.backend: postgres`: keyword search and pgvector k-NN in the MOKS database, fused with
-RRF, and embedded by the cluster's bge-m3. pgvector is not a trusted extension, so the `moks` role cannot create it:
-the kubernetes repository has the CloudNativePG operator install it (`postgres_databases.moks.extensions`), and the
-next index build adds the `chunk_embeddings.embedding` column that migration `0002` skipped.
+mk4 has searched PostgreSQL (`rag.backend: postgres`: full text and pgvector k-NN fused with RRF, embedded by the
+cluster's model) since 2026-11-19, and the OpenSearch backend, its chart, image, Terraform and scripts were removed from
+MOKS on 2026-11-20. `rag.backend` is `postgres` or `pinecone`; a values file that still says `opensearch` renders
+`postgres`. Old OpenSearch generations stay in `embedding_indexes` as history; cleanup closes their records without
+reaching for a cluster.
 
-1. The kubernetes change is applied (its CI applies on merge). Check that the extension is there:
-   `kubectl -n postgres-db get database postgres-cluster-moks -o jsonpath='{.status.extensions}'`.
-2. Argo CD syncs `moks-foundation`, so `MOKS_RAG_BACKEND` is `postgres` and the pods roll. Search is keyword-only and
-   says so until the next step.
-3. Knowledge → **Rebuild index**, or `kubectl -n moks-sre exec deploy/moks-worker -- moks reindex`. bge-m3 embeds about
-   0.7 chunks a second, so about 2,000 chunks take most of an hour; search stays on the keyword index until the switch.
-4. Check on the Knowledge page that the `postgres` index is active with full vector coverage, and that a search
-   answers in hybrid mode.
-5. Remove what Argo CD left behind (it never prunes). The Application has no finalizer, so deleting it removes
-   only itself:
+Argo CD never prunes, so what the old chart created stays until it is deleted by hand. On mk4, after 2026-11-20:
 
-   ```sh
-   kubectl -n argocd delete application moks-opensearch
-   kubectl -n moks delete statefulset/moks-opensearch deployment/moks-opensearch-dashboards \
-     service/moks-opensearch service/moks-opensearch-dashboards \
-     networkpolicy/moks-opensearch networkpolicy/moks-opensearch-dashboards \
-     virtualservice/moks-opensearch virtualservice/moks-opensearch-dashboards
-   kubectl -n moks delete pvc data-moks-opensearch-0
-   kubectl get pv | grep data-moks-opensearch-0          # reclaim policy Retain: delete the PV by name
-   ```
+```sh
+kubectl -n moks-sre delete peerauthentication moks-opensearch-edge moks-opensearch-dashboards-edge
+kubectl delete pv pvc-70cd1e76-670c-465c-b9cd-92046e343390   # Released, reclaim policy Retain, was moks/data-moks-opensearch-0
+```
 
-   These ran in the old namespace `moks`. On mk4 only the claim was still there on 2026-11-20, and deleting `moks`
-   ([Moving to namespace moks-sre](#moving-to-namespace-moks-sre)) removes it; the PV still has to be deleted by name.
-   A Retain local-path volume leaves its directory on the node
-   (`/var/local-path-provisioner/pvc-…_moks_data-moks-opensearch-0` on worker2): remove it there to get the disk back.
-
-The OpenSearch generations stay in `embedding_indexes` as history; nothing reads them while the backend is `postgres`.
+The Retain local-path volume also leaves its directory on worker2 (`/var/local-path-provisioner/pvc-70cd1e76-…_moks_data-moks-opensearch-0`):
+remove it there to get the disk back.
 
 ## Moving to namespace moks-sre
 
@@ -347,69 +329,9 @@ the kubernetes repository, so the old copy keeps serving until that change is ap
    kubectl get pv | grep data-moks-opensearch-0          # delete it by name
    ```
 
-## OpenSearch at /opensearch
-
-mk4 no longer publishes this (see above); it applies to an environment that still runs the bundled pod.
-
-On mk4 Traefik publishes the bundled pod at `https://jithendar.com/opensearch` for reads only: GET and HEAD,
-plus POST to `_search`, `_msearch` and `_count`. The pod has no security of its own, so everything rests on the
-login in `moks-opensearch-auth`. That login skips MOKS document access and reads every indexed chunk.
-
-Create the Secret, apply the AppProject, then sync. Until the Secret exists Traefik drops the route, so the
-path shows the site's 404.
-
-```sh
-PASS=$(openssl rand -hex 32)
-kubectl --context mk4 -n moks-sre create secret generic moks-opensearch-auth \
-  --type=kubernetes.io/basic-auth --from-literal=username=moks --from-literal=password="$PASS"
-echo "$PASS"   # kept nowhere else
-kubectl --context mk4 apply -f deploy/argocd/hetzner/project.yaml
-argocd app sync moks-opensearch && argocd app sync moks-routing   # never --prune
-curl -u "moks:$PASS" 'https://jithendar.com/opensearch/_cat/indices?v'
-```
-
-To rotate the password, delete and recreate the Secret. To remove the route, set
-`rag.opensearch.publicRoute.enabled: false` and delete the Middlewares and IngressRoute by hand, because syncs here never prune.
-
-## OpenSearch Dashboards at /opensearch-dashboards
-
-The web UI for the bundled pod, at `https://jithendar.com/opensearch-dashboards`. It runs as the Deployment
-`moks-opensearch-dashboards` (about 1 GiB, in the `opensearch` group), with its route in `routing`. The login
-has its own Secret because it is more powerful than the API's: Dashboards reaches OpenSearch directly, so Dev Tools
-and index management can write and delete anything, and MOKS document access does not apply. PostgreSQL stays the
-source of truth, so `moks reindex` rebuilds the knowledge index. Saved dashboards live only in OpenSearch.
-
-```sh
-PASS=$(openssl rand -hex 32)
-kubectl --context mk4 -n moks-sre create secret generic moks-opensearch-dashboards-auth \
-  --type=kubernetes.io/basic-auth --from-literal=username=moks --from-literal=password="$PASS"
-echo "$PASS"   # kept nowhere else
-argocd app sync moks-opensearch && argocd app sync moks-routing   # never --prune
-kubectl --context mk4 -n moks-sre rollout status deploy/moks-opensearch-dashboards --timeout=300s
-```
-
-Sign in, open **Dashboards Management > Index patterns**, create `moks-chunks-*`, then use **Discover**. To remove
-it, set `rag.opensearch.dashboards.enabled: false` and delete the objects by hand, because syncs here never prune.
-
-## The secured OpenSearch cluster
-
-[OPENSEARCH.md](OPENSEARCH.md) has setup, cutover, rollback and recovery for `moks-search`. The route above and any Dashboards route reach the original unauthenticated pod, and the chart refuses to cut over while they are on.
-
-## Using Amazon OpenSearch Service
-
-This keeps BM25 and k-NN search in a managed domain instead of a pod. Requests are signed with the AWS
-identity MOKS already has, so no search password is stored. Managed domains are supported;
-OpenSearch Serverless is not.
-
-1. Set `opensearch_domain_name` in Terraform and apply. A domain bills for every hour it exists.
-2. Set `rag.backend: opensearch`, `rag.opensearch.url` to `terraform output -raw opensearch_url_for_moks` and
-   `rag.opensearch.awsRegion`. The chart then deploys no OpenSearch pod. `networkPolicy.internetEgress` must stay on.
-3. Run a reindex, because a new backend starts empty. PostgreSQL stays the source of truth for documents and access.
-
 ## Using Pinecone for vectors
 
-Pinecone can hold the vectors instead of OpenSearch, with keyword search staying in PostgreSQL. It needs no
-pods, so `rag.backend: pinecone` frees about 2.5 GiB on mk4.
+Pinecone can hold the vectors instead of pgvector, with keyword search staying in PostgreSQL. It needs no pods.
 
 1. Add `MOKS_CRED_PINECONE_API_KEY` to `moks-secrets`.
 2. Set `rag.backend: pinecone`, and `rag.pinecone.cloud` and `region` if not `aws` and `us-east-1`.
@@ -648,7 +570,6 @@ previous commit (step 4). Roll back data by restoring the backup.
 | Plan execution fails with "changed after review" | The Deployment changed (another rollout, HPA) after the plan was made; create a new plan |
 | Plan stays `queued` | `kubectl -n moks-sre logs deploy/moks-executor`; the executor needs a RoleBinding in that namespace (`executor.namespaces`) |
 | Knowledge search empty | **Runbooks & knowledge → Sources**: last sync status/error; `kubectl -n moks-sre logs deploy/moks-worker` |
-| OpenSearch pod restarting | Needs ~2 GiB; check node memory and `rag.opensearch.nodeName` pinning. `AccessDeniedException` on `data/nodes`: set `rag.opensearch.fixVolumePermissions: true` |
 | SSE updates only arrive at the end | Something buffers the response: do not attach compress or buffering middleware to the MOKS router |
 
 ## Logs and LogQL

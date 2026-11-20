@@ -1,5 +1,5 @@
 """Phase 2 RAG: access control, secret exclusion, deletion propagation, incremental GitHub sync,
-chunking, OpenSearch contract, prompt injection inside retrieved documents."""
+chunking, prompt injection inside retrieved documents."""
 import base64
 import json
 import time
@@ -13,7 +13,7 @@ from sqlalchemy import text
 from moks import jobs
 from moks.db import session_scope
 from moks.models import Job, KnowledgeSource
-from moks.rag import access, ingest, service
+from moks.rag import ingest, service
 from moks.rag.chunking import chunk
 from moks.rbac import Binding, Principal
 from tests.conftest import login, make_user
@@ -346,31 +346,6 @@ def test_chunking_follows_structure():
     code = "\n".join(f"line {i}" for i in range(600))
     parts = chunk("app/main.py", code)
     assert len(parts) > 2 and parts[1].start_line <= parts[0].end_line  # overlapping windows keep line ranges
-
-
-async def test_opensearch_backend_contract():
-    from moks.rag.backends import OpenSearchBackend
-
-    seen = []
-
-    def h(req: httpx.Request):
-        seen.append((req.method, req.url.path, req.content.decode()))
-        if req.method == "HEAD":
-            return httpx.Response(404)
-        if req.url.path.endswith("/_search"):
-            return httpx.Response(200, json={"hits": {"hits": [{"_source": {"chunk_id": "c1"}}]}})
-        return httpx.Response(200, json={"errors": False, "items": [{"index": {"status": 201}}]})
-
-    os_ = OpenSearchBackend("http://os:9200", transport=httpx.MockTransport(h))
-    await os_.ensure_index("moks-chunks-x", 8)
-    mapping = json.loads(seen[1][2])
-    assert mapping["mappings"]["properties"]["embedding"]["dimension"] == 8 and mapping["settings"]["index"]["knn"]
-    await os_.index_chunks("moks-chunks-x", [{"chunk_id": "c1", "document_id": "d1", "environment": "*", "namespace": "shop", "repository": "r",
-                                              "service": "", "path": "p", "heading": "h", "text": "t"}], [[0.1] * 8])
-    assert seen[-1][1] == "/_bulk" and '"embedding"' in seen[-1][2]
-    ids = (await os_.keyword("moks-chunks-x", "redis failover", [access.Grant("prod", "shop")], 5))[0]
-    body = json.loads(seen[-1][2])
-    assert ids == ["c1"] and body["query"]["bool"]["filter"] == [{"bool": {"should": [{"bool": {"filter": [{"terms": {"environment": ["*", "prod"]}}, {"terms": {"namespace": ["*", "shop"]}}]}}], "minimum_should_match": 1}}]
 
 
 async def test_prompt_injection_in_documents_cannot_trigger_actions(client, monkeypatch):

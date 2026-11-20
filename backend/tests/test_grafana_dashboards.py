@@ -97,12 +97,11 @@ def test_every_metric_a_panel_reads_is_exported_with_those_labels(dashboards):
 
 
 def test_the_metrics_every_dashboard_relies_on_are_covered(dashboards):
-    """New metrics should reach a dashboard: each moks_* family appears somewhere (the retired OpenSearch ones excepted)."""
+    """New metrics should reach a dashboard: each moks_* family appears somewhere."""
     read = {name for d in dashboards.values() for _, e in _exprs(d) for name, _ in SELECTOR.findall(e)}
-    retired = {"moks_opensearch_bulk_items", "moks_opensearch_search_seconds", "moks_opensearch_search_failures", "moks_search_backend"}
     missing = []
     for obj in vars(observability).values():
-        if isinstance(obj, MetricWrapperBase) and obj._name not in retired:
+        if isinstance(obj, MetricWrapperBase):
             base = obj._name.removesuffix("_total") if obj._type == "counter" else obj._name
             if not any(n.startswith(base) for n in read):
                 missing.append(obj._name)

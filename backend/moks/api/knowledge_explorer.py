@@ -1,5 +1,5 @@
 """Knowledge Explorer, the retrieval test workspace and feedback. PostgreSQL decides everything here: each
-endpoint goes through rag/explore.py's one predicate, and there is no route to OpenSearch itself."""
+endpoint goes through rag/explore.py's one predicate, and there is no route to an external index itself."""
 from __future__ import annotations
 
 import uuid

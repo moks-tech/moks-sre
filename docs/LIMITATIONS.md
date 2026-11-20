@@ -5,7 +5,7 @@
 | Phase | Scope | State |
 |---|---|---|
 | 1 | Login + RBAC, `/moks` portal, Kubernetes/Prometheus/Loki, cited investigations, streaming, audit, Helm/Argo | Verified live, except streaming through the ingress, which has not been checked |
-| 2 | EKS (remote), CloudWatch, Grafana, Git connectors; RAG (Postgres/pgvector/OpenSearch); incident workspaces | Git and keyword RAG verified live. Vector search, Grafana, CloudWatch and EKS are not: see below |
+| 2 | EKS (remote), CloudWatch, Grafana, Git connectors; RAG (Postgres/pgvector); incident workspaces | Git and keyword RAG verified live. Vector search, Grafana, CloudWatch and EKS are not: see below |
 | 3 | Approvals, allowlisted remediation with pre/post validation and recovery, diagnostic sessions | Tested with fakes, and one `restart_deployment` plan per run on a kind cluster in CI ([TESTING.md](TESTING.md#end-to-end-on-kind-2026-11-16)). No plan has run on mk4 |
 | 4 | Alert-triggered investigations (webhook + poller) with dedup/cooldowns, incident reports and postmortems, evaluation datasets | Tested with fakes. Not exercised on mk4 since the rewrite |
 | + | FinOps (AWS cost, anomalies, budgets, Kubernetes allocation and rightsizing, LLM spend) | Kubernetes allocation runs live but reports 0 until a price is set. AWS side tested with fakes only |
@@ -54,12 +54,12 @@ backends does not move vectors: run a reindex afterwards, which pays to embed ev
 
 ## Durability
 
-- **Single disk:** all four mk4 nodes are containers on one disk, and the PostgreSQL and OpenSearch volumes
-  have reclaim policy `Delete`. Until backups are running, a disk failure or `minikube delete` loses everything.
+- **Single disk:** all four mk4 nodes are containers on one disk, and the PostgreSQL volume
+  has reclaim policy `Delete`. Until backups are running, a disk failure or `minikube delete` loses everything.
 - **No point-in-time recovery:** backups are logical dumps, so at most about an hour is lost once hourly
   backups run. WAL archiving would narrow that to minutes, but needs a PostgreSQL restart, a custom image or
   a shipping sidecar, and base backups.
-- **Vectors:** with the OpenSearch backend, embeddings exist only in OpenSearch. Chunk text is in PostgreSQL,
+- **Vectors:** with the Pinecone backend, embeddings exist only in Pinecone. Chunk text is in PostgreSQL,
   so the index can be rebuilt, but that means paying to embed everything again.
 - **Deletes are permanent:** deleting a knowledge source, connector or saved query removes its rows.
 
@@ -100,8 +100,6 @@ backends does not move vectors: run a reindex afterwards, which pays to embed ev
   chat model has answered a live request: Bedrock has no AWS keys on mk4. OpenAI and Ollama were only
   tested with a scripted server. Claude on Bedrock was checked with the real SDK against a local server only.
 - Database backups have not run on mk4. `pg_dump` and the content listing ran against a local PostgreSQL 17, the exec stream against a simulated one, and the MongoDB commands have run against nothing. Portal restore of databases does not exist.
-- Amazon OpenSearch Service signing was tested against recomputed signatures, not a real domain. The
-  OpenSearch Serverless is not supported. Self-managed index and query calls have run against a real 3.9.0 server on a Mac; `moks-search` has not run on mk4 ([OPENSEARCH.md](OPENSEARCH.md)).
 - Token counts come from provider responses. Cost is an estimate from prices an admin
   configures; nothing is fetched from a pricing API.
 - Responses stream as structured progress events. The final report arrives whole, not
@@ -159,7 +157,7 @@ Verified with a real PostgreSQL, fake connectors and no model, and in headless C
 - **The injection gate checks wiring:** retrieved text stays framed, never reaches the trusted instructions, and no tool it asks for exists. It does not measure how a model behaves on reading it.
 - **Claim support is literal overlap,** not entailment.
 - **Conflicts** are same title or same service and heading in one scope. Two documents that disagree under different titles are not noticed.
-- **Index membership is per document.** PostgreSQL does not record which chunks a generation holds on OpenSearch, and the Explorer does not ask the cluster. `verify_index` samples counts.
+- **Index membership is per document.** PostgreSQL does not record which chunks a generation holds in an external index, and the Explorer does not ask it. `verify_index` samples counts.
 - **The Explorer loads up to 20,000 readable documents per request,** then says its counts are partial. That suits this corpus and would not suit a far larger one.
 - **Classification is metadata and a sharing limit.** It does not restrict reading further within a binding.
 - **An embedding outage during a scope change** rewrites that document without vectors. The state says so, and backfill restores them.
@@ -171,7 +169,7 @@ Verified with a real PostgreSQL, fake connectors and no model, and in headless C
 - Document types and structure-aware splitting are line rules, not parsers. A rule file, manifest or OpenAPI
   description in an unusual shape is split by its format, as before; a Helm template's names may be template text.
 - An upload made before this release has no stored type until it is uploaded again, so a type filter does not find it.
-- With OpenSearch or Pinecone, type and time filters apply in the authoritative check, not in the index query, so
+- With Pinecone, type and time filters apply in the authoritative check, not in the index query, so
   search widens its candidates (up to 400) to fill the page.
 - Intents, service names and time windows are read by rules. A question phrased unlike the rules gets no signal,
   which leaves ranking as it was; it never filters anything.
@@ -183,15 +181,3 @@ Verified with a real PostgreSQL, fake connectors and no model, and in headless C
 ## Reranking
 
 Off by default. See [RERANKING.md](RERANKING.md) for what was measured. The container image has never been built, the service has never run on a cluster, and its quality numbers come from a small synthetic dataset with keyword candidates only.
-
-## OpenSearch (2026-11-02)
-
-- **Single node, single disk.** Persistence only. Nothing here survives loss of the mk4 host except what snapshots or PostgreSQL backups hold.
-- **The live cluster is still unauthenticated** until `docs/OPENSEARCH.md` is carried out. Its public read route and Dashboards, where enabled, bypass MOKS document access.
-- **Never run on mk4:** `moks-search`, its image, Argo CD hook, NetworkPolicy and probes as rendered, and the worker's probe. Enforcement of NetworkPolicy by kindnet is unproven.
-- **Snapshots to R2 are unverified.** The plugin, policy and restore ran against a filesystem repository only.
-- **The custom image is built but has never started a cluster.** CI builds it and confirms both plugins are listed; separately, the same plugins ran in the 3.9.0 tarball.
-- **Rankings differ from the original cluster,** because prose is stemmed and identifiers have their own field. No evaluation on real questions has been run, so no relevance gain is claimed.
-- **Lifecycle, classification and trust in the index** are as of the last write. PostgreSQL decides. Stale-content exclusion runs only in the final check, so it can cost candidates, within the bounded expansion.
-- **Not built:** an automatic scheduled restore drill.
-- **Dashboards for `moks-search`** is rendered and tested as Helm output only. It has never started, so its login, TLS against the private CA, `${VAR}` references and base path are unverified. It does not follow MOKS RBAC.
