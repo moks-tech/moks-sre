@@ -21,11 +21,14 @@ The `admin` role holds all of these. ⌘K finds every Settings page by name or b
 ## Features: turning on anomaly detection
 
 Anomaly detection is **disabled** by default and supports **disabled** and **shadow** only: in shadow it scores
-workloads and shows observations for people to judge, and never opens an incident, changes a severity or runs an
-action ([ML.md](ML.md)). Shadow mode shows nothing until a workload has an active model, so:
+workloads and nodes, groups related anomalies into correlated problems and offers them to investigations as leads, and
+never opens an incident, changes a severity or runs an action ([ML.md](ML.md)). Shadow mode shows nothing until a
+workload has an active model, so:
 
-1. Settings → Features → anomaly detection → **Train models** for a namespace (needs 7 days of history by default).
-2. Settings → Machine learning → Models: make a candidate that passed its gates **champion**.
+1. Settings → Features → anomaly detection → **Train models** for a namespace, or for the nodes (needs 7 days of
+   history by default). Seven algorithms are trained and compared; each cohort recommends one.
+2. Settings → Machine learning → Models: make a candidate that passed its gates **champion** (Health and Reproduce
+   from snapshot are in the same menu).
 3. Settings → Features → anomaly detection → **Change mode** → shadow, with a reason (audited).
 
 `MOKS_ML_DISABLED=true` (`ml.disabled` in Helm) forces every capability off whatever is saved here.

@@ -23,7 +23,7 @@ from ..scope import Scope
 K8S_NAME = r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$"
 K8S_NAME_RE = re.compile(K8S_NAME)
 # Tool "connectors" served by MOKS itself (no external system to configure).
-PSEUDO_CONNECTORS = {"knowledge"}
+PSEUDO_CONNECTORS = {"knowledge", "ml"}
 # Tool "connectors" that stand for any of several real connector types.
 ANY_OF_CONNECTORS = {"datastore": ("postgres", "redis")}
 

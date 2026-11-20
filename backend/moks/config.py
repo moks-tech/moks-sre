@@ -97,6 +97,19 @@ class Settings(BaseSettings):
     ml_anomaly_interval_minutes: int = Field(default=15, ge=5, le=240)
     ml_anomaly_max_flags_per_day: float = Field(default=3.0, ge=0.1, le=100)   # promotion gate on the validation period
     ml_anomaly_namespaces: str = ""            # "env:namespace,env:namespace" the scheduled training covers; empty trains nothing
+    ml_anomaly_rate_window_seconds: int = Field(default=300, ge=60, le=3600)   # rate() window for every counter feature; never below the step
+    ml_anomaly_lookback_hours: int = Field(default=24, ge=1, le=72)            # history read before the window for online detectors (rolling, EWMA, decomposition)
+    ml_anomaly_persist_points: int = Field(default=2, ge=1, le=12)             # a feature is flagged only when it stays past its threshold this many points in a row
+    ml_anomaly_min_synthetic_recall: float = Field(default=0.5, ge=0, le=1)    # promotion gate: share of faults injected into the validation data that are found
+    ml_anomaly_max_detection_delay_minutes: int = Field(default=45, ge=5, le=360)  # promotion gate: median delay on the injected faults
+    ml_anomaly_request_metric: str = "http_requests_total"                    # the application's request counter (the mesh's istio_requests_total is the fallback)
+    ml_anomaly_duration_metric: str = "http_request_duration_seconds_bucket"
+    ml_anomaly_queue_depth_metric: str = ""    # a gauge with namespace and pod labels; empty leaves queue_depth absent
+    ml_anomaly_db_connections_metric: str = ""  # a gauge with namespace and pod labels; empty leaves db_connections absent
+    ml_correlation_window_minutes: int = Field(default=30, ge=5, le=240)       # anomalies first flagged further apart than this are never grouped
+    ml_correlation_lookback_minutes: int = Field(default=120, ge=15, le=1440)  # how far back each tick regroups
+    ml_correlation_close_after_minutes: int = Field(default=60, ge=15, le=1440)  # a group with no new anomaly for this long is closed
+    ml_correlation_max_namespaces: int = Field(default=5, ge=1, le=40)         # context is read for at most this many namespaces per tick
     ml_artifact_store: Literal["postgres", "s3"] = "postgres"
     ml_artifact_bucket: str = ""
     ml_artifact_prefix: str = "moks/ml-artifacts/"

@@ -14,7 +14,7 @@ import pytest
 from sqlalchemy import func, select, update
 
 from moks.db import session_scope
-from moks.ml import anomaly, artifacts, baseline, features, iforest, registry, skill_rank
+from moks.ml import anomaly, artifacts, baseline, detectors, features, iforest, registry, skill_rank
 from moks.models import ActionPlan, AuditEvent, DetectionState, Incident, MaintenanceWindow, MLArtifact, MLCapability, MLModel, MLObservation
 from tests.conftest import login, make_env, make_user
 
@@ -26,29 +26,40 @@ def series_value(name: str, t: int, spike_after: int | None = None) -> float | N
     day = math.sin(2 * math.pi * (t % 86400) / 86400)
     jitter = ((t // STEP) * 7919 % 13) / 130  # deterministic noise
     spiking = spike_after is not None and t >= spike_after
+    ws = 200e6 + 20e6 * day
     return {
         "request_rate": 20 + 10 * day + jitter,
         "errors_rate": (0.2 + jitter / 10) * (40 if spiking else 1),
         "latency_p95": (0.12 + 0.03 * day + jitter / 100) * (6 if spiking else 1),
+        "cpu_usage": 0.2 + 0.05 * day + jitter / 100,
         "cpu_throttling": 0.02 + jitter / 100,
-        "memory_working_set": 200e6 + 20e6 * day,
-        "memory_limit": 512e6,
+        "memory_working_set": ws,
+        "memory_utilization": ws / 512e6,
         "restarts": 3.0,
-    }[name]
+    }.get(name)  # anything else (the mesh, p50/p99, network, the optional gauges) has no series here
 
 
 class FakePrometheus:
+    """Answers the exact v2 feature queries, and the sampling probe: one sample every 30 s for a base metric with
+    any series, none for a base metric whose every query is absent or has no series in this fake."""
+
     def __init__(self, namespace="shop", workloads=("payments",), spike_after=None, absent=(), fail=(), reset_at=None):
         self.qs = {v: k for k, v in features.queries(namespace).items()}
+        self.probes = {features.probe_query(sel): qs for sel, qs in features._bases(namespace, None).values()}
         self.workloads, self.spike_after, self.absent, self.fail, self.reset_at = workloads, spike_after, set(absent), set(fail), reset_at
         self.calls = []
 
+    def present(self, name):
+        return name not in self.absent and series_value(name, 0) is not None
+
     async def __call__(self, promql, a, b, step):
+        if features.is_probe(promql):
+            return ([{"metric": {}, "values": [[b.timestamp(), 120]]}] if any(self.present(q) or q in self.fail for q in self.probes[promql]) else []), True
         name = self.qs[promql]
         self.calls.append((name, a, b, step))
         if name in self.fail:
             raise RuntimeError("down")
-        if name in self.absent:
+        if not self.present(name):
             return [], True
         ts, t = [], int(a.timestamp())  # as Prometheus answers: from the requested start, end included
         while t <= b.timestamp():
@@ -94,13 +105,19 @@ def test_counter_resets_sparse_traffic_and_absent_telemetry_are_kept_apart():
     assert fr.values["restart_rate"] == [None, 12.0, 12.0, 12.0, 0.0]  # 6->1 is a reset: an increase of 1, never negative
     assert fr.quality["counter_resets"] == 1 and fr.quality["sparse_traffic_points"] == 1
     assert fr.values["memory_utilization"] == [None] * 5  # no limit, so no ratio
-    assert set(fr.quality["absent"]) == {"latency_p95", "cpu_throttling", "memory_utilization"}
+    assert {"latency_p95", "cpu_throttling", "memory_utilization", "queue_depth"} <= set(fr.quality["absent"])
+    assert "memory_working_set" not in fr.quality["absent"] and fr.quality["absent_reasons"]["memory_utilization"] == "no container has a memory limit"
 
 
 async def test_collection_is_chunked_below_the_point_cap_and_a_failed_query_is_named():
     prom = FakePrometheus(fail={"latency_p95"})
     frames = await features.collect(prom, "e", "shop", NOW - timedelta(days=1), NOW, STEP)
-    assert {c[0] for c in prom.calls} == set(features.queries("shop")) and all((b - a).total_seconds() // s + 1 <= 144 for _, a, b, s in prom.calls)
+    called = {c[0] for c in prom.calls}
+    skipped = {q for q in features.queries("shop") if q not in called}
+    assert called and skipped and all((b - a).total_seconds() // s + 1 <= 144 for _, a, b, s in prom.calls)
+    # only base metrics the probe found with no series at all are skipped: the mesh and the network counters here
+    assert skipped == {q for q in features.queries("shop") if q.startswith("mesh_")} | {"network_errors"}
+    assert {"latency_p50", "latency_p99"} <= called  # no series of their own, but their base metric has some: still asked
     assert "latency_p95" in frames[0].quality["incomplete_queries"] and "latency_p95" in frames[0].quality["absent"]
     with pytest.raises(ValueError):
         features.queries('shop"} or vector(1) #')
@@ -131,7 +148,7 @@ async def test_the_isolation_forest_scores_outliers_higher_and_is_deterministic(
     normal = iforest.score(a, rows[100])
     odd = iforest.score(a, [r * 10 if r else r for r in rows[100]])
     assert odd > normal and odd > a["threshold"]
-    assert iforest.score(a, [None] * 6) is None  # nothing to score is not ordinary
+    assert iforest.score(a, [None] * len(features.FEATURES)) is None  # nothing to score is not ordinary
     with pytest.raises(ValueError):
         iforest.fit(rows[:5])
 
@@ -140,7 +157,8 @@ async def test_the_isolation_forest_scores_outliers_higher_and_is_deterministic(
 
 
 def test_artifacts_refuse_tampering_mismatches_and_pickles():
-    state = {f: {"week": {}, "day": {}, "all": [1.0, 0.1], "samples": 10} for f in features.FEATURES}
+    state = {"features": {f: {"week": {}, "day": {}, "all": [1.0, 0.1], "samples": 10} for f in features.FEATURES[:4]},
+             "thresholds": {f: 3.5 for f in features.FEATURES[:4]}, "persist": 2}
     body, sha = artifacts.encode(algorithm="seasonal_baseline", cohort="e/n/w", feature_schema=features.FEATURE_SCHEMA, features=list(features.FEATURES), step=STEP, state=state)
     ok = dict(algorithm="seasonal_baseline", feature_schema=features.FEATURE_SCHEMA, features=list(features.FEATURES), step=STEP)
     assert artifacts.decode(body, sha, **ok)["state"] == state
@@ -155,7 +173,7 @@ def test_artifacts_refuse_tampering_mismatches_and_pickles():
         with pytest.raises(artifacts.ArtifactError, match=why.split(" ", 1)[1] if why.startswith("s ") else why):
             artifacts.decode(b, h, **exp)
     future = json.loads(body)
-    future["library"]["moks_ml"] = "2.0"
+    future["library"]["moks_ml"] = "3.0"
     fb = json.dumps(future, sort_keys=True, separators=(",", ":")).encode()
     with pytest.raises(artifacts.ArtifactError, match="this build reads"):
         artifacts.decode(fb, __import__("hashlib").sha256(fb).hexdigest(), **ok)
@@ -193,28 +211,32 @@ async def test_training_needs_representative_history():
 
 async def test_absent_telemetry_is_not_modeled_as_healthy():
     env, _ = await env_with_admin()
-    out = await anomaly.train(env, "shop", query=FakePrometheus(absent={"request_rate", "errors_rate", "latency_p95", "cpu_throttling", "memory_limit"}), now=NOW)
+    out = await anomaly.train(env, "shop", query=FakePrometheus(absent=set(features.queries("shop")) - {"memory_working_set"}), now=NOW)
     c = out["cohorts"][0]
     assert c["status"] == "insufficient_history" and c["history_days"] == 0  # one feature at a time is not usable history
     assert {"request_rate", "error_ratio", "latency_p95", "cpu_throttling", "memory_utilization"} <= set(c["quality"]["absent"])
+    assert "no series" in c["quality"]["absent_reasons"]["request_rate"]  # the probe said why
 
 
-async def trained(env):
-    out = await anomaly.train(env, "shop", query=FakePrometheus(), now=NOW - timedelta(hours=2))
+async def trained(env, algorithms=("seasonal_baseline", "isolation_forest")):
+    out = await anomaly.train(env, "shop", query=FakePrometheus(), now=NOW - timedelta(hours=2), algorithms=algorithms)
     models = {m["algorithm"]: m for m in out["cohorts"][0]["models"]}
-    assert set(models) == {"seasonal_baseline", "isolation_forest"} and all(m["status"] == "candidate" for m in models.values())
+    assert set(models) == set(algorithms) and all(m["status"] == "candidate" for m in models.values()), out["cohorts"][0]
     return models
 
 
 async def test_training_registers_evaluated_candidates_and_promotion_is_explicit_and_gated():
     env, _ = await env_with_admin()
-    models = await trained(env)
+    models = await trained(env, detectors.NAMES)  # every algorithm, side by side, on the same data
     b = models["seasonal_baseline"]
-    assert {g["name"] for g in b["metrics"]["gates"]} == {"history", "validation_windows", "flags_per_day", "feature_coverage"}
+    assert {g["name"] for g in b["metrics"]["gates"]} == {"history", "validation_windows", "flags_per_day", "feature_coverage", "synthetic_recall", "detection_delay", "reproducible"}
     assert b["metrics"]["detection"]["incidents"] == 0 and "cannot be measured" in b["metrics"]["detection"]["note"]  # no labels, so no recall is claimed
+    assert all(next(g for g in m["metrics"]["gates"] if g["name"] == "reproducible")["passed"] for m in models.values())
+    assert all(m["metrics"]["synthetic"]["faults"] > 0 for m in models.values())  # the same injected faults for each
     async with session_scope() as db:
         m = await db.get(MLModel, uuid.UUID(b["id"]))
-        assert m.status == "candidate" and m.artifact_sha256 and m.provenance["commit"] and m.dataset_version.startswith("prometheus:")
+        assert m.status == "candidate" and m.artifact_sha256 and m.provenance["commit"] and m.dataset_version.startswith("prometheus#")
+        assert m.training["snapshot_sha256"] and m.training["embargo_points"] >= 1 and m.params["pins"] == {"traffic": "app"}
         await set_mode("anomaly_detection", "disabled")
         with pytest.raises(ValueError, match="disabled"):
             await registry.promote(db, m, None, "champion")
@@ -234,6 +256,8 @@ async def test_one_champion_per_cohort_and_rollback_restores_the_previous_one():
         async with session_scope() as db:
             a = await db.get(MLModel, uuid.UUID(first["seasonal_baseline"]["id"]))
             b = await db.get(MLModel, uuid.UUID(second["isolation_forest"]["id"]))
+            for m in (a, b):  # this test is about one champion and rollback; whether these two pass their gates is tested elsewhere
+                m.metrics = {**m.metrics, "gates": [{"name": "stand-in", "passed": True}]}
             await registry.promote(db, a, None, "champion")
             out = await registry.promote(db, b, None, "champion")
             assert out["replaced"]["id"] == str(a.id)
@@ -252,6 +276,7 @@ async def champion_for(env):
     models = await trained(env)
     async with session_scope() as db:
         m = await db.get(MLModel, uuid.UUID(models["seasonal_baseline"]["id"]))
+        assert registry.gates_passed(m)[0], m.metrics["gates"]  # the seasonal model passes every gate on this data, injected faults included
         await registry.promote(db, m, None, "champion")
         return m.id, m.cohort, m.artifact_sha256
 

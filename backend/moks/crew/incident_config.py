@@ -32,9 +32,9 @@ TOOLS_BY_AGENT: dict[str, list[str]] = {
     "kubernetes": ["workload_pods", "describe_pod", "recent_events", "pod_logs", "pod_metrics", "node_health", "autoscaling", "storage", "services",
                    "namespace_health", "workload_status"],
     "observability": ["service_signals", "search_logs", "trace_logs", "pod_metrics", "metric", "firing_alerts", "grafana_alerts", "dashboards",
-                      "datastores", "postgres_health", "redis_health"],
+                      "datastores", "postgres_health", "redis_health", "ml_signals"],
     "change": ["rollout_history", "changed_commits", "deployed_commit", "config_audit", "gitops_status", "recent_events"],
-    "knowledge": ["search_runbooks", "similar_incidents"],
+    "knowledge": ["search_runbooks", "similar_incidents", "incident_history"],
     "reviewer": [],  # evidence_list and evidence_detail read the registry only and are always there
     "rca": [],
 }
@@ -126,12 +126,14 @@ def defaults() -> dict[str, Any]:
                                           "previous=true for a crashing pod), events, scheduling, node pressure, autoscaling and storage.",
                            "expected_output": "Findings as JSON, each citing its evidence."},
             "observability": {"description": "Incident: {target}.\nMeasure error rate, latency and throughput (service_signals), saturation (pod_metrics), search "
-                                             "the logs for errors, and check the dependencies the logs point at (datastores, queues via metric).",
+                                             "the logs for errors, and check the dependencies the logs point at (datastores, queues via metric). ml_signals "
+                                             "shows statistical anomalies and the correlated group the workload is in: leads to confirm with the live tools.",
                               "expected_output": "Findings as JSON, each citing its evidence."},
             "change": {"description": "Incident: {target}.\nFind rollouts and image changes, commits (also under deploy/, helm/ or terraform/), configuration "
                                       "problems and Argo CD syncs in the change window.",
                        "expected_output": "Findings as JSON: each change with its time and evidence."},
-            "knowledge": {"description": "Incident: {target}.\nSearch for similar past incidents and for runbooks that match the symptoms in the case file.",
+            "knowledge": {"description": "Incident: {target}.\nSearch for similar past incidents and for runbooks that match the symptoms in the case file. "
+                                        "incident_history shows recurring failures of this workload and resolutions that worked before.",
                           "expected_output": "Findings as JSON: each lead with its evidence."},
             "hypotheses": {"description": "Incident: {target}.\nFrom the findings in the case file, write the root-cause hypotheses. For each, cite what supports "
                                           "and what contradicts it, and what evidence would settle it.",

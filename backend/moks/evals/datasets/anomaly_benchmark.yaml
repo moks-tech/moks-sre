@@ -1,0 +1,16 @@
+name: anomaly_benchmark
+kind: anomaly
+description: >-
+  Every anomaly detector and the correlation engine on synthetic incidents with known answers (moks/ml/benchmark.py):
+  a small cluster with daily and weekly cycles, telemetry gaps and benign rollouts, and labeled faults (spikes, level
+  shifts, a memory leak, a traffic drop, a database slowdown reaching its callers, a node under memory pressure).
+  It shows the code finds what it was built to find. It is not evidence about real workloads; per-cohort training
+  measures each model on that workload's own data instead.
+gates:
+  min_f1: 0.8
+  max_fpr: 0.02
+  min_correlation_f1: 0.8
+cases:
+  - {seed: 7}
+  - {seed: 11}
+  - {seed: 23}

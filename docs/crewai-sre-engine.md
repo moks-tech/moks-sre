@@ -100,9 +100,9 @@ own fenced checkpoint row instead. CrewAI still runs every agent: its ReAct loop
 |---|---|---|---|
 | 1-2 plan | Incident commander | `namespace_health`, `workload_status`, `firing_alerts` | severity, affected resources, objectives |
 | 3 kubernetes | Kubernetes investigator | pods, `describe_pod`, events, `pod_logs`, `pod_metrics`, `node_health`, `autoscaling` (HPA, KEDA), `storage` (PVCs), `services`, namespace health, workload status | findings |
-| 4 observability | Observability investigator | `service_signals` (error ratio, p50/p95/p99, throughput), `search_logs`, `trace_logs`, `pod_metrics`, `metric` (namespace pinned), Prometheus and Grafana alerts, `dashboards`, `datastores`, `postgres_health`, `redis_health` | findings |
+| 4 observability | Observability investigator | `service_signals` (error ratio, p50/p95/p99, throughput), `search_logs`, `trace_logs`, `pod_metrics`, `metric` (namespace pinned), Prometheus and Grafana alerts, `dashboards`, `datastores`, `postgres_health`, `redis_health`, `ml_signals` (shadow-mode anomalies and the correlated group, [ML.md](ML.md#in-investigations-and-the-crewai-crew)) | findings; an ML signal alone grades as a possible explanation, never a confirmed observation |
 | 5 change | Change analyst | `rollout_history`, `changed_commits` (change window, optional path), `deployed_commit`, `config_audit`, `gitops_status` (Argo CD), events | findings |
-| 6 knowledge | Historical knowledge analyst | `search_runbooks` (RAG under the person's access, target namespace), `similar_incidents` | findings (documentation, never live state) |
+| 6 knowledge | Historical knowledge analyst | `search_runbooks` (RAG under the person's access, target namespace), `similar_incidents`, `incident_history` (recurring failures and what worked, reviewed incidents only) | findings (documentation, never live state) |
 | 7 hypotheses | Incident commander | `evidence_list`, `evidence_detail` (registry only) | up to five hypotheses citing findings or evidence |
 | 8-9 review | Evidence reviewer | `evidence_list`, `evidence_detail` | verdicts, conflicts, missing telemetry, evidence requests |
 | 10 rca | Root cause analyst | `evidence_list`, `evidence_detail` | summary, root cause by hypothesis id, timeline, impact, next steps |
