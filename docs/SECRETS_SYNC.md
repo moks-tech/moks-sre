@@ -364,7 +364,7 @@ digest key. Restart the executor afterwards.
 
 ### 4. The connector
 
-Admin → Connectors → AWS Secrets Manager, or seed:
+Settings → Connectors → AWS Secrets Manager, or seed:
 
 ```json
 {"type": "aws_secrets", "name": "aws-secrets", "config": {

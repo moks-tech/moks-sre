@@ -71,11 +71,11 @@ function NavList({ collapsed = false, label }: { collapsed?: boolean; label: str
   const [closed, toggle] = useClosedGroups(titleFor(loc.pathname).group);
   const carry = scopeSearch(loc.search); // scoped pages keep the environment and namespace
   const group = (g: NavGroup) => {
-    const open = collapsed || !closed.has(g.label);
+    const open = collapsed || g.flat || !closed.has(g.label);
     const id = `${label}-${g.label}`.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     return (
       <div key={g.label} role="group" aria-label={g.label}>
-        {!collapsed && <button type="button" className="nav-group" aria-expanded={open} aria-controls={id} onClick={() => toggle(g.label)}><span>{g.label}</span><Icon name="chevron" size={14} /></button>}
+        {!collapsed && !g.flat && <button type="button" className="nav-group" aria-expanded={open} aria-controls={id} onClick={() => toggle(g.label)}><span>{g.label}</span><Icon name="chevron" size={14} /></button>}
         {open && <div id={id} className="nav-items">
           {g.items.map((i) => (
             <NavLink key={i.to} to={{ pathname: i.to, search: i.scoped ? carry : "" }} end={i.end} aria-label={collapsed ? i.label : undefined} data-tip={collapsed ? i.label : undefined}>

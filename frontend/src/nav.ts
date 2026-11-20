@@ -4,8 +4,8 @@ export type Can = (perm: string) => boolean;
 
 // scoped: links keep env/ns. keywords: other words people search for in the command palette.
 export interface NavItem { to: string; label: string; icon: string; end?: boolean; show: (can: Can) => boolean; scoped?: boolean; keywords?: string }
-// bottom: listed under the main groups, at the foot of the sidebar.
-export interface NavGroup { label: string; items: NavItem[]; bottom?: boolean }
+// bottom: listed under the main groups, at the foot of the sidebar. flat: its items without a group heading.
+export interface NavGroup { label: string; items: NavItem[]; bottom?: boolean; flat?: boolean }
 
 const read = (can: Can) => can("investigation.read");
 const live = (can: Can) => can("explorer.read");
@@ -40,20 +40,53 @@ export const NAV: NavGroup[] = [
     { to: "/knowledge/review", label: "Knowledge review", icon: "check", keywords: "proposals feedback quarantine", show: (can) => can("knowledge.review") || can("skills.review") },
     { to: "/skills", label: "SRE skills", icon: "spark", keywords: "playbooks", show: read },
   ] },
-  { label: "Admin", bottom: true, items: [
-    { to: "/audit", label: "Audit log", icon: "shield", keywords: "history who changed", show: (can) => can("audit.read") },
-    { to: "/admin/environments", label: "Environments", icon: "layers", keywords: "clusters namespaces", show: (can) => can("admin.policies") },
-    { to: "/admin/connectors", label: "Connectors", icon: "plug", keywords: "integrations data sources prometheus loki git", show: (can) => can("admin.connectors") },
-    { to: "/admin/backup-storage", label: "Backup storage", icon: "cloud", keywords: "r2 bucket", show: (can) => can("admin.connectors") },
-    { to: "/admin/llm", label: "LLM providers", icon: "cpu", keywords: "model ai openai anthropic ollama", show: (can) => can("admin.llm") },
-    { to: "/admin/users", label: "Users & roles", icon: "users", keywords: "rbac roles permissions access", show: (can) => can("admin.users") },
-    { to: "/evals", label: "Evaluation", icon: "chart", keywords: "evaluation benchmark", show: (can) => can("admin.policies") },
-    { to: "/admin/ml", label: "Machine learning", icon: "cpu", keywords: "models training", show: (can) => can("ml.admin") || can("learning.review") || can("learning.export") },
+  // One entry at the foot of the sidebar; Settings has its own submenu (SETTINGS below).
+  { label: "Settings", bottom: true, flat: true, items: [
+    { to: "/settings", label: "Settings", icon: "gear", keywords: "admin administration configuration", show: (can) => settingsFor(can).length > 0 },
   ] },
 ];
 
-/** Groups closed until someone opens them: Admin is rarely needed and would push the rest below the fold. */
-export const CLOSED_BY_DEFAULT = ["Admin"];
+/** The Settings submenu. Each page still checks its own permission, and the backend enforces it again. */
+export const SETTINGS: NavGroup[] = [
+  { label: "General", items: [
+    { to: "/settings", label: "Overview", icon: "grid", keywords: "settings summary", end: true, show: () => true },
+    { to: "/settings/features", label: "Features", icon: "spark2", keywords: "anomaly detection similar incidents skill recommendations shadow switch enable disable", show: (can) => can("ml.admin") },
+    { to: "/settings/runtime", label: "Limits & schedules", icon: "lines", keywords: "budgets rate limits crewai timeout anomaly interval retention", show: (can) => can("admin.settings") },
+    { to: "/settings/deployment", label: "Deployment", icon: "cube", keywords: "helm environment variables configuration values", show: (can) => can("admin.settings") },
+  ] },
+  { label: "Access", items: [
+    { to: "/settings/users", label: "Users & roles", icon: "users", keywords: "rbac roles permissions access", show: (can) => can("admin.users") },
+  ] },
+  { label: "Infrastructure", items: [
+    { to: "/settings/environments", label: "Environments", icon: "layers", keywords: "clusters namespaces detection", show: (can) => can("admin.policies") },
+    { to: "/settings/connectors", label: "Connectors", icon: "plug", keywords: "integrations data sources prometheus loki git", show: (can) => can("admin.connectors") },
+    { to: "/settings/backup-storage", label: "Backup storage", icon: "cloud", keywords: "r2 bucket", show: (can) => can("admin.connectors") },
+  ] },
+  { label: "AI", items: [
+    { to: "/settings/llm", label: "LLM providers", icon: "cpu", keywords: "model ai openai anthropic ollama", show: (can) => can("admin.llm") },
+    { to: "/settings/ml", label: "Machine learning", icon: "flask", keywords: "models training promote datasets", show: (can) => can("ml.admin") || can("learning.review") || can("learning.export") },
+    { to: "/settings/crewai", label: "CrewAI", icon: "spark", keywords: "run history transcripts import export", show: (can) => can("crewai.admin") },
+    { to: "/settings/evaluation", label: "Evaluation", icon: "chart", keywords: "evaluation benchmark", show: (can) => can("admin.policies") },
+  ] },
+  { label: "Compliance", items: [
+    { to: "/settings/audit", label: "Audit log", icon: "shield", keywords: "history who changed", show: (can) => can("audit.read") },
+  ] },
+];
+
+/** Settings pages this person may open, Overview aside: with none, Settings is not listed at all. */
+export function settingsFor(can: Can): NavGroup[] {
+  const groups = SETTINGS.map((g) => ({ ...g, items: g.items.filter((i) => i.show(can)) })).filter((g) => g.items.length);
+  return groups.some((g) => g.items.some((i) => i.to !== "/settings")) ? groups : [];
+}
+
+/** Where the old admin addresses went, so bookmarks and links in older messages keep working. */
+export const MOVED: Record<string, string> = {
+  "/admin/users": "/settings/users", "/admin/environments": "/settings/environments", "/admin/connectors": "/settings/connectors",
+  "/admin/backup-storage": "/settings/backup-storage", "/admin/llm": "/settings/llm", "/admin/ml": "/settings/ml", "/evals": "/settings/evaluation", "/audit": "/settings/audit",
+};
+
+/** Groups closed until someone opens them. */
+export const CLOSED_BY_DEFAULT: string[] = [];
 
 export function navFor(can: Can): NavGroup[] {
   return NAV.map((g) => ({ ...g, items: g.items.filter((i) => i.show(can)) })).filter((g) => g.items.length);
@@ -62,6 +95,10 @@ export function navFor(can: Can): NavGroup[] {
 export function titleFor(path: string): { group?: string; label: string } {
   if (path.startsWith("/conversations/")) return { group: "Investigate", label: "Investigations" };
   if (path.startsWith("/investigations/")) return { group: "Investigate", label: "Investigation" };
+  if (path === "/settings" || path.startsWith("/settings/")) {
+    for (const g of SETTINGS) for (const i of g.items) if (i.end ? path === i.to : path === i.to || path.startsWith(`${i.to}/`)) return { group: "Settings", label: i.label };
+    return { group: "Settings", label: "Settings" };
+  }
   for (const g of NAV) for (const i of g.items) {
     if (i.end ? path === i.to : path === i.to || path.startsWith(`${i.to}/`)) return { group: g.label, label: i.label };
   }

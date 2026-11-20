@@ -159,7 +159,7 @@ on each connector.
 
 ## 8. LLM provider (optional; MOKS works rule-based without one)
 
-**Administration → LLM providers → Add** sets the provider, model, budget and prices, then
+**Settings → LLM providers → Add** sets the provider, model, budget and prices, then
 **Test** and **Activate** it. Credentials:
 
 - OpenAI or Gemini: `kubectl -n moks patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_OPENAI_API_KEY":"..."}}'`,

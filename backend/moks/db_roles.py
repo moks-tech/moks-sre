@@ -24,7 +24,7 @@ _API_RW = ("learning_records", "learning_judgments", "learning_datasets", "learn
            "incidents", "incident_events", "jobs", "knowledge_sources", "documents", "chunks", "embedding_indexes", "conversations", "conversation_participants", "conversation_reads", "knowledge_sync_items", "document_index_state", "skill_versions", "skill_generations",
            "conversation_messages", "backup_stores", "database_backups", "database_backup_schedules", "skill_policies", "detection_policies", "detection_states", "maintenance_windows", "saved_queries",
            "diagnostic_sessions", "diagnostic_commands", "alert_events", "eval_runs", "index_outbox", "llm_reservations", "component_versions",
-           "crew_runs", "crew_run_counters", "crew_schedules", "crew_configs", "crew_settings")
+           "crew_runs", "crew_run_counters", "crew_schedules", "crew_configs", "crew_settings", "runtime_settings")
 _WORKER_RW = ("learning_records", "ml_models", "ml_artifacts", "ml_observations", "search_backend_status", "llm_usage", "investigations", "investigation_checkpoints", "investigation_events", "evidence", "incidents", "incident_events", "jobs", "knowledge_sources", "documents", "chunks",
               "embedding_indexes", "knowledge_sync_items", "document_index_state", "skill_versions", "skill_generations", "conversations", "conversation_participants", "conversation_messages", "detection_runs", "detection_states", "alert_events", "eval_runs", "index_outbox", "llm_reservations", "component_versions",
               "crew_runs", "crew_run_counters", "crew_run_steps", "crew_run_logs", "crew_run_calls")
@@ -36,7 +36,7 @@ TABLES = ("learning_records", "learning_judgments", "learning_datasets", "learni
           "saved_queries", "index_outbox", "llm_reservations", "component_versions", "action_plans", "approvals", "diagnostic_sessions", "diagnostic_commands", "terminal_sessions", "alert_events", "eval_runs", "alembic_version",
           "secret_mappings", "secret_inventory", "secret_inventory_scopes", "secret_plans", "secret_plan_items", "secret_plan_approvals", "secret_sync_schedules",
           "secret_schedule_approvals", "crew_runs", "crew_run_counters", "crew_run_steps", "crew_run_logs", "crew_run_calls", "crew_schedules", "crew_configs",
-          "crew_settings")
+          "crew_settings", "runtime_settings")
 # The gateway signs people in and runs shells, so it sees only that. Its session updates are the two columns load() touches.
 _TERMINAL_READS = {"users", "role_bindings", "sessions", "environments", "terminal_sessions", "alembic_version"}
 SECRETS = {"secret_mappings", "secret_inventory", "secret_inventory_scopes", "secret_plans", "secret_plan_items", "secret_plan_approvals", "secret_sync_schedules",

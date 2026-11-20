@@ -1386,3 +1386,13 @@ class CrewSetting(Base):
     value: Mapped[dict] = mapped_column(JSONB)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class RuntimeSetting(Base):
+    """An administrator's value for one deployment setting (moks/runtime_settings.py). No row: the Helm value applies."""
+    __tablename__ = "runtime_settings"
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    value: Mapped[dict] = mapped_column(JSONB)  # {"value": ...}, so null and booleans store the same way as numbers
+    reason: Mapped[str] = mapped_column(Text, default="")
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

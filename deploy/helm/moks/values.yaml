@@ -96,7 +96,7 @@ crewai:
   excerptChars: 2000
   logLines: 100
 
-# Machine learning (docs/ML.md). Capability modes (disabled, shadow, enabled) are switched in the admin screen
+# Machine learning (docs/ML.md). Capability modes (disabled, shadow, enabled) are switched in Settings > Features
 # and stored in PostgreSQL; these bound the work. ml.disabled is the deploy-time kill switch for all of it.
 ml:
   disabled: false
@@ -118,7 +118,7 @@ ml:
   artifactEndpoint: ""
   artifactRegion: ""
   training:
-    enabled: false          # the offline CronJob; an ml_admin can also start one run from the admin screen
+    enabled: false          # the offline CronJob; an ml_admin can also start one run from Settings > Features
     suspend: false
     schedule: "17 3 * * 0"  # weekly, outside the backup window
     activeDeadlineSeconds: 3600

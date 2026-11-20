@@ -58,6 +58,8 @@ export default function Overview() {
 }
 
 function EnvCard({ env, live }: { env: EnvOverview; live: boolean }) {
+  const { can } = useAuth();
+  const needsTest = env.connectors.filter((c) => c.enabled && c.last_test_ok !== true).length;
   const [health, setHealth] = useState<any>();
   const [error, setError] = useState<unknown>();
   const inFlight = useRef(false);
@@ -107,6 +109,9 @@ function EnvCard({ env, live }: { env: EnvOverview; live: boolean }) {
           ))}
           {!env.connectors.length && <span className="muted small">none configured</span>}
         </div>
+        {can("admin.connectors") && (needsTest > 0 || !env.connectors.length) && <div className="small" style={{ marginTop: 6 }}>
+          <Link to="/settings/connectors">{env.connectors.length ? `${needsTest} untested or failing: test them in Settings → Connectors` : "Add connectors in Settings → Connectors"}</Link>
+        </div>}
       </div>
       <ErrorBox error={error} />
       {!health && !error && <Skeleton rows={2} label="Checking live health" />}

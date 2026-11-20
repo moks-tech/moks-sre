@@ -23,7 +23,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from . import __version__, errors, jobs, versions
-from .api import actions, admin, alerts, assist, backups, proposals, conversations, crewai, detections, diagnostics, environments, evals, explorer, finops, incidents, investigations, knowledge, knowledge_explorer, logs, metrics, ml, multi, secrets, skills
+from .api import actions, admin, alerts, assist, backups, proposals, conversations, crewai, detections, diagnostics, environments, evals, explorer, finops, incidents, investigations, knowledge, knowledge_explorer, logs, metrics, ml, multi, secrets, settings, skills
 from .auth import routes as auth_routes
 from .auth.deps import get_auth
 from .auth.sessions import AuthContext
@@ -130,7 +130,7 @@ def create_app() -> FastAPI:
     router.include_router(explorer.router)
     router.include_router(admin.router)
     for extra in (incidents, knowledge, knowledge_explorer, finops, actions, diagnostics, assist, alerts, evals, skills, multi, metrics, logs, detections, conversations, backups, proposals, ml, secrets,
-                  crewai):
+                  crewai, settings):
         router.include_router(extra.router)
 
     errors.install(app)

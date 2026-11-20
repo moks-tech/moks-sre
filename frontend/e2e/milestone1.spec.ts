@@ -146,14 +146,15 @@ test("Kubernetes filters and scope come back from the URL, long names stay on on
   await expect(page.getByTestId("rt-row").first().locator("dl")).toContainText("Namespace");
 });
 
-test("a viewer sees no Admin, and a direct Admin URL explains the denial", async ({ page }) => {
+test("a viewer sees no Settings, and a direct Settings URL explains the denial", async ({ page }) => {
   await page.setViewportSize(desktop);
   await signIn(page, VIEWER);
   await page.goto("/moks/");
   await expect(page.getByRole("group", { name: "Investigate" })).toBeVisible();
-  await expect(page.getByRole("group", { name: "Admin" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Settings" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Users & roles" })).toHaveCount(0);
-  await page.goto("/moks/admin/users");
+  await page.goto("/moks/admin/users"); // the old address moves to Settings
+  await expect(page).toHaveURL(/\/moks\/settings\/users$/);
   await expect(page.getByRole("alert")).toContainText("You don't have access to this page");
   const api = await page.request.get("/moks/api/admin/users");
   expect(api.status()).toBe(403); // the server refuses it too; hiding it is only a convenience

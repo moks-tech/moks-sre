@@ -284,6 +284,7 @@ export function Connectors() {
   const [editing, setEditing] = useState<string | null>(null);
   const [tests, setTests] = useState<Record<string, any>>({});
   const [found, setFound] = useState<any>(null);
+  const [testingAll, setTestingAll] = useState(false);
   const a = useAction();
   const connectors: any[] = list.data ?? [];
   const activeEnv = environment || envs.data?.[0]?.name;
@@ -300,6 +301,7 @@ export function Connectors() {
   }
   const clash = duplicateConnector(connectors, activeEnv, form.name, editing);
   const gaps = (envs.data ?? []).flatMap((e) => missingSources(connectors, e.name).map((r) => ({ environment: e.name, ...r })));
+  const untested = connectors.filter((c) => c.enabled && c.implemented !== false && c.last_test_ok == null).length;
 
   async function test(id: string, name: string) {
     setTests((t) => ({ ...t, [id]: { busy: true } }));
@@ -307,6 +309,22 @@ export function Connectors() {
     setTests((t) => ({ ...t, [id]: r }));
     toast(`${name}: ${r.message}`, r.ok ? "ok" : "bad");
     list.reload();
+  }
+  /** One at a time, so a slow or failing source never hides behind another, then one summary. */
+  async function testAll() {
+    const targets = connectors.filter((c) => c.enabled && c.implemented !== false);
+    setTestingAll(true);
+    let passed = 0;
+    for (const c of targets) {
+      setTests((t) => ({ ...t, [c.id]: { busy: true } }));
+      const r = await api<any>(`/admin/connectors/${c.id}/test`, { method: "POST" }).catch((e) => ({ ok: false, message: e.message }));
+      setTests((t) => ({ ...t, [c.id]: r }));
+      if (r.ok) passed += 1;
+    }
+    setTestingAll(false);
+    list.reload();
+    const failed = targets.length - passed;
+    toast(failed ? `${passed} of ${targets.length} connectors passed; ${failed} failed. Each failure's message is in Test result.` : passed === 1 ? "The connector passed." : `All ${passed} connectors passed.`, failed ? "bad" : "ok");
   }
   function add(source: string, env?: string) {
     a.clear();
@@ -340,6 +358,7 @@ export function Connectors() {
     <>
       <PageHead title="Connectors" sub="Live data sources per environment. Credentials are references to mounted Secrets, never stored here.">
         <button className="ghost" onClick={discover} disabled={!activeEnv || a.busy}>Discover databases</button>
+        <button className="ghost" onClick={testAll} disabled={testingAll || !connectors.some((c) => c.enabled && c.implemented !== false)}>{testingAll ? "Testing…" : untested ? `Test all (${untested} untested)` : "Test all"}</button>
         <button onClick={() => add("prometheus")}>Add connector</button>
       </PageHead>
       {found && <div className="card stack" style={{ marginBottom: 14 }}>

@@ -77,7 +77,7 @@ export function Secrets() {
         {scope.error ? <ErrorBox error={scope.error} onRetry={scope.reload} /> : null}
         {scope.data?.discovery && <p className="small muted">Last discovered <Time iso={scope.data.discovery.last_at} />
           {scope.data.discovery.interval_minutes > 0 ? ` · the executor lists every synced namespace every ${every(scope.data.discovery.interval_minutes)} on its own` : " · discovery runs only when someone asks"}</p>}
-        {scope.data && !scope.data.aws.length && <StateView kind="empty" title="No AWS Secrets Manager connector" why={`${env} has no aws_secrets connector.`} next={<>An administrator adds one on <Link to="/admin/connectors">Connectors</Link>.</>} />}
+        {scope.data && !scope.data.aws.length && <StateView kind="empty" title="No AWS Secrets Manager connector" why={`${env} has no aws_secrets connector.`} next={<>An administrator adds one on <Link to="/settings/connectors">Connectors</Link>.</>} />}
         {scope.data && f.tab === "inventory" && <Inventory env={env} scope={scope.data} />}
         {scope.data && f.tab === "mappings" && <Mappings env={env} scope={scope.data} onScheduled={() => setF({ tab: "schedules" })} />}
         {scope.data && f.tab === "schedules" && <Schedules env={env} scope={scope.data} />}
