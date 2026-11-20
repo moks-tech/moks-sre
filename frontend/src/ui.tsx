@@ -232,6 +232,7 @@ const ICONS: Record<string, string> = {
   layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5", plug: "M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4", cloud: "M7 18a4 4 0 0 1 0-8 5 5 0 0 1 9.6-1A4.5 4.5 0 0 1 17 18z",
   cpu: "M7 7h10v10H7zM10 3v4M14 3v4M10 17v4M14 17v4M3 10h4M3 14h4M17 10h4M17 14h4", users: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21a7 7 0 0 1 14 0M16 3.5a4 4 0 0 1 0 7.5M18 15a7 7 0 0 1 4 6",
   flask: "M10 3h4M11 3v6l-6 10a1.5 1.5 0 0 0 1.3 2h11.4a1.5 1.5 0 0 0 1.3-2l-6-10V3", menu: "M4 6h16M4 12h16M4 18h16", more: "M5 12h.01M12 12h.01M19 12h.01", back: "M15 6l-6 6 6 6", filter: "M4 6h16M7 12h10M10 18h4", spark2: "M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z", close: "M6 6l12 12M18 6L6 18", collapse: "M15 6l-6 6 6 6", expand: "M9 6l6 6-6 6",
+  refresh: "M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5",
 };
 
 export function Icon({ name, size = 18 }: { name: string; size?: number }) {
