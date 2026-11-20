@@ -136,14 +136,13 @@ async def start_run(request: Request, ctx: AuthContext, db: AsyncSession, flow: 
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     if draft is not None:
-        errors, _ = crew_config.check(draft)
+        errors, _ = crew_config.check(draft, crew_config.crew_of(flow))
         if errors:
             raise HTTPException(422, "The crew configuration does not pass its checks: " + "; ".join(f"{e['field']}: {e['message']}" for e in errors[:3]))
     block = await console.queue_block(db, flow, draft)
-    question = clean.get("question") or f"Why is {clean['kind']} {clean['workload']} in namespace {clean['namespace']} unhealthy?"
+    question = clean.get("question") or crew_config.default_question(flow, clean)
     inner = CreateIn(question=question, environment=clean["environment"], namespace=clean["namespace"], minutes=clean.get("minutes"))
-    out = await start_investigation(inner, request, ctx, db, crewai={"workload": clean["workload"], "kind": clean["kind"], "trigger": trigger,
-                                                                     **{k: v for k, v in block.items() if k != "config_digest"}})
+    out = await start_investigation(inner, request, ctx, db, crewai=crew_config.request_block(clean, block, trigger=trigger))
     run = await console.record_run(db, uuid.UUID(out["id"]), flow=flow, trigger=trigger, inputs=clean, created_by=ctx.user.id, block=block,
                                    schedule_id=schedule_id, rerun_of=rerun_of)
     return {**out, "run_number": run.run_number, "flow": flow, "trigger": trigger}
@@ -207,9 +206,20 @@ async def runs(flow: str | None = None, status: str | None = None, trigger: str 
             "active": sum(1 for r in rows if r[1].status in ("queued", "running")), "capped": len(rows) >= SCAN}
 
 
-def _steps(run: CrewRun, inv: Investigation, rows: list[CrewRunStep], crew: dict[str, Any]) -> list[dict[str, Any]]:
+def _expected_steps(crew: dict[str, Any], name: str) -> list[tuple[str, str]]:
+    """The steps a run of this crew takes, in order: one per task (the workload crew's tasks are its agents)."""
+    shape = crew_config.spec(name)
+    labels = shape.get("task_labels") or {}
+    tasks = [(k, f"{crew['agents'][shape['task_agent'][k]]['role']}: {labels[k]}" if k in labels else crew["agents"][shape["task_agent"][k]]["role"]) for k in shape["tasks"]]
+    return [("setup", STEP_LABELS["setup"]), *tasks, ("validate", STEP_LABELS["validate"])]
+
+
+def _steps(run: CrewRun, inv: Investigation, rows: list[CrewRunStep], crew: dict[str, Any], name: str = crew_config.CREW) -> list[dict[str, Any]]:
     by = {r.step: r for r in rows}
-    expected = [("setup", STEP_LABELS["setup"])] + [(k, crew["agents"][k]["role"]) for k in crew_config.AGENT_KEYS] + [("validate", STEP_LABELS["validate"])]
+    expected = _expected_steps(crew, name)
+    known = {k for k, _ in expected}
+    extra = [(r.step, r.label or r.step) for r in sorted(rows, key=lambda r: r.position) if r.step not in known]  # a second review round, follow-up evidence
+    expected = [*expected[:-1], *extra, expected[-1]]
     out = []
     terminal = inv.status in TERMINAL
     for step, label in expected:
@@ -237,12 +247,13 @@ async def _queued_block(db: AsyncSession, inv_id: uuid.UUID) -> dict[str, Any]:
 
 async def _run_crew(db: AsyncSession, run: CrewRun, block: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """The configuration a run used, and how to describe it."""
+    crew = crew_config.crew_of(run.flow)
     if isinstance(block.get("draft"), dict):
-        return crew_config.merge(block["draft"]), {"label": "test draft (not saved)", "version": None, "draft": True, "digest": run.config_digest}
+        return crew_config.merge(block["draft"], crew), {"label": "test draft (not saved)", "version": None, "draft": True, "digest": run.config_digest}
     if run.config_version:
-        row = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew_config.CREW, CrewConfig.version == run.config_version))).scalar_one_or_none()
-        return crew_config.merge(row.config if row else None), {"label": f"version {run.config_version}", "version": run.config_version, "draft": False, "digest": run.config_digest}
-    return crew_config.merge(None), {"label": "the code's defaults", "version": None, "draft": False, "digest": ""}
+        row = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew, CrewConfig.version == run.config_version))).scalar_one_or_none()
+        return crew_config.merge(row.config if row else None, crew), {"label": f"version {run.config_version}", "version": run.config_version, "draft": False, "digest": run.config_digest}
+    return crew_config.merge(None, crew), {"label": "the code's defaults", "version": None, "draft": False, "digest": ""}
 
 
 @router.get("/runs/{run_id}")
@@ -263,14 +274,15 @@ async def run_detail(run_id: uuid.UUID, request: Request, ctx: AuthContext = Dep
                                           func.sum(CrewRunCall.cost_usd)).where(CrewRunCall.investigation_id == inv.id).group_by(CrewRunCall.provider, CrewRunCall.model))).all()
     rep = inv.report or {}
     crewai = rep.get("crewai") or {}
-    derived = _steps(run, inv, list(steps), crew)
+    derived = _steps(run, inv, list(steps), crew, crew_config.crew_of(run.flow))
     terminal = inv.status in TERMINAL
     return {
         "run": _row(run, inv, env.name, user.email if user else None, sched.name if sched else None),
         "steps": derived, "inputs": run.inputs, "config": used,
         "report": {"summary": rep.get("summary"), "findings": len(rep.get("observed_facts") or []), "causes": len(rep.get("suspected_causes") or []),
                    "missing_evidence": (rep.get("missing_evidence") or [])[:20], "next_steps": (rep.get("next_steps") or [])[:10], "mode": inv.mode,
-                   "crewai": {k: crewai.get(k) for k in ("status", "stopped", "gaps", "validation", "refused", "agents", "tool_calls", "limits", "config")} if crewai else None},
+                   "crewai": {k: crewai.get(k) for k in ("status", "stopped", "gaps", "validation", "refused", "agents", "tool_calls", "limits", "config", "errors", "usage",
+                                                         "fallback", "severity") if k in crewai or k in ("status", "stopped", "gaps", "validation", "refused", "agents", "tool_calls", "limits", "config")} if crewai else None},
         "cost": {"by_agent": [{k: s[k] for k in ("step", "label", "model_calls", "tool_calls", "tokens_in", "tokens_out", "cost_usd")} for s in derived if s["model_calls"] or s["tool_calls"]],
                  "by_model": [{"model": f"{p}/{m}", "calls": c, "tokens_in": int(ti or 0), "tokens_out": int(to or 0), "cost_usd": str(cost or 0)} for p, m, c, ti, to, cost in models]},
         "errors": [e for e in [inv.error, crewai.get("stopped") and f"Crew stopped early: {crewai['stopped']}"] if e] + [f"{s['label']}: {s['error']}" for s in derived if s["error"] and s["status"] == "failed"],
@@ -559,25 +571,32 @@ async def run_schedule_now(sid: uuid.UUID, request: Request, ctx: AuthContext = 
 # ---- crews -------------------------------------------------------------------------------
 
 def _crew_or_404(crew: str) -> str:
-    if crew != crew_config.CREW:
+    if crew not in crew_config.CREWS:
         raise HTTPException(404, f"Unknown crew {crew!r}")
     return crew
 
 
 def _version(row: CrewConfig, emails: dict) -> dict[str, Any]:
     return {"version": row.version, "note": row.note, "active": row.active, "digest": row.digest, "created_by": emails.get(row.created_by), "created_at": _iso(row.created_at),
-            "activated_at": _iso(row.activated_at), "fields": len(crew_config.diff(row.config)), "upstream_changed": row.base_digest != crew_config.base_digest()}
+            "activated_at": _iso(row.activated_at), "fields": len(crew_config.diff(row.config, row.crew)), "upstream_changed": row.base_digest != crew_config.base_digest(row.crew)}
+
+
+STRUCTURE = {crew_config.CREW: "Three agents in sequence (workload, change, review); no delegation, memory, planning or reasoning; read-only tools only; "
+                               "citations and confidence are checked in code after the crew finishes.",
+             crew_config.INCIDENT_CREW: "Seven agents, eight tasks run one at a time by MOKS: plan, Kubernetes, observability, changes, history, hypotheses, "
+                                        "an independent review (again after MOKS collects the evidence it asks for, within review_rounds) and the RCA. "
+                                        "No delegation, memory, planning or reasoning; read-only tools only; every finding and hypothesis is graded in code."}
 
 
 @router.get("/crews")
 async def crews(ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
     out = []
-    for crew in (crew_config.CREW,):
+    for crew, shape in crew_config.CREWS.items():
         rows = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew).order_by(CrewConfig.version.desc()))).scalars().all()
         active = next((r for r in rows if r.active), None)
-        out.append({"crew": crew, "label": "Workload investigation crew", "flows": [n for n, f in crew_config.FLOWS.items() if f["crew"] == crew],
-                    "agents": [crew_config.merge(active.config if active else None)["agents"][k]["role"] for k in crew_config.AGENT_KEYS],
-                    "active_version": active.version if active else None, "versions": len(rows), "upstream_changed": bool(active and active.base_digest != crew_config.base_digest()),
+        out.append({"crew": crew, "label": shape["label"], "flows": [n for n, f in crew_config.FLOWS.items() if f["crew"] == crew],
+                    "agents": [crew_config.merge(active.config if active else None, crew)["agents"][k]["role"] for k in shape["agents"]],
+                    "active_version": active.version if active else None, "versions": len(rows), "upstream_changed": bool(active and active.base_digest != crew_config.base_digest(crew)),
                     "updated_at": _iso(rows[0].created_at) if rows else None})
     return {"crews": out, "can_admin": ctx.principal.can(P.CREWAI_ADMIN, "*", "*")}
 
@@ -589,15 +608,17 @@ async def crew_detail(crew: str, ctx: AuthContext = Depends(get_auth), db: Async
     emails = {u.id: u.email for u in (await db.execute(select(User).where(User.id.in_({r.created_by for r in rows if r.created_by} or {uuid.uuid4()})))).scalars()}
     active = next((r for r in rows if r.active), None)
     overlay = active.config if active else {}
-    finished = await _visible(db, ctx, _base_query().where(CrewRun.flow == crew_config.FLOW, Investigation.status.in_(TERMINAL), CrewRun.trigger != "test"), 20)
-    return {"crew": crew, "label": "Workload investigation crew", "flows": [n for n, f in crew_config.FLOWS.items() if f["crew"] == crew],
-            "defaults": crew_config.defaults(), "effective": crew_config.merge(overlay), "overlay": overlay, "diff": crew_config.diff(overlay),
+    shape = crew_config.spec(crew)
+    flows = [n for n, f in crew_config.FLOWS.items() if f["crew"] == crew]
+    finished = await _visible(db, ctx, _base_query().where(CrewRun.flow.in_(flows), Investigation.status.in_(TERMINAL), CrewRun.trigger != "test"), 20)
+    return {"crew": crew, "label": shape["label"], "flows": flows, "agent_keys": list(shape["agents"]), "agent_labels": shape["agent_labels"],
+            "task_keys": list(shape["tasks"]), "task_agent": shape["task_agent"], "task_labels": shape.get("task_labels") or {},
+            "defaults": crew_config.defaults(crew), "effective": crew_config.merge(overlay, crew), "overlay": overlay, "diff": crew_config.diff(overlay, crew),
             "active": _version(active, emails) if active else None, "versions": [_version(r, emails) for r in rows],
-            "tools": {k: [{"name": n, "description": BY_NAME[n].description, "moks_tool": BY_NAME[n].tool} for n in names] for k, names in crew_config.TOOLS_BY_AGENT.items()},
-            "ceilings": {k: list(v) for k, v in crew_config.ceilings().items()}, "text_limits": crew_config.TEXT_LIMITS, "placeholders": list(crew_config.PLACEHOLDERS),
-            "code_owned": {"rules": crew_config.rules("<random tag>"), "output_contract": crew_config.OUTPUT_CONTRACT,
-                           "structure": "Three agents in sequence (workload, change, review); no delegation, memory, planning or reasoning; read-only tools only; "
-                                        "citations and confidence are checked in code after the crew finishes."},
+            "tools": {k: [{"name": n, "description": BY_NAME[n].description, "moks_tool": BY_NAME[n].tool} for n in names] for k, names in shape["tools"].items() if names},
+            "ceilings": {k: list(v) for k, v in crew_config.ceilings(crew).items()}, "text_limits": crew_config.TEXT_LIMITS, "placeholders": list(crew_config.PLACEHOLDERS),
+            "code_owned": {"rules": crew_config.rules("<random tag>"), "output_contract": "\n\n".join(f"[{k}] {v}" for k, v in shape["contracts"].items())
+                           if len(shape["contracts"]) > 1 else crew_config.OUTPUT_CONTRACT, "contracts": shape["contracts"], "structure": STRUCTURE[crew]},
             "runs_to_test": [_row(*r) for r in finished], "can_admin": ctx.principal.can(P.CREWAI_ADMIN, "*", "*")}
 
 
@@ -607,7 +628,7 @@ async def crew_version(crew: str, version: int, ctx: AuthContext = Depends(get_a
     row = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew, CrewConfig.version == version))).scalar_one_or_none()
     if row is None:
         raise HTTPException(404, "Version not found")
-    return {**_version(row, {}), "overlay": row.config, "effective": crew_config.merge(row.config), "diff": crew_config.diff(row.config)}
+    return {**_version(row, {}), "overlay": row.config, "effective": crew_config.merge(row.config, crew), "diff": crew_config.diff(row.config, crew)}
 
 
 class ConfigIn(BaseModel):
@@ -617,10 +638,10 @@ class ConfigIn(BaseModel):
 @router.post("/crews/{crew}/check")
 async def crew_check(crew: str, body: ConfigIn, ctx: AuthContext = Depends(get_auth)) -> dict[str, Any]:
     _crew_or_404(crew)
-    errors, warnings = crew_config.check(body.config)
-    overlay = crew_config.overlay_of(crew_config.merge(body.config)) if not errors else None
-    return {"errors": errors, "warnings": warnings, "overlay": overlay, "diff": crew_config.diff(overlay) if overlay is not None else [],
-            "effective": crew_config.merge(overlay) if overlay is not None else None}
+    errors, warnings = crew_config.check(body.config, crew)
+    overlay = crew_config.overlay_of(crew_config.merge(body.config, crew), crew) if not errors else None
+    return {"errors": errors, "warnings": warnings, "overlay": overlay, "diff": crew_config.diff(overlay, crew) if overlay is not None else [],
+            "effective": crew_config.merge(overlay, crew) if overlay is not None else None}
 
 
 class VersionIn(BaseModel):
@@ -630,12 +651,12 @@ class VersionIn(BaseModel):
 
 
 async def _save(request: Request, ctx: AuthContext, db: AsyncSession, crew: str, config: dict[str, Any], note: str, activate: bool) -> dict[str, Any]:
-    errors, warnings = crew_config.check(config)
+    errors, warnings = crew_config.check(config, crew)
     if errors:
         raise HTTPException(422, "The configuration does not pass its checks: " + "; ".join(f"{e['field']}: {e['message']}" for e in errors[:5]))
-    overlay = crew_config.overlay_of(crew_config.merge(config))
+    overlay = crew_config.overlay_of(crew_config.merge(config, crew), crew)
     row = await console.save_version(db, crew, overlay, note, ctx.user.id, activate)
-    await _audit(db, request, ctx, "crewai.crew.save", "crewai_crew", crew, {"version": row.version, "activated": activate, "digest": row.digest, "fields": [d["field"] for d in crew_config.diff(overlay)]})
+    await _audit(db, request, ctx, "crewai.crew.save", "crewai_crew", crew, {"version": row.version, "activated": activate, "digest": row.digest, "fields": [d["field"] for d in crew_config.diff(overlay, crew)]})
     return {**_version(row, {row.created_by: ctx.user.email}), "warnings": warnings}
 
 
@@ -656,7 +677,7 @@ async def crew_activate(crew: str, body: ActivateIn, request: Request, ctx: Auth
         row = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew, CrewConfig.version == body.version))).scalar_one_or_none()
         if row is None:
             raise HTTPException(404, "Version not found")
-        errors, _ = crew_config.check(row.config)
+        errors, _ = crew_config.check(row.config, crew)
         if errors:
             raise HTTPException(422, f"Version {body.version} no longer passes its checks: " + "; ".join(f"{e['field']}: {e['message']}" for e in errors[:3]))
     await console.activate_version(db, crew, body.version)
@@ -695,7 +716,8 @@ async def get_settings_(ctx: AuthContext = Depends(get_auth), db: AsyncSession =
     s = get_settings()
     return {"history": await console.setting(db, "history", HISTORY_DEFAULTS), "defaults": HISTORY_DEFAULTS, "can_admin": ctx.principal.can(P.CREWAI_ADMIN, "*", "*"),
             "deployment": {"enabled": s.crewai_enabled, "max_concurrent_per_worker": s.crewai_max_concurrent, "tool_timeout_seconds": s.crewai_tool_timeout_seconds,
-                           "excerpt_chars": s.crewai_excerpt_chars, "log_lines": s.crewai_log_lines, "max_tool_calls": s.max_tool_calls, "max_duration_seconds": s.max_duration_seconds},
+                           "excerpt_chars": s.crewai_excerpt_chars, "log_lines": s.crewai_log_lines, "max_tool_calls": s.max_tool_calls,
+                           "max_duration_seconds": s.crewai_max_duration_seconds or s.max_duration_seconds, "fallback": s.crewai_fallback},
             "unavailable": await console.available(db)}
 
 
@@ -716,7 +738,7 @@ async def export(request: Request, ctx: AuthContext = Depends(admin_only), db: A
     """One JSON document: each crew's active version (as an overlay on the code's defaults), every schedule, which flows
     are switched off and the run-history settings. No runs, logs, transcripts or owners."""
     crews_out = {}
-    for crew in (crew_config.CREW,):
+    for crew in crew_config.CREWS:
         row = await console.active_config(db, crew)
         crews_out[crew] = {"config": row.config if row else {}, "version": row.version if row else None, "note": row.note if row else ""}
     scheds = (await db.execute(select(CrewSchedule).order_by(CrewSchedule.flow, CrewSchedule.name))).scalars().all()
@@ -742,18 +764,18 @@ async def import_(body: ImportIn, request: Request, ctx: AuthContext = Depends(a
     plan: list[dict[str, Any]] = []
     errors: list[str] = []
     for crew, item in (data.get("crews") or {}).items():
-        if crew != crew_config.CREW:
+        if crew not in crew_config.CREWS:
             errors.append(f"crews.{crew}: unknown crew")
             continue
         cfg = (item or {}).get("config") or {}
-        bad, _ = crew_config.check(cfg)
+        bad, _ = crew_config.check(cfg, crew)
         if bad:
             errors += [f"crews.{crew}.{e['field']}: {e['message']}" for e in bad]
             continue
-        overlay = crew_config.overlay_of(crew_config.merge(cfg))
+        overlay = crew_config.overlay_of(crew_config.merge(cfg, crew), crew)
         current = await console.active_config(db, crew)
         same = crew_config.digest(overlay) == (current.digest if current else crew_config.digest({}))
-        plan.append({"kind": "crew", "name": crew, "action": "same" if same else "change", "detail": f"{len(crew_config.diff(overlay))} edited field(s)", "_overlay": overlay})
+        plan.append({"kind": "crew", "name": crew, "action": "same" if same else "change", "detail": f"{len(crew_config.diff(overlay, crew))} edited field(s)", "_overlay": overlay})
     for i, s in enumerate(data.get("schedules") or []):
         try:
             if not isinstance(s, dict):

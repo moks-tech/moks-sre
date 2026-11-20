@@ -85,15 +85,26 @@ async def investigate_config(ctx: AuthContext = Depends(get_auth), db: AsyncSess
     from ..crew import config as crew_config
 
     crew = capability(get_settings(), cfg, await worker_version(db))
-    if crew["enabled"]:  # what the CrewAI console decides: the flow switched on or off, and the active version's limits
-        flow = (await console.flows_state(db))[crew_config.FLOW]
-        if crew["available"] and not flow["enabled"]:
-            crew.update(available=False, reason="the workload investigation flow is switched off in the CrewAI console" + (f": {flow['reason']}" if flow.get("reason") else ""))
-        active = await console.active_config(db)
-        limits = crew_config.merge(active.config if active else None)["limits"]
-        crew["limits"].update(timeout_seconds=limits["timeout_seconds"], max_tool_calls=min(limits["max_tool_calls"], get_settings().max_tool_calls),
-                              max_iterations_per_agent=limits["max_iterations"])
-        crew["config_version"] = active.version if active else None
+    if crew["enabled"]:  # what the CrewAI console decides: each flow switched on or off, and its crew's active version's limits
+        states, ready = await console.flows_state(db), crew["available"]
+        crew["flows"] = {}
+        for name, spec in crew_config.FLOWS.items():
+            active = await console.active_config(db, spec["crew"])
+            limits = crew_config.merge(active.config if active else None, spec["crew"])["limits"]
+            state = states[name]
+            crew["flows"][name] = {"label": spec["label"], "description": spec["description"], "enabled": state["enabled"],
+                                   "available": ready and state["enabled"], "reason": None if state["enabled"] else f"the {spec['label'].lower()} flow is switched off in the CrewAI console"
+                                   + (f": {state['reason']}" if state.get("reason") else ""), "config_version": active.version if active else None,
+                                   "agents": len(crew_config.spec(spec["crew"])["agents"]),
+                                   "limits": {**limits, "max_tool_calls": min(limits["max_tool_calls"], get_settings().max_tool_calls)},
+                                   "inputs": [{k: v for k, v in f.items() if k != "pattern"} for f in spec["inputs"]]}
+        workload = crew["flows"][crew_config.FLOW]  # the top-level fields stay those of the workload flow, as before
+        if crew["available"] and not workload["enabled"]:
+            crew.update(available=False, reason=workload["reason"])
+        crew["available_any"] = any(f["available"] for f in crew["flows"].values())
+        crew["limits"].update(timeout_seconds=workload["limits"]["timeout_seconds"], max_tool_calls=workload["limits"]["max_tool_calls"],
+                              max_iterations_per_agent=workload["limits"]["max_iterations"])
+        crew["config_version"] = workload["config_version"]
     return {"llm": {"provider": cfg.provider, "model": cfg.model} if cfg else None,
             "skills": sorted(skills.library().skills), "environments": [e.name for e in envs if ctx.principal.namespace_patterns(P.INVESTIGATION_RUN, e.name)],
             "crewai": crew}
@@ -180,7 +191,10 @@ async def create(body: CreateIn, request: Request, ctx: AuthContext = Depends(ge
 
 
 class CrewIn(BaseModel):
-    """The CrewAI flow investigates one workload in one namespace; both are required, nothing is inferred."""
+    """The CrewAI flows investigate one workload in one namespace; both are required, nothing is inferred. `flow` picks the workload
+    investigation (default) or the incident investigation (docs/crewai-sre-engine.md), whose `change_window` sets how far back it looks."""
+    flow: Literal["workload_investigation", "incident_investigation"] = "workload_investigation"  # crew.config.FLOWS
+    change_window: Literal["15m", "1h", "6h", "24h"] | None = None  # crew.incident_config.CHANGE_WINDOWS; incident investigation only
     environment: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,99}$")
     namespace: str = Field(pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
     workload: str = Field(pattern=r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")
@@ -202,7 +216,11 @@ async def create_crewai(body: CrewIn, request: Request, ctx: AuthContext = Depen
     if environment is None:  # as before: the default environment, or the only one the person may investigate
         environment = (await resolve_scope(db, ctx, body.question or body.workload, None, body.namespace))[0].name
     inputs = {"environment": environment, "namespace": body.namespace, "workload": body.workload, "kind": body.kind, "minutes": body.minutes, "question": body.question}
-    return await start_run(request, ctx, db, crew_config.FLOW, inputs)
+    if body.flow == crew_config.INCIDENT_FLOW:
+        inputs["change_window"] = body.change_window
+    elif body.change_window:
+        raise HTTPException(422, "change_window: only the incident investigation flow takes a change window")
+    return await start_run(request, ctx, db, body.flow, inputs)
 
 
 async def start_investigation(body: CreateIn, request: Request, ctx: AuthContext, db: AsyncSession, conversation_id: uuid.UUID | None = None,
