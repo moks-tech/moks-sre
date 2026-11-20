@@ -96,10 +96,28 @@ JOB_RETRIES = Counter("moks_job_retries_total", "Jobs queued again after a failu
 JOBS_ABANDONED = Counter("moks_jobs_abandoned_total", "Jobs whose worker stopped", ["type"])
 JOBS_REJECTED = Counter("moks_jobs_rejected_total", "Jobs refused because the queue is full", ["job_class"])
 APPROVALS = Counter("moks_approvals_total", "Approval decisions", ["decision"])
+# CrewAI flows and the unified pipeline (Grafana MOKS · Investigations and CrewAI). Labels are fixed names (flow, task, agent,
+# stage, status, error code), never targets, namespaces or model text.
+CREWAI_RUNS = Counter("moks_crewai_runs_total", "CrewAI console flows that were asked to run, by how they ended", ["flow", "outcome"])
+CREWAI_RUNNING = Gauge("moks_crewai_running", "Crews holding a slot in this worker (crewai_max_concurrent)")
+CREWAI_TASKS = Counter("moks_crewai_tasks_total", "Incident-flow steps, by step and how each ended", ["task", "status"])
+CREWAI_TASK_SECONDS = Histogram("moks_crewai_task_duration_seconds", "Incident-flow step wall time", ["task"],
+                                buckets=(5, 10, 20, 30, 60, 90, 120, 180, 300, 600))
+CREWAI_TOKENS = Counter("moks_crewai_tokens_total", "Model tokens the crew's agents used", ["agent", "direction"])
+CREWAI_EVIDENCE_REQUESTS = Counter("moks_crewai_evidence_requests_total", "Evidence the reviewer asked MOKS to collect, by what happened", ["status"])
+CREWAI_CONCLUSIONS = Counter("moks_crewai_conclusions_total", "Findings and hypotheses as MOKS graded them", ["kind", "status"])
+CREWAI_VALIDATION = Counter("moks_crewai_validation_total", "What validation changed in a crew's answer", ["decision"])
+CREWAI_ERRORS = Counter("moks_crewai_errors_total", "Crew errors and early stops, by code", ["code"])
+UNIFIED_STAGES = Counter("moks_unified_stages_total", "Unified pipeline stages, by stage and how each ended", ["stage", "status"])
+UNIFIED_STAGE_SECONDS = Histogram("moks_unified_stage_duration_seconds", "Unified pipeline stage wall time", ["stage"],
+                                  buckets=(0.1, 0.5, 1, 2.5, 5, 10, 20, 30, 60, 120))
 
 
 BACKUP_LAST_SUCCESS = Gauge("moks_backup_last_success_timestamp_seconds", "When the last backup succeeded")
-BACKUP_LAST_RUN_OK = Gauge("moks_backup_last_run_success", "1 if the latest backup run succeeded, otherwise 0")
+BACKUP_LAST_RUN_OK = Gauge("moks_backup_last_run_success", "1 if the latest backup run succeeded, 0 if it failed, NaN while none is recorded")
+# NaN, not 0, until a worker reads the latest run: every MOKS process exports this gauge, and a default 0 in the API, terminal and
+# executor pods read as a failed backup (MoksBackupFailed fired once per pod on mk4, where no backup has run).
+BACKUP_LAST_RUN_OK.set(float("nan"))
 DATABASE_SIZE = Gauge("moks_database_size_bytes", "Size of the MOKS database")
 DATABASE_VOLUME = Gauge("moks_database_volume_bytes", "Capacity of the database volume")
 

@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 
-from ..observability import mark_failed, span
+from ..observability import UNIFIED_STAGE_SECONDS, UNIFIED_STAGES, mark_failed, span
 
 log = logging.getLogger("moks.intelligence")
 
@@ -199,6 +199,9 @@ class Pipeline:
                 if st.status == "running":
                     st.status = "partial" if st.partial else "completed"
                 st.finished_at, st.duration_ms = _now(), int((time.monotonic() - began) * 1000)
+                UNIFIED_STAGES.labels(key, st.status).inc()
+                if st.status != "skipped":
+                    UNIFIED_STAGE_SECONDS.labels(key).observe(st.duration_ms / 1000)
                 s.set_attribute("moks.outcome", st.status)
                 s.set_attribute("moks.unified.tool_calls", st.tool_calls)
                 if st.status in ("failed", "partial"):

@@ -276,6 +276,25 @@ async def test_the_run_is_audited_and_streamed(roomy):
     assert {e.payload["phase"] for e in events if e.type == "phase"} >= {s.key for s in STAGES}
 
 
+async def test_stages_and_the_run_are_counted_for_prometheus(roomy):
+    from prometheus_client import REGISTRY
+
+    def samples(name: str) -> dict[tuple, float]:
+        return {tuple(sorted(x.labels.items())): x.value for m in REGISTRY.collect() for x in m.samples if x.name == name}
+
+    names = ("moks_unified_stages_total", "moks_unified_stage_duration_seconds_count", "moks_crewai_runs_total")
+    before = {n: samples(n) for n in names}
+    inv, _, _ = await unified(CASES["catalog-image-pull"], workload=False)
+    after = {n: samples(n) for n in names}
+    grew = {n: {dict(k).get("stage", "") + "/" + dict(k).get("status", dict(k).get("outcome", "")): v - before[n].get(k, 0.0) for k, v in after[n].items() if v != before[n].get(k, 0.0)}
+            for n in names}
+    stages = {x["key"]: x["status"] for x in inv.report["unified"]["pipeline"]}
+    assert grew["moks_unified_stages_total"] == {f"{k}/{v}": 1 for k, v in stages.items()}  # each stage once, with the status it ended on
+    assert sum(grew["moks_unified_stage_duration_seconds_count"].values()) == sum(1 for v in stages.values() if v != "skipped")
+    run = next(k for k in after["moks_crewai_runs_total"] if after["moks_crewai_runs_total"][k] != before["moks_crewai_runs_total"].get(k, 0.0))
+    assert dict(run) == {"flow": FLOW, "outcome": inv.report["unified"]["status"]}
+
+
 async def test_stages_are_traced_with_names_only(roomy, monkeypatch):
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor

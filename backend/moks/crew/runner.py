@@ -30,7 +30,7 @@ from opentelemetry import context as otel_context, trace as trace_api
 from pydantic import ValidationError
 
 from ..config import get_settings
-from ..observability import mark_failed, span
+from ..observability import CREWAI_RUNNING, CREWAI_TOKENS, mark_failed, span
 from ..orchestrator import prompts
 from ..orchestrator.report import parse_json_object, rules_report
 from ..tools.executor import ToolExecutor
@@ -63,6 +63,7 @@ async def _slot(wait: float) -> bool:
         with _lock:
             if _running < get_settings().crewai_max_concurrent:
                 _running += 1
+                CREWAI_RUNNING.set(_running)
                 return True
         if time.monotonic() >= deadline:
             return False
@@ -73,6 +74,7 @@ def _release() -> None:
     global _running
     with _lock:
         _running = max(0, _running - 1)
+        CREWAI_RUNNING.set(_running)
 
 
 class Bridge:
@@ -240,6 +242,8 @@ class Run:
         inv.tokens_in += resp.tokens_in
         inv.tokens_out += resp.tokens_out
         inv.cost += Decimal(str(resp.cost_usd))
+        CREWAI_TOKENS.labels(agent, "input").inc(resp.tokens_in)
+        CREWAI_TOKENS.labels(agent, "output").inc(resp.tokens_out)
         h.count(step, model=True, tokens_in=resp.tokens_in, tokens_out=resp.tokens_out, cost=resp.cost_usd)
         call_id = await h.call(step, provider=self.cfg.provider, model=self.cfg.model, system=system, turns=turns, response=resp.text, tokens_in=resp.tokens_in,
                                tokens_out=resp.tokens_out, cost=resp.cost_usd, duration_ms=ms)

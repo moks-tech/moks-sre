@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import io
+import math
 import os
 import shutil
 import subprocess
@@ -192,6 +193,8 @@ async def test_metrics_report_age_and_size():
     assert BACKUP_LAST_RUN_OK._value.get() == 0
     async with session_scope() as db:
         await db.execute(BackupRun.__table__.delete())
+    await jobs.update_durability_metrics()
+    assert math.isnan(BACKUP_LAST_RUN_OK._value.get())  # no run recorded is not a failed run
 
 
 async def test_only_audit_readers_see_backup_status(client):

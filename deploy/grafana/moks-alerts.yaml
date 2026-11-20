@@ -1,39 +1,74 @@
-# Add to the Prometheus rule files in the tools repository, after adding the scrape job in
-# prometheus-scrape.yaml. Without both, and a route to a person, these alerts notify no one; the
-# Overview page shows the same backup warning without them.
+# Add to the Prometheus rule files in the tools repository (kubernetes: deploy/minikube/observability/prometheus/files/alerts.yml),
+# after adding the scrape job in prometheus-scrape.yaml. Without both, and a route to a person, these alerts notify no one; the
+# Overview page shows the same backup warning without them. Every MOKS process exports the durability gauges, but only a worker
+# sets them, so those rules take max() over the job: one alert, not one per pod.
 groups:
+  # MOKS's own health: the portal, its agent runs and the dependencies they use. Not the clusters MOKS investigates.
+  - name: moks
+    rules:
+      - alert: MoksMetricsDown
+        expr: up{job="moks"} == 0 or absent(up{job="moks"})
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: 'MOKS pod {{ $labels.instance }} is not answering metrics scrapes (or no MOKS pod is found)'
+      - alert: MoksApiErrors
+        expr: sum(rate(moks_http_requests_total{job="moks", status=~"5.."}[10m])) / sum(rate(moks_http_requests_total{job="moks"}[10m])) > 0.05
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: 'More than 5% of MOKS API requests fail with 5xx'
+          description: 'Loki: {namespace="moks-sre"} | logfmt | event="http_request" | status=~"5.." gives trace ids to open in Jaeger.'
+      - alert: MoksModelCallsFailing
+        expr: sum by (provider) (rate(moks_llm_requests_total{job="moks", outcome!="ok"}[15m])) / sum by (provider) (rate(moks_llm_requests_total{job="moks"}[15m])) > 0.5
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: 'Over half of {{ $labels.provider }} model calls fail; investigations fall back to rule-based reports'
+          description: 'The outcome label is the failure kind (auth, timeout, rate_limited, unavailable, budget, refused, bad_response).'
+      - alert: MoksInvestigationsFailing
+        expr: sum(increase(moks_investigations_total{job="moks", outcome="failed"}[1h])) >= 3 and sum(increase(moks_investigations_total{job="moks", outcome="failed"}[1h])) / sum(increase(moks_investigations_total{job="moks"}[1h])) > 0.3
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: 'More than 30% of MOKS investigations failed in the last hour'}
+      - alert: MoksToolCallsFailing
+        expr: sum by (tool) (rate(moks_tool_calls_total{job="moks", outcome!~"ok|invalid_args"}[15m])) / sum by (tool) (rate(moks_tool_calls_total{job="moks"}[15m])) > 0.5 and sum by (tool) (increase(moks_tool_calls_total{job="moks"}[15m])) >= 5
+        for: 15m
+        labels: {severity: warning}
+        annotations: {summary: 'MOKS tool {{ $labels.tool }} fails more than half the time; check its connector'}
+      - alert: MoksJobsWaiting
+        expr: max by (job_class) (moks_jobs_oldest_age_seconds{job="moks"}) > 900
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: 'A due {{ $labels.job_class }} job has waited over 15 minutes; check the moks-worker pod'}
   - name: moks-durability
     rules:
       - alert: MoksBackupOverdue
-        expr: time() - moks_backup_last_success_timestamp_seconds > 10800
+        expr: time() - max(moks_backup_last_success_timestamp_seconds{job="moks"}) > 10800
         for: 5m
         labels: {severity: critical}
         annotations:
           summary: No successful MOKS backup for over 3 hours
-          description: Check the moks-backup CronJob. Data written since the last backup would be lost in a disaster.
-      - alert: MoksBackupNeverRan
-        expr: absent(moks_backup_last_success_timestamp_seconds)
-        for: 3h
-        labels: {severity: critical}
-        annotations: {summary: MOKS has no recorded successful backup}
+          description: Also fires when no backup has ever succeeded. Check the moks-backup CronJob. Data written since the last backup would be lost in a disaster.
       - alert: MoksBackupFailed
-        expr: moks_backup_last_run_success == 0
+        expr: max(moks_backup_last_run_success{job="moks"}) == 0
         for: 5m
         labels: {severity: warning}
         annotations: {summary: The latest MOKS backup run failed}
       - alert: MoksDatabaseVolumeFilling
-        expr: moks_database_size_bytes / moks_database_volume_bytes > 0.7
+        expr: max(moks_database_size_bytes{job="moks"}) / max(moks_database_volume_bytes{job="moks"}) > 0.7
         for: 30m
         labels: {severity: warning}
         annotations: {summary: The MOKS database has used over 70% of its volume}
       - alert: MoksDatabaseVolumeNearlyFull
-        expr: moks_database_size_bytes / moks_database_volume_bytes > 0.85
+        expr: max(moks_database_size_bytes{job="moks"}) / max(moks_database_volume_bytes{job="moks"}) > 0.85
         for: 10m
         labels: {severity: critical}
         annotations:
           summary: The MOKS database has used over 85% of its volume
           description: PostgreSQL stops accepting writes when the volume fills, and this StorageClass cannot expand.
-  # From the worker's probe, so these work without the exporter. A missing series means no worker is probing.
+  # From the worker's probe of an external search cluster (rag.backend opensearch), so these work without the exporter. A missing
+  # series means no worker is probing. With rag.backend postgres (mk4) only MoksRetrievalFallingBack applies.
   - name: moks-search
     rules:
       - alert: MoksSearchDown
