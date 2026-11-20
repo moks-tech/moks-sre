@@ -9,6 +9,9 @@ A second, larger flow, the seven-agent **incident investigation** with graded fi
 evidence review and an RCA, is described in [crewai-sre-engine.md](crewai-sre-engine.md). Everything below about the
 target, safety, the worker and the image applies to it too.
 
+The **unified investigation** ([UNIFIED_INVESTIGATION.md](UNIFIED_INVESTIGATION.md)) is a third CrewAI console flow on the same worker: fifteen
+stages over every source, an analyst and a reviewer agent, and transparently scored root-cause hypotheses.
+
 Runs, logs, schedules and the crew's prompts are managed in the **CrewAI console** at `/moks/crewai`
 ([crewai-console.md](crewai-console.md)). `POST /investigations/crewai` (the form on New investigation) starts the
 console's *Workload investigation* flow, so every run is numbered, logged step by step and uses the crew's active

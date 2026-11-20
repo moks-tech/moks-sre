@@ -403,10 +403,10 @@ async def test_untrusted_text_never_widens_the_investigation(client, incident_on
 
 # ---- API ----------------------------------------------------------------------------------------------
 
-async def test_the_config_lists_both_flows(client, incident_on):
+async def test_the_config_lists_every_flow(client, incident_on):
     _, h = await start(client)
     cfg = (await client.get("/moks/api/investigate/config", headers=h)).json()["crewai"]
-    assert cfg["available"] is True and set(cfg["flows"]) == {"workload_investigation", "incident_investigation"}
+    assert cfg["available"] is True and set(cfg["flows"]) == {"workload_investigation", "incident_investigation", "unified_investigation"}
     flow = cfg["flows"]["incident_investigation"]
     assert flow["available"] and flow["agents"] == 7 and flow["limits"]["review_rounds"] == 2
     assert [i["name"] for i in flow["inputs"]] == ["environment", "namespace", "kind", "workload", "minutes", "change_window", "question"]

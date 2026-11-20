@@ -24,7 +24,7 @@ HISTORICAL = "historical"        # true when collected; collected before this ru
 MODEL_OUTPUT = "model_output"    # what a model inferred from telemetry: a lead to check, never an observation or a cause
 
 DOCUMENTATION_TOOLS = {"kb_search", "git_read_file", "similar_incidents", "incident_history"}  # a past incident is a record, not the state of anything now
-MODEL_TOOLS = {"ml_anomalies"}
+MODEL_TOOLS = {"ml_anomalies", "ml_observations"}
 LIVE = {OBSERVATION, INCOMPLETE}
 FAILED = {TOOL_ERROR, ACCESS_DENIED}
 

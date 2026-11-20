@@ -13,7 +13,7 @@ import { Dialog, Empty, useFeedback } from "../ui";
 // Jenkins shows jobs, and the crew's configuration as versions. Reading needs investigation.read where a run ran;
 // changing the console needs crewai.admin. The backend checks both; this page only hides what would be refused.
 
-const target = (r: RunRow) => `${r.kind ?? ""} ${r.namespace}/${r.workload ?? "?"}`.trim();
+const target = (r: RunRow) => r.workload ? `${r.kind ?? ""} ${r.namespace}/${r.workload}`.trim() : `namespace ${r.namespace}`;
 
 function Stats({ title, s }: { title: string; s: any }) {
   return <div className="card stack">
@@ -348,7 +348,7 @@ function Schedules() {
     ] }) : undefined} cols={[
       { key: "n", head: "Schedule", primary: true, cell: (s: any) => <span><strong>{s.name}</strong><span className="cw-sub">{s.flow_label}</span></span> },
       { key: "w", head: "When", cell: (s: any) => <span><code>{s.cron}</code><span className="cw-sub">{s.enabled && s.next_run_at ? <>next <When iso={s.next_run_at} /></> : "paused"}</span></span> },
-      { key: "t", head: "Target", cell: (s: any) => <span className="small">{s.inputs.kind ?? "Deployment"} {s.inputs.namespace}/{s.inputs.workload}<span className="cw-sub">{s.inputs.environment}</span></span> },
+      { key: "t", head: "Target", cell: (s: any) => <span className="small">{s.inputs.workload ? `${s.inputs.kind ?? "Deployment"} ${s.inputs.namespace}/${s.inputs.workload}` : `namespace ${s.inputs.namespace}`}<span className="cw-sub">{s.inputs.environment}</span></span> },
       { key: "s", head: "State", status: true, cell: (s: any) => s.enabled ? <Badge kind="ok">active</Badge> : <Badge kind="neutral">paused</Badge> },
       { key: "l", head: "Last start", cell: (s: any) => <span className="small">{s.last_run ? <><StatusIcon status={s.last_run.status ?? "queued"} /> <Link to={`/crewai/runs/${s.last_run.id}`}>#{s.last_run.number}</Link> </> : null}
         <Time iso={s.last_run_at} />{s.last_error && <span className="cw-sub danger-text">{s.last_error}</span>}</span> },

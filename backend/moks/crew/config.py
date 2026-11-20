@@ -82,6 +82,8 @@ def spec(crew: str = CREW) -> dict[str, Any]:
 
 
 def default_question(flow: str, inputs: dict[str, Any]) -> str:
+    if not inputs.get("workload"):  # the unified investigation finds the workload itself
+        return f"What is wrong in namespace {inputs['namespace']}, and why?"
     if flow == INCIDENT_FLOW:
         return f"Investigate the incident affecting {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']}: what is wrong, since when, and why?"
     return f"Why is {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']} unhealthy?"
@@ -89,7 +91,7 @@ def default_question(flow: str, inputs: dict[str, Any]) -> str:
 
 def request_block(inputs: dict[str, Any], block: dict[str, Any], **extra: Any) -> dict[str, Any]:
     """The `crewai` block of the seq-0 queued event: what Investigator._investigate hands to crew/runner.py."""
-    return {"workload": inputs["workload"], "kind": inputs["kind"], **({"change_window": inputs["change_window"]} if inputs.get("change_window") else {}),
+    return {**{k: inputs[k] for k in ("workload", "kind") if inputs.get(k)}, **({"change_window": inputs["change_window"]} if inputs.get("change_window") else {}),
             **extra, **{k: v for k, v in block.items() if k != "config_digest"}}
 
 
@@ -275,3 +277,25 @@ def rules(tag: str) -> str:
 
 def fill(text: str, target: str, question: str) -> str:
     return text.replace("{target}", target).replace("{question}", question)
+
+
+# The unified investigation pipeline (moks/intelligence, docs/UNIFIED_INVESTIGATION.md) is a second flow of this crew: it is numbered,
+# logged, scheduled and switched on or off in the console like the workload flow, and runs on the CrewAI worker within the crew's limits.
+# Its reasoning agents' prompts are code-owned (moks/intelligence/agents.py); the workload is optional, MOKS finds it when it is left out.
+from ..intelligence import FLOW as UNIFIED_FLOW  # noqa: E402
+
+FLOWS[UNIFIED_FLOW] = {
+    "label": "Unified investigation",
+    "crew": CREW,
+    "description": "Fifteen stages over every source MOKS reads: Kubernetes, metrics, logs, traces, deployments, Git, ML anomalies, past incidents and "
+                   "runbooks. An analyst agent proposes hypotheses, a reviewer challenges them, and MOKS scores each by stated factors.",
+    "inputs": [
+        {"name": "environment", "label": "Environment", "type": "environment", "required": True},
+        {"name": "namespace", "label": "Namespace", "type": "namespace", "required": True, "pattern": r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$", "max": 63},
+        {"name": "kind", "label": "Kind", "type": "choice", "choices": list(KINDS), "default": "Deployment"},
+        {"name": "workload", "label": "Workload", "type": "workload", "pattern": r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$", "max": 253,
+         "help": "Optional. Left empty, MOKS picks the unhealthy workload from the namespace's findings."},
+        {"name": "minutes", "label": "Window (minutes)", "type": "integer", "min": 5, "max": 10080},
+        {"name": "question", "label": "Question", "type": "text", "max": 2000, "help": "Optional. Default: what is wrong, and why?"},
+    ],
+}

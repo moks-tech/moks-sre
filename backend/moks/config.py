@@ -162,6 +162,19 @@ class Settings(BaseSettings):
     # The incident flow (docs/crewai-sre-engine.md): when the crew cannot start (no slot, flow switched off, wrong crewai version), run the
     # LangGraph investigation instead ("langgraph") or fail ("none"). Console test runs never fall back.
     crewai_fallback: Literal["langgraph", "none"] = "langgraph"
+    # Unified investigation pipeline (docs/UNIFIED_INVESTIGATION.md), the CrewAI console flow unified_investigation. Its budgets sit
+    # under the global ceilings: tool calls never above max_tool_calls, time never above max_duration_seconds.
+    unified_max_tool_calls: int = Field(default=24, ge=4, le=60)
+    unified_timeout_seconds: int = Field(default=150, ge=20, le=900)
+    unified_agent_timeout_seconds: int = Field(default=60, ge=10, le=600)  # each reasoning agent (analyst, reviewer)
+    unified_max_hypotheses: int = Field(default=5, ge=1, le=10)
+    unified_max_probes: int = Field(default=4, ge=0, le=12)  # additional evidence calls (stage 11), within the tool budget
+    # Metric names for golden signals (prom_golden_signals, the unified investigation). Defaults: Prometheus client conventions and OpenTelemetry's db.client.connections.*.
+    unified_request_metric: str = Field(default="http_requests_total", pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
+    unified_duration_metric: str = Field(default="http_request_duration_seconds_bucket", pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
+    unified_status_label: str = Field(default="code", pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+    unified_db_connections_metric: str = Field(default="db_client_connections_usage", pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
+    unified_db_connections_max_metric: str = Field(default="db_client_connections_max", pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 
     # Kubernetes <-> AWS Secrets Manager sync (docs/SECRETS_SYNC.md). Off unless MOKS_SECRETS_SYNC_ENABLED is true in the api and
     # the executor. Values are read and written only by the executor; nothing here schedules a sync, only discovery.

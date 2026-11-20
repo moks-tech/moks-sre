@@ -4,7 +4,7 @@ import { API } from "./api";
 export interface Ev { type: string; seq: number; at: string; [k: string]: any }
 export type StreamState = "connecting" | "live" | "reconnecting" | "ended" | "failed";
 
-const TYPES = ["queued", "scope", "phase", "skills", "tool_call", "tool_result", "llm_usage", "note", "report", "error", "cancelled", "done"];
+const TYPES = ["queued", "scope", "phase", "pipeline", "skills", "tool_call", "tool_result", "llm_usage", "note", "report", "error", "cancelled", "done"];
 const REFRESH = new Set(["tool_result", "report", "done"]);
 
 export function parseEvent(data: string): Ev | null {

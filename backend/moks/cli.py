@@ -349,7 +349,8 @@ async def _eval(dataset: str, mode: str) -> None:
             for r in run.results:
                 failed = [k for k, v in r["checks"].items() if not v]
                 print(f"{r['case']:40} {r['score']:.2f}  {'FAILED: ' + ', '.join(failed) if failed else 'ok'}")
-    print(f"score {summary['score']:.3f} over {summary['cases']} cases (run {rid})")
+    print(f"score {summary['score']:.3f} over {summary.get('cases', len(run.results or []))} cases (run {rid})"
+          + ("" if summary.get("gates_passed") is None else f"; gates {'passed' if summary['gates_passed'] else 'FAILED'}"))
 
 
 async def _skills(a) -> None:
@@ -599,6 +600,13 @@ def main(argv: list[str] | None = None) -> None:
     ev = sub.add_parser("eval")
     ev.add_argument("dataset")
     ev.add_argument("--mode", choices=["rules", "llm"], default="rules")
+    bm = sub.add_parser("benchmark", help="the end-to-end investigation benchmark across engines (docs/UNIFIED_INVESTIGATION.md#benchmark)")
+    bm.add_argument("--engines", default="langgraph,crewai,crewai_improved,unified", help="comma-separated: langgraph, crewai, crewai_improved, unified")
+    bm.add_argument("--llm", action="store_true", help="use the active chat model (needed by the crews and the unified pipeline's agents)")
+    bm.add_argument("--improved-flow", default=None, help="the CrewAI console flow that stands for the improved crew")
+    bm.add_argument("--case", action="append", help="run only these case ids")
+    bm.add_argument("--json", dest="json_path", default=None)
+    bm.add_argument("--markdown", dest="md_path", default=None)
     sub.add_parser("reindex")
     os_ = sub.add_parser("opensearch").add_subparsers(dest="opensearch_cmd", required=True)
     os_.add_parser("status", help="what the configured cluster says about itself")
@@ -690,6 +698,12 @@ def main(argv: list[str] | None = None) -> None:
         executor()
     elif a.cmd == "eval":
         asyncio.run(_eval(a.dataset, a.mode))
+    elif a.cmd == "benchmark":
+        from .intelligence import benchmark
+
+        out = asyncio.run(benchmark.run(engines=tuple(e.strip() for e in a.engines.split(",") if e.strip()), use_llm=a.llm, improved_flow=a.improved_flow, cases=a.case))
+        benchmark.write(out, a.json_path, a.md_path)
+        print(benchmark.markdown(out))
     elif a.cmd == "reindex":
         asyncio.run(_reindex())
     elif a.cmd == "opensearch":

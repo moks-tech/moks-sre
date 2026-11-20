@@ -84,7 +84,9 @@ async def investigate_config(ctx: AuthContext = Depends(get_auth), db: AsyncSess
     from ..crew import capability, console, worker_version
     from ..crew import config as crew_config
 
-    crew = capability(get_settings(), cfg, await worker_version(db))
+    version = await worker_version(db)
+    crew = capability(get_settings(), cfg, version)
+    unified = await _unified_capability(db, capability(get_settings(), cfg, version))
     if crew["enabled"]:  # what the CrewAI console decides: each flow switched on or off, and its crew's active version's limits
         states, ready = await console.flows_state(db), crew["available"]
         crew["flows"] = {}
@@ -107,7 +109,21 @@ async def investigate_config(ctx: AuthContext = Depends(get_auth), db: AsyncSess
         crew["config_version"] = workload["config_version"]
     return {"llm": {"provider": cfg.provider, "model": cfg.model} if cfg else None,
             "skills": sorted(skills.library().skills), "environments": [e.name for e in envs if ctx.principal.namespace_patterns(P.INVESTIGATION_RUN, e.name)],
-            "crewai": crew}
+            "crewai": crew, "unified": unified}
+
+
+async def _unified_capability(db: AsyncSession, crew: dict[str, Any]) -> dict[str, Any]:
+    """Whether the unified investigation (docs/UNIFIED_INVESTIGATION.md) can start, and its stages for the UI."""
+    from ..crew import console
+    from ..intelligence import FLOW
+    from ..intelligence.pipeline import STAGES
+
+    out = {"flow": FLOW, "available": bool(crew["available"]), "reason": crew.get("reason"), "stages": [{"key": s.key, "label": s.label, "description": s.description} for s in STAGES]}
+    if crew["available"]:
+        state = (await console.flows_state(db)).get(FLOW) or {}
+        if not state.get("enabled"):
+            out.update(available=False, reason="the unified investigation flow is switched off in the CrewAI console" + (f": {state['reason']}" if state.get("reason") else ""))
+    return out
 
 
 async def resolve_scope(db: AsyncSession, ctx: AuthContext, question: str, environment: str | None, namespace: str | None) -> tuple[Environment, str, str]:
@@ -221,6 +237,29 @@ async def create_crewai(body: CrewIn, request: Request, ctx: AuthContext = Depen
     elif body.change_window:
         raise HTTPException(422, "change_window: only the incident investigation flow takes a change window")
     return await start_run(request, ctx, db, body.flow, inputs)
+
+
+class UnifiedIn(BaseModel):
+    environment: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9-]{0,99}$")
+    namespace: str = Field(pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+    workload: str | None = Field(default=None, pattern=r"^[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?$")  # optional: MOKS finds the unhealthy one
+    kind: Literal["Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "ReplicaSet", "Pod"] = "Deployment"
+    question: str | None = Field(default=None, min_length=3, max_length=2000)
+    minutes: int | None = Field(default=None, ge=5, le=10080)
+
+
+@router.post("/investigations/unified", status_code=201)
+async def create_unified(body: UnifiedIn, request: Request, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """The unified investigation pipeline (docs/UNIFIED_INVESTIGATION.md): the CrewAI console's unified_investigation flow, on the
+    CrewAI worker. Like /investigations/crewai it answers 404 while MOKS_CREWAI_ENABLED is false."""
+    from ..intelligence import FLOW
+    from .crewai import start_run
+
+    if not get_settings().crewai_enabled:
+        raise HTTPException(404, "Not Found")
+    environment = body.environment or (await resolve_scope(db, ctx, body.question or body.workload or body.namespace, None, body.namespace))[0].name
+    inputs = {"environment": environment, "namespace": body.namespace, "workload": body.workload, "kind": body.kind, "minutes": body.minutes, "question": body.question}
+    return await start_run(request, ctx, db, FLOW, inputs)
 
 
 async def start_investigation(body: CreateIn, request: Request, ctx: AuthContext, db: AsyncSession, conversation_id: uuid.UUID | None = None,
@@ -355,6 +394,57 @@ async def get(inv_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(ge
     queued = (await db.execute(select(InvestigationEvent.payload).where(InvestigationEvent.investigation_id == inv.id, InvestigationEvent.seq == 0))).scalar_one_or_none() or {}
     out["trace_id"] = trace_id_of(queued.get("traceparent"))  # the key that finds this run in Jaeger and its lines in Loki
     return out
+
+
+def _contract(inv: Investigation, env: Environment, rows: list[Evidence]) -> list[dict[str, Any]]:
+    """The shared evidence contract for each stored row. The unified pipeline's own items (with the stage, the agent and the
+    signals narrowed to its target) are served as it built them; any other engine's rows are described by the same adapter."""
+    from ..intelligence import evidence as contract, signals as sig
+
+    built = {i.get("id"): i for i in ((inv.report or {}).get("unified") or {}).get("evidence_items") or [] if isinstance(i, dict)}
+    scope = contract.Scope(investigation_id=str(inv.id), environment=env.name, principal_id=str(inv.created_by), time_from=inv.time_from, time_to=inv.time_to,
+                           max_age_seconds=get_settings().evidence_max_age_seconds)
+    out = []
+    for e in sorted(rows, key=lambda e: int(e.ref[1:])):
+        if e.ref in built:
+            out.append(built[e.ref])
+            continue
+        keys = sorted({x.key for x in sig.extract({"ref": e.ref, "tool": e.tool, "args": e.args or {}, "ok": e.ok, "data": e.data}, None, (inv.time_from, inv.time_to))})
+        out.append(contract.from_row(e, scope, signals=keys, now=inv.finished_at or datetime.now(timezone.utc)).model_dump(mode="json"))
+    return out
+
+
+@router.get("/investigations/{inv_id}/evidence-items")
+async def evidence_items(inv_id: uuid.UUID, request: Request, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """Every piece of evidence this investigation holds, in the shared contract (moks.evidence/v1), whichever engine collected it."""
+    from ..intelligence.evidence import CONTRACT
+
+    inv, env = await _load_visible(request, db, ctx, inv_id)
+    rows = (await db.execute(select(Evidence).where(Evidence.investigation_id == inv.id))).scalars().all()
+    return {"contract": CONTRACT, "investigation_id": str(inv.id), "items": _contract(inv, env, list(rows))}
+
+
+@router.get("/investigations/{inv_id}/evidence/{ref}")
+async def evidence_item(inv_id: uuid.UUID, ref: str, request: Request, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """One piece of evidence: its contract and the stored, redacted result it describes (the contract's raw_ref)."""
+    if not re.fullmatch(r"E\d{1,5}", ref):
+        raise HTTPException(404, "Evidence not found")
+    inv, env = await _load_visible(request, db, ctx, inv_id)
+    row = (await db.execute(select(Evidence).where(Evidence.investigation_id == inv.id, Evidence.ref == ref))).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, "Evidence not found")
+    return {"item": _contract(inv, env, [row])[0], "stored": {"ref": row.ref, "tool": row.tool, "connector_type": row.connector_type, "args": row.args, "scope": row.scope,
+                                                               "ok": row.ok, "kind": row.kind, "summary": row.summary, "data": row.data, "source": row.source,
+                                                               "truncated": row.truncated, "error": row.error, "duration_ms": row.duration_ms,
+                                                               "collected_at": row.collected_at.isoformat()}}
+
+
+@router.get("/intelligence/evidence-schema")
+async def evidence_schema(ctx: AuthContext = Depends(get_auth)) -> dict[str, Any]:
+    """The JSON Schema of the shared evidence contract."""
+    from ..intelligence.evidence import schema
+
+    return schema()
 
 
 def trace_id_of(value: str | None) -> str | None:

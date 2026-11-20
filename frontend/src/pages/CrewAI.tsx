@@ -5,20 +5,26 @@ import { Badge, ErrorBox } from "../components";
 import { KindOptions, NamespaceSelect, WorkloadSelect } from "../targets";
 import { IncidentReport } from "../crewai/IncidentReport";
 
-// The opt-in CrewAI investigations: the workload flow (docs/crewai-investigation.md) and the incident flow
-// (docs/crewai-sre-engine.md). Shown only when /investigate/config reports one available, so with the flag off none of this renders.
+// The opt-in CrewAI investigations: the workload flow (docs/crewai-investigation.md), the incident flow (docs/crewai-sre-engine.md)
+// and the unified pipeline (docs/UNIFIED_INVESTIGATION.md). Shown only when /investigate/config reports one available, so with
+// the flag off none of this renders.
 
 type FlowInfo = { label: string; description: string; enabled: boolean; available: boolean; reason: string | null; agents: number; limits: Record<string, number>;
   inputs: { name: string; default?: string; choices?: string[] }[] };
 export type CrewCapability = { enabled: boolean; available: boolean; available_any?: boolean; reason: string | null; version: string | null; llm?: string;
   limits: { timeout_seconds: number; max_tool_calls: number; max_iterations_per_agent: number }; flows?: Record<string, FlowInfo> };
 
+const WORKLOAD = "workload_investigation";
 const INCIDENT = "incident_investigation";
+const UNIFIED = "unified_investigation";
 
-export function CrewAIForm({ capability, environments, minutes }: { capability: CrewCapability; environments: string[]; minutes: string }) {
+export type UnifiedCapability = { flow: string; available: boolean; reason: string | null; stages: { key: string; label: string; description: string }[] };
+
+export function CrewAIForm({ capability, unified, environments, minutes }: { capability: CrewCapability; unified?: UnifiedCapability; environments: string[]; minutes: string }) {
   const nav = useNavigate();
   const incidentFlow = capability.flows?.[INCIDENT]?.available ? capability.flows[INCIDENT] : null;
-  const [flow, setFlow] = useState(capability.available ? "workload_investigation" : INCIDENT);
+  const choices = [capability.available && WORKLOAD, incidentFlow && INCIDENT, unified?.available && UNIFIED].filter(Boolean) as string[];
+  const [flow, setFlow] = useState(unified?.available ? UNIFIED : capability.available ? WORKLOAD : INCIDENT);
   const [environment, setEnvironment] = useState(environments[0] ?? "");
   const [namespace, setNamespace] = useState("");
   const [workload, setWorkload] = useState("");
@@ -29,14 +35,15 @@ export function CrewAIForm({ capability, environments, minutes }: { capability: 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>();
   const isIncident = flow === INCIDENT;
+  const isUnified = flow === UNIFIED && !!unified?.available;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const base = { environment: environment || undefined, namespace, workload, kind, minutes: minutes ? Number(minutes) : undefined };
+    const base = { environment: environment || undefined, namespace, workload: workload || undefined, kind, minutes: minutes ? Number(minutes) : undefined };
     try {
-      const inv = await api<{ conversation_id: string }>("/investigations/crewai", {
+      const inv = await api<{ conversation_id: string }>(isUnified ? "/investigations/unified" : "/investigations/crewai", {
         method: "POST", body: isIncident ? { flow: INCIDENT, ...base, change_window: changeWindow, question: incident.trim() || undefined } : base });
       nav(`/conversations/${inv.conversation_id}`);
     } catch (err) {
@@ -48,17 +55,20 @@ export function CrewAIForm({ capability, environments, minutes }: { capability: 
   const lim = incidentFlow?.limits ?? {};
   return (
     <form className="card stack" onSubmit={submit} aria-label="CrewAI investigation">
-      {capability.available && incidentFlow && <div className="row small" role="radiogroup" aria-label="Crew">
-        <label className="inline"><input type="radio" name="crew" checked={!isIncident} onChange={() => setFlow("workload_investigation")} /> Workload investigation (3 agents)</label>
-        <label className="inline"><input type="radio" name="crew" checked={isIncident} onChange={() => setFlow(INCIDENT)} /> Incident investigation ({incidentFlow.agents} agents)</label>
+      {choices.length > 1 && <div className="row small" role="radiogroup" aria-label="Crew">
+        {capability.available && <label className="inline"><input type="radio" name="crew" checked={flow === WORKLOAD} onChange={() => setFlow(WORKLOAD)} /> Workload investigation (3 agents)</label>}
+        {incidentFlow && <label className="inline"><input type="radio" name="crew" checked={isIncident} onChange={() => setFlow(INCIDENT)} /> Incident investigation ({incidentFlow.agents} agents)</label>}
+        {unified?.available && <label className="inline"><input type="radio" name="crew" checked={isUnified} onChange={() => setFlow(UNIFIED)} /> Unified investigation</label>}
       </div>}
       {isIncident ? <div className="small muted">
         An incident commander plans, Kubernetes, observability, change and history specialists collect evidence with read-only tools, an independent reviewer
         challenges every finding and hypothesis, and a root-cause analyst writes the RCA, using {capability.llm}. MOKS grades every finding and hypothesis from the evidence.
         Limits: {lim.timeout_seconds}s, {lim.max_tool_calls} tool calls, {lim.review_rounds} review rounds, {lim.token_budget} tokens.
       </div> : <div className="small muted">
-        Three agents (workload, changes, review) investigate one workload with read-only tools, using {capability.llm}. Every finding cites recorded evidence.
-        Limits: {capability.limits.timeout_seconds}s, {capability.limits.max_tool_calls} tool calls, {capability.limits.max_iterations_per_agent} iterations per agent.
+        {isUnified
+          ? <>{unified!.stages.length} stages over Kubernetes, metrics, logs, traces, deployments, Git, ML anomalies, past incidents and runbooks. An analyst agent proposes hypotheses, a reviewer challenges them, and MOKS scores each by stated factors, using {capability.llm}. The workload is optional: MOKS finds the unhealthy one.</>
+          : <>Three agents (workload, changes, review) investigate one workload with read-only tools, using {capability.llm}. Every finding cites recorded evidence.</>}
+        {" "}Limits: {capability.limits.timeout_seconds}s, {capability.limits.max_tool_calls} tool calls, {capability.limits.max_iterations_per_agent} iterations per agent.
       </div>}
       <div className="filters">
         <label>Environment<select value={environment} onChange={(e) => { setEnvironment(e.target.value); setNamespace(""); setWorkload(""); }}>{environments.map((n) => <option key={n}>{n}</option>)}</select></label>
@@ -67,7 +77,7 @@ export function CrewAIForm({ capability, environments, minutes }: { capability: 
         <label htmlFor="crew-wl" style={{ flex: 1 }}>Workload<WorkloadSelect id="crew-wl" environment={environment} namespace={namespace} kind={kind} value={workload} onChange={setWorkload} /></label>
         {isIncident && <label>Change window<select value={changeWindow} onChange={(e) => setChangeWindow(e.target.value)}>
           {(windows?.choices ?? ["15m", "1h", "6h", "24h"]).map((w) => <option key={w}>{w}</option>)}</select></label>}
-        <button disabled={busy || !namespace || !workload}>{busy ? "Starting…" : isIncident ? "Run incident investigation" : "Run CrewAI investigation"}</button>
+        <button disabled={busy || !namespace || (!workload && !isUnified)}>{busy ? "Starting…" : isIncident ? "Run incident investigation" : isUnified ? "Run unified investigation" : "Run CrewAI investigation"}</button>
       </div>
       {isIncident && <textarea aria-label="Incident" rows={2} maxLength={2000} value={incident} onChange={(e) => setIncident(e.target.value)}
         placeholder="Optional: the symptoms, when they started, who noticed" />}
