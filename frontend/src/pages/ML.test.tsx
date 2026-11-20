@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { FeedbackProvider } from "../ui";
 import { KnowledgeUsed, Report } from "./Investigate";
 import { Readiness } from "./Insights";
-import { MLInsights, observationLabel } from "./ML";
+import { BuildDataset, MLInsights, buildHint, observationLabel } from "./ML";
 import { SimilarIncidents } from "./MLParts";
 
 const perms = new Set(["ml.read", "ml.feedback", "investigation.read"]);
@@ -120,5 +120,56 @@ describe("ML insights", () => {
     expect(screen.getByText("p95 latency")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "False alarm" }));
     await waitFor(() => expect(fetch.mock.calls.some(([u]) => String(u).includes("/feedback"))).toBe(true));
+  });
+});
+
+describe("Build a dataset", () => {
+  const ready = (over: any = {}) => ({
+    operational: { purposes: { incident_similarity: 0, skill_ranking: 2, retrieval: 2, anomaly: 2 }, approved: { investigation: 2 }, unreviewed: 3 },
+    evaluation: { purposes: { incident_similarity: 0, skill_ranking: 0, retrieval: 0, anomaly: 0 }, approved: {}, unreviewed: 0 }, ...over });
+  const serve = (r: any) => {
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => url.includes("/readiness")
+      ? new Response(JSON.stringify(r), { status: 200 })
+      : new Response(JSON.stringify({ name: "s", version: 1, counts: { train: 1, eval: 1 }, sent: JSON.parse(String(init?.body)) }), { status: 201 }));
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+
+  it("starts on a purpose that has approved records, and sends it", async () => {
+    const fetch = serve(ready());
+    const onBuilt = vi.fn();
+    render(<FeedbackProvider><BuildDataset onClose={() => {}} onBuilt={onBuilt} /></FeedbackProvider>);
+    expect(await screen.findByText("2 approved records match. Duplicates are dropped before the split.")).toBeTruthy();
+    expect((screen.getByLabelText("Purpose") as HTMLSelectElement).value).toBe("skill_ranking");
+    expect(screen.getByRole("option", { name: "incident_similarity (0 approved)" })).toBeTruthy();
+    expect(screen.queryByLabelText("Records from")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "skills-nov" } });
+    fireEvent.click(screen.getByRole("button", { name: "Build" }));
+    await waitFor(() => expect(onBuilt).toHaveBeenCalled());
+    const [, init] = fetch.mock.calls.find(([u]) => String(u).endsWith("/ml/learning/datasets")) as unknown as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({ name: "skills-nov", purpose: "skill_ranking", method: "grouped", realm: "operational" });
+  });
+
+  it("blocks Build and says what to approve when the purpose has nothing", async () => {
+    serve(ready());
+    render(<FeedbackProvider><BuildDataset onClose={() => {}} onBuilt={() => {}} /></FeedbackProvider>);
+    await screen.findByText(/2 approved records match/);
+    fireEvent.change(screen.getByLabelText("Purpose"), { target: { value: "incident_similarity" } });
+    expect(screen.getByText(/approve one on its incident page.*2 confirmed outcomes now/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "Build" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("offers evaluation runs only when there are some", async () => {
+    serve(ready({ evaluation: { purposes: { incident_similarity: 0, skill_ranking: 0, retrieval: 0, anomaly: 0 }, approved: {}, unreviewed: 3 } }));
+    render(<FeedbackProvider><BuildDataset onClose={() => {}} onBuilt={() => {}} /></FeedbackProvider>);
+    fireEvent.change(await screen.findByLabelText("Records from"), { target: { value: "evaluation" } });
+    expect(screen.getByText(buildHint("incident_similarity", "evaluation", ready({ evaluation: { purposes: {}, approved: {}, unreviewed: 3 } })))).toBeTruthy();
+    expect(screen.getByText(/No approved evaluation-run incidents yet/)).toBeTruthy();
+  });
+
+  it("explains an empty start: records wait for review, or none exist yet", () => {
+    const none = ready({ operational: { purposes: { skill_ranking: 0 }, approved: {}, unreviewed: 0 } });
+    expect(buildHint("skill_ranking", "operational", ready({ operational: { purposes: { skill_ranking: 0 }, approved: {}, unreviewed: 1 } }))).toMatch(/1 record waits under Confirm outcomes/);
+    expect(buildHint("skill_ranking", "operational", none)).toMatch(/written when an investigation finishes/);
   });
 });

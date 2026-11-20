@@ -311,6 +311,12 @@ async def build(body: DatasetIn, ctx: AuthContext = Depends(needs(P.LEARNING_EXP
     return _dataset_out(ds)
 
 
+@router.get("/learning/datasets/readiness")
+async def dataset_readiness(environment: str | None = None, ctx: AuthContext = Depends(needs(P.LEARNING_EXPORT)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    """Approved records per purpose and realm, and how many wait for review: what Build dataset would find."""
+    return await learning.readiness(db, environment)
+
+
 @router.get("/learning/datasets")
 async def datasets(ctx: AuthContext = Depends(needs(P.LEARNING_EXPORT)), db: AsyncSession = Depends(get_db, scope="function")) -> list[dict]:
     return [_dataset_out(d) for d in (await db.execute(select(LearningDataset).order_by(LearningDataset.created_at.desc()).limit(200))).scalars().all()]

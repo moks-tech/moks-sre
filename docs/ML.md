@@ -86,7 +86,12 @@ The rules:
 
 A **dataset** (`POST /ml/learning/datasets`, `learning.export`) is a frozen, versioned selection:
 
-- It includes approved records only.
+- It includes approved records only. Which ones depends on the purpose: `incident_similarity` reads incidents whose
+  postmortem was approved; `skill_ranking`, `retrieval` and `anomaly` read any approved record, including outcomes
+  confirmed under Confirm outcomes. Records from evaluation runs build only from the `evaluation` realm.
+- `GET /ml/learning/datasets/readiness` counts what a build would find: approved records per purpose and realm, and
+  how many wait for review. The Build dataset drawer shows these counts, starts on a purpose that has records, and
+  says what to approve when the chosen one has none. A build that finds nothing answers 422 with the same advice.
 - Duplicates by content hash are dropped first.
 - Every record of one incident, deployment or cited document family lands on one side of the split. `chronological`
   puts the latest groups in evaluation.

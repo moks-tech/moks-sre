@@ -154,9 +154,51 @@ async def test_datasets_use_approved_records_only_and_export_redacted_features()
     body = json.dumps(rows)
     assert "sk-live-123456789" not in body and "unreviewed" not in body and all(r["record"]["label"] for r in rows)
     async with session_scope() as db:
-        with pytest.raises(ValueError, match="no approved records"):
+        with pytest.raises(ValueError, match="no approved records") as nothing:
             await learning.build_dataset(db, name="none", purpose="incident_similarity", created_by=None, environment=env)
+        ready = await learning.readiness(db, env)
+    # incident_similarity reads approved postmortems only, so the message points at them and at the 4 confirmed outcomes
+    assert "postmortem" in str(nothing.value) and "skill_ranking, retrieval or anomaly from the 4 confirmed outcome(s)" in str(nothing.value)
+    assert ready["operational"] == {"purposes": {"incident_similarity": 0, "skill_ranking": 4, "retrieval": 4, "anomaly": 4}, "approved": {"investigation": 4}, "unreviewed": 2}
+    assert ready["evaluation"]["purposes"]["skill_ranking"] == 1 and ready["evaluation"]["unreviewed"] == 0
 
+
+async def test_an_empty_build_says_what_to_review():
+    env = f"dz-{uuid.uuid4().hex[:6]}"
+    async with session_scope() as db:
+        for i in range(3):
+            db.add(LearningRecord(schema_version=1, kind="investigation", environment=env, namespace="shop", features={}, label={}, label_state="unreviewed",
+                                  fingerprint=uuid.uuid4().hex, content_hash=uuid.uuid4().hex))
+        db.add(LearningRecord(schema_version=1, kind="incident", environment=env, namespace="shop", realm="evaluation", features={}, label={"confirmed_cause": "x"}, label_state="approved",
+                              fingerprint=uuid.uuid4().hex, content_hash=uuid.uuid4().hex))
+    async with session_scope() as db:
+        with pytest.raises(ValueError) as skills:
+            await learning.build_dataset(db, name="none", purpose="skill_ranking", created_by=None, environment=env)
+        with pytest.raises(ValueError) as similar:
+            await learning.build_dataset(db, name="none", purpose="incident_similarity", created_by=None, environment=env)
+        ds = await learning.build_dataset(db, name=f"eval-{env}", purpose="incident_similarity", realm="evaluation", created_by=None, environment=env)
+    assert "3 record(s) wait under Settings > Machine learning > Confirm outcomes" in str(skills.value)
+    assert "1 approved evaluation record(s) would match" in str(similar.value) and ds.counts["records"] == 1
+
+
+
+async def test_readiness_is_what_build_dataset_would_find(client):
+    env = f"rd-{uuid.uuid4().hex[:6]}"
+    await make_env(env)
+    admin, viewer = f"{env}@example.com", f"v-{env}@example.com"
+    await make_user(admin, ["admin"])
+    await make_user(viewer, [f"viewer:{env}:*"])
+    async with session_scope() as db:
+        db.add(LearningRecord(schema_version=1, kind="incident", environment=env, namespace="shop", features={}, label={"confirmed_cause": "x"}, label_state="approved",
+                              fingerprint=uuid.uuid4().hex, content_hash=uuid.uuid4().hex))
+        db.add(LearningRecord(schema_version=1, kind="investigation", environment=env, namespace="shop", features={}, label={}, label_state="unreviewed",
+                              fingerprint=uuid.uuid4().hex, content_hash=uuid.uuid4().hex))
+    await login(client, viewer)
+    assert (await client.get("/moks/api/ml/learning/datasets/readiness", params={"environment": env})).status_code == 403
+    await login(client, admin)
+    r = await client.get("/moks/api/ml/learning/datasets/readiness", params={"environment": env})
+    assert r.status_code == 200
+    assert r.json()["operational"] == {"purposes": {"incident_similarity": 1, "skill_ranking": 1, "retrieval": 1, "anomaly": 1}, "approved": {"incident": 1}, "unreviewed": 1}
 
 async def test_retention_purges_expired_records_but_never_approved_incidents():
     env = f"rt-{uuid.uuid4().hex[:6]}"

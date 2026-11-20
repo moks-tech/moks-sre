@@ -225,7 +225,7 @@ function Review() {
   const submit = async (approve: boolean) => {
     try {
       await api(`/ml/learning/records/${open.id}/review`, { method: "POST", body: { approve, ...form } });
-      toast(approve ? "Approved: this record can enter a dataset." : "Rejected.");
+      toast(approve ? "Approved: it can now enter skill_ranking, retrieval and anomaly datasets." : "Rejected.");
       setOpen(null);
       recs.reload();
     } catch (e: any) {
@@ -233,14 +233,15 @@ function Review() {
     }
   };
   const cols: Col<any>[] = [
-    { key: "scope", head: "Scope", primary: true, cell: (r) => <span className="mono">{r.environment}/{r.namespace}{r.service ? `/${r.service}` : ""}</span> },
+    { key: "scope", head: "Scope", primary: true, cell: (r) => <span className="row tight"><span className="mono">{r.environment}/{r.namespace}{r.service ? `/${r.service}` : ""}</span>
+      {r.realm === "evaluation" && <span title="From an evaluation run: it builds only evaluation datasets."><Badge kind="info">evaluation run</Badge></span>}</span> },
     { key: "sym", head: "Symptoms", cell: (r) => (r.features?.symptoms ?? []).join(", ") },
     { key: "out", head: "Outcome", cell: (r) => `investigation ${r.outcome?.investigation_status}; resolution ${r.outcome?.resolution}` },
     { key: "at", head: "When", cell: (r) => <Time iso={r.created_at} /> },
   ];
   return <section className="card stack">
     <h2>Confirm outcomes</h2>
-    <div className="small muted">A completed investigation is not a resolved incident. Only what you confirm here becomes a label.</div>
+    <div className="small muted">A completed investigation is not a resolved incident. Only what you confirm here becomes a label. Approved outcomes feed skill_ranking, retrieval and anomaly datasets; incident_similarity learns from approved postmortems.</div>
     {recs.data ? <DataTable label="Unreviewed learning records" rows={recs.data} cols={cols} rowKey={(r) => r.id} onRow={setOpen} empty={<Empty title="Nothing waiting for review." />} /> : <Loading load={recs} />}
     {open && <Drawer title="Confirm what happened" heading={<span className="mono">{open.environment}/{open.namespace}</span>} onClose={() => setOpen(null)}
       footer={<div className="row wrap"><button type="button" onClick={() => submit(true)} disabled={!form.confirmed_cause.trim()}>Approve</button><button type="button" className="ghost" onClick={() => submit(false)}>Reject</button></div>}>
@@ -269,29 +270,62 @@ function Datasets() {
       {d.provenance === "legacy_live_records" && <> · <span title={d.reason}><Badge kind="warn">legacy: not reproducible</Badge></span></>}
       {d.provenance === "invalidated" ? <> · <Badge kind="bad">invalidated</Badge> <span className="muted">{d.reason}</span></>
         : <> · <a href={`${API}/ml/learning/datasets/${d.id}/export`}>Export JSONL</a></>}</li>)}</ul> : <Loading load={sets} />}
-    {sets.data && !sets.data.length && <Empty title="No datasets yet.">Use Build dataset once records have been approved under Confirm outcomes.</Empty>}
+    {sets.data && !sets.data.length && <Empty title="No datasets yet.">Approve outcomes under Confirm outcomes, or a postmortem on its incident page, then use Build dataset.</Empty>}
   </section>;
 }
 
-function BuildDataset({ onClose, onBuilt }: { onClose: () => void; onBuilt: (d: any) => void }) {
+const PURPOSES = ["incident_similarity", "skill_ranking", "retrieval", "anomaly"];
+type Readiness = Record<string, { purposes: Record<string, number>; approved: Record<string, number>; unreviewed: number }>;
+
+/** What to approve so a build for this purpose and realm finds records. */
+export function buildHint(purpose: string, realm: string, ready: Readiness): string {
+  const here = ready[realm];
+  const where = realm === "evaluation" ? "evaluation-run" : "operational";
+  const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+  if (purpose === "incident_similarity") {
+    const outcomes = here.purposes.skill_ranking ?? 0;
+    return `No approved ${where} incidents yet. Incident similarity learns from incidents whose postmortem was approved: approve one on its incident page.`
+      + (outcomes ? ` Skill ranking, retrieval and anomaly can use the ${plural(outcomes, "confirmed outcome", "confirmed outcomes")} now.` : "");
+  }
+  return here.unreviewed
+    ? `No approved ${where} records yet. ${plural(here.unreviewed, "record waits", "records wait")} under Confirm outcomes: approve one with its confirmed cause, then build.`
+    : `No ${where} records to build from yet. One is written when an investigation finishes; confirm its outcome under Confirm outcomes.`;
+}
+
+export function BuildDataset({ onClose, onBuilt }: { onClose: () => void; onBuilt: (d: any) => void }) {
+  const ready = useLoad(() => api<Readiness>("/ml/learning/datasets/readiness"), []);
   const [name, setName] = useState("");
-  const [purpose, setPurpose] = useState("incident_similarity");
+  const [realm, setRealm] = useState("operational");
+  const [picked, setPicked] = useState("");
   const [method, setMethod] = useState("grouped");
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
+  const counts = ready.data?.[realm]?.purposes ?? {};
+  const purpose = picked || PURPOSES.find((p) => (counts[p] ?? 0) > 0) || PURPOSES[0];
+  const matching = counts[purpose] ?? 0;
+  const evaluation = ready.data?.evaluation;
+  const showRealm = realm === "evaluation" || (!!evaluation && (evaluation.unreviewed > 0 || Object.values(evaluation.approved).some((n) => n > 0)));
   const build = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    try { onBuilt(await api("/ml/learning/datasets", { method: "POST", body: { name, purpose, method } })); } catch (err) { setError(err); setBusy(false); }
+    try { onBuilt(await api("/ml/learning/datasets", { method: "POST", body: { name, purpose, method, realm } })); } catch (err) { setError(err); setBusy(false); }
   };
-  return <FormDrawer title="Build a dataset" submit="Build" busyLabel="Building…" busy={busy} error={error} onSubmit={build} onClose={onClose}>
+  return <FormDrawer title="Build a dataset" submit="Build" busyLabel="Building…" busy={busy} blocked={ready.loading || (!!ready.data && matching === 0)} error={error} onSubmit={build} onClose={onClose}>
     <FormSection title="Dataset" help="Built from approved records only, and frozen when built: later label edits make a new version.">
       <div className="form-grid">
         <label>Name<input value={name} onChange={(e) => setName(e.target.value)} required pattern="[a-z0-9][a-z0-9-]+" autoFocus placeholder="similarity-nov" /></label>
-        <label>Purpose<select value={purpose} onChange={(e) => setPurpose(e.target.value)}>{["incident_similarity", "skill_ranking", "retrieval", "anomaly"].map((x) => <option key={x}>{x}</option>)}</select></label>
+        <label>Purpose<select value={purpose} onChange={(e) => setPicked(e.target.value)}>{PURPOSES.map((p) =>
+          <option key={p} value={p}>{ready.data ? `${p} (${counts[p] ?? 0} approved)` : p}</option>)}</select></label>
+        {showRealm && <label>Records from<select value={realm} onChange={(e) => setRealm(e.target.value)}>
+          <option value="operational">operational runs</option><option value="evaluation">evaluation runs</option></select></label>}
         <label>Split<select value={method} onChange={(e) => setMethod(e.target.value)}><option value="grouped">grouped</option><option value="chronological">chronological</option></select></label>
       </div>
+      {ready.data
+        ? matching === 0
+          ? <div className="alert warn small" role="status">{buildHint(purpose, realm, ready.data)}</div>
+          : <div className="small muted">{matching} approved record{matching === 1 ? "" : "s"} match. Duplicates are dropped before the split.</div>
+        : <Loading load={ready} />}
     </FormSection>
   </FormDrawer>;
 }
