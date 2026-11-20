@@ -49,10 +49,11 @@ vectors it reused. One generation per backend is active; retired ones are kept f
 - **One size per generation, enforced by PostgreSQL.** pgvector writes cast to `vector(N)` with the generation's size,
   so a vector of another size is refused by the database, whatever the caller checked. Queries only ever read one
   generation's rows.
-- **Content hashing and reuse.** Each stored vector carries `input_hash`, a SHA-256 of the model key and the exact
-  model input. A rebuild with the same model copies vectors instead of calling the model; editing one section of a
-  document re-embeds that section only (the old vectors are read before the rewrite deletes them). On mk4's bge-m3 at
-  ~0.7 chunks/s, that is the difference between minutes and seconds for an unchanged corpus.
+- **Content hashing and reuse.** Every vector is kept in `embedding_cache` ([KNOWLEDGE.md](KNOWLEDGE.md)) under its
+  model key and the SHA-256 of the chunk's text. The model key carries the fingerprint of the prefixes, truncation and
+  revision, so a cached vector is only reused by a configuration that would produce the same one. A rebuild with the
+  same model reads vectors instead of calling the model; editing one section of a document re-embeds that section
+  only. On mk4's bge-m3 at ~0.7 chunks/s, that is the difference between minutes and seconds for an unchanged corpus.
 - **Incremental by default.** Changes go through the outbox as before; documents indexed while embedding was down
   are backfilled.
 

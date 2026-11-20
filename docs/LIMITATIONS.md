@@ -166,6 +166,20 @@ Verified with a real PostgreSQL, fake connectors and no model, and in headless C
 - **Skill budgets** are checked between steps, so one slow tool can overrun, and tokens are estimated.
 - **Rollback of an old image:** see [KNOWLEDGE_ROLLOUT.md](KNOWLEDGE_ROLLOUT.md).
 
+## SRE knowledge engine (2026-11-20)
+
+- Document types and structure-aware splitting are line rules, not parsers. A rule file, manifest or OpenAPI
+  description in an unusual shape is split by its format, as before; a Helm template's names may be template text.
+- An upload made before this release has no stored type until it is uploaded again, so a type filter does not find it.
+- With OpenSearch or Pinecone, type and time filters apply in the authoritative check, not in the index query, so
+  search widens its candidates (up to 400) to fill the page.
+- Intents, service names and time windows are read by rules. A question phrased unlike the rules gets no signal,
+  which leaves ranking as it was; it never filters anything.
+- Dependents come from what sources declare (`applies_to.dependency_of`), not from traffic.
+- Investigation history is off by default and has not run on a cluster. It is model-written, unreviewed history.
+- The measured gains ([RAG_EVALUATION.md](RAG_EVALUATION.md)) come from a small synthetic dataset without vectors,
+  written by the author of the feature.
+
 ## Reranking
 
 Off by default. See [RERANKING.md](RERANKING.md) for what was measured. The container image has never been built, the service has never run on a cluster, and its quality numbers come from a small synthetic dataset with keyword candidates only.

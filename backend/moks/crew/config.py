@@ -21,6 +21,7 @@ import re
 from typing import Any
 
 from ..config import get_settings
+from . import incident_config as incident
 from .tools import TOOLS
 
 CREW = "workload"
@@ -56,17 +57,54 @@ FLOWS: dict[str, dict[str, Any]] = {
             {"name": "question", "label": "Question", "type": "text", "max": 2000, "help": "Optional. Default: why is the workload unhealthy?"},
         ],
     },
+    incident.FLOW: incident.FLOW_SPEC,
+}
+
+INCIDENT_CREW, INCIDENT_FLOW = incident.CREW, incident.FLOW
+# Each crew's shape: its agents, its tasks in order and which agent runs each, the tools each agent may be given, and the
+# code-owned output contract appended to a task. The workload crew's tasks are its agents.
+CREWS: dict[str, dict[str, Any]] = {
+    CREW: {"label": "Workload investigation crew", "agents": AGENT_KEYS, "tasks": AGENT_KEYS, "task_agent": {k: k for k in AGENT_KEYS},
+           "agent_labels": {"workload": "Workload agent", "change": "Change agent", "review": "Reviewer"}, "tools": TOOLS_BY_AGENT,
+           "first_task": "workload", "contracts": {"review": OUTPUT_CONTRACT}},
+    INCIDENT_CREW: {"label": "Incident investigation crew", "agents": incident.AGENT_KEYS, "tasks": incident.TASK_KEYS, "task_agent": incident.TASK_AGENT,
+                    "agent_labels": incident.AGENT_LABELS, "task_labels": incident.TASK_LABELS, "tools": incident.TOOLS_BY_AGENT,
+                    "first_task": "plan", "contracts": incident.CONTRACTS},
 }
 
 
-def ceilings() -> dict[str, tuple[int, int]]:
+def crew_of(flow: str | None) -> str:
+    return FLOWS.get(flow or FLOW, FLOWS[FLOW])["crew"]
+
+
+def spec(crew: str = CREW) -> dict[str, Any]:
+    return CREWS[crew]
+
+
+def default_question(flow: str, inputs: dict[str, Any]) -> str:
+    if flow == INCIDENT_FLOW:
+        return f"Investigate the incident affecting {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']}: what is wrong, since when, and why?"
+    return f"Why is {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']} unhealthy?"
+
+
+def request_block(inputs: dict[str, Any], block: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    """The `crewai` block of the seq-0 queued event: what Investigator._investigate hands to crew/runner.py."""
+    return {"workload": inputs["workload"], "kind": inputs["kind"], **({"change_window": inputs["change_window"]} if inputs.get("change_window") else {}),
+            **extra, **{k: v for k, v in block.items() if k != "config_digest"}}
+
+
+def ceilings(crew: str = CREW) -> dict[str, tuple[int, int]]:
     """The range each limit may be set to. The upper bounds are MOKS's global ceilings, which no version can raise."""
+    if crew == INCIDENT_CREW:
+        return incident.ceilings()
     s = get_settings()
-    return {"timeout_seconds": (10, min(900, s.max_duration_seconds)), "max_tool_calls": (1, s.max_tool_calls), "max_iterations": (1, 20),
+    return {"timeout_seconds": (10, min(900, s.crewai_max_duration_seconds or s.max_duration_seconds)), "max_tool_calls": (1, s.max_tool_calls), "max_iterations": (1, 20),
             "step_tokens": (100, 4000), "report_tokens": (200, 6000)}
 
 
-def defaults() -> dict[str, Any]:
+def defaults(crew: str = CREW) -> dict[str, Any]:
+    if crew == INCIDENT_CREW:
+        return incident.defaults()
     s = get_settings()
     return {
         "agents": {
@@ -106,15 +144,15 @@ def digest(obj: Any) -> str:
     return hashlib.sha256(_canonical(obj).encode()).hexdigest()
 
 
-def base_digest() -> str:
+def base_digest(crew: str = CREW) -> str:
     """The code's prompts and tools, for "upstream changed". Limits are left out: they follow the deployment's settings."""
-    d = defaults()
+    d = defaults(crew)
     return digest({"agents": d["agents"], "tasks": d["tasks"]})
 
 
-def merge(overlay: dict[str, Any] | None) -> dict[str, Any]:
+def merge(overlay: dict[str, Any] | None, crew: str = CREW) -> dict[str, Any]:
     """The configuration a run uses: the code's defaults with the overlay's fields on top."""
-    out = defaults()
+    out = defaults(crew)
     for section in ("agents", "tasks"):
         for key, fields in ((overlay or {}).get(section) or {}).items():
             if key in out[section] and isinstance(fields, dict):
@@ -124,9 +162,9 @@ def merge(overlay: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
-def overlay_of(config: dict[str, Any]) -> dict[str, Any]:
+def overlay_of(config: dict[str, Any], crew: str = CREW) -> dict[str, Any]:
     """Only what differs from the code's defaults: what a version stores."""
-    base, out = defaults(), {}
+    base, out = defaults(crew), {}
     for section in ("agents", "tasks"):
         for key, fields in (config.get(section) or {}).items():
             if key not in base[section] or not isinstance(fields, dict):
@@ -141,13 +179,13 @@ def overlay_of(config: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def check(config: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+def check(config: dict[str, Any], crew: str = CREW) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
     """(errors, warnings) for a full configuration or an overlay. An error blocks saving and running; a warning does not."""
     errors: list[dict[str, str]] = []
     warnings: list[dict[str, str]] = []
     if not isinstance(config, dict):
         return [{"field": "config", "message": "must be an object"}], []
-    base = defaults()
+    base, shape = defaults(crew), spec(crew)
     for section in config:
         if section not in base:
             errors.append({"field": section, "message": f"unknown section; expected one of {', '.join(base)}"})
@@ -155,7 +193,7 @@ def check(config: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, 
         for key, fields in (config.get(section) or {}).items():
             where = f"{section}.{key}"
             if key not in base[section]:
-                errors.append({"field": where, "message": f"unknown {section[:-1]}; the crew has {', '.join(AGENT_KEYS)}"})
+                errors.append({"field": where, "message": f"unknown {section[:-1]}; the crew has {', '.join(shape['agents'] if section == 'agents' else shape['tasks'])}"})
                 continue
             if not isinstance(fields, dict):
                 errors.append({"field": where, "message": "must be an object"})
@@ -165,7 +203,7 @@ def check(config: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, 
                 if f not in base[section][key]:
                     errors.append({"field": at, "message": "not editable"})
                 elif f == "tools":
-                    allowed = TOOLS_BY_AGENT.get(key, [])
+                    allowed = shape["tools"].get(key, [])
                     if not isinstance(v, list) or not all(isinstance(t, str) for t in v):
                         errors.append({"field": at, "message": "must be a list of tool names"})
                     elif bad := [t for t in v if t not in allowed]:
@@ -183,18 +221,20 @@ def check(config: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, 
                     if unknown:
                         warnings.append({"field": at, "message": f"{', '.join(unknown)} is not a placeholder and stays as written (placeholders: {', '.join(PLACEHOLDERS)})"})
     if not errors:
-        merged = merge(config)
-        roles = [merged["agents"][k]["role"].strip().lower() for k in AGENT_KEYS]
+        merged = merge(config, crew)
+        roles = [merged["agents"][k]["role"].strip().lower() for k in shape["agents"]]
         if len(set(roles)) != len(roles):  # a task's output is matched back to its agent by role
             errors.append({"field": "agents", "message": "each agent needs its own role"})
-        if "{target}" not in merged["tasks"]["workload"]["description"]:
-            warnings.append({"field": "tasks.workload.description", "message": "without {target} the first agent is not told which workload to investigate"})
+        first = shape["first_task"]
+        if "{target}" not in merged["tasks"][first]["description"]:
+            warnings.append({"field": f"tasks.{first}.description", "message": "without {target} the first agent is not told which workload to investigate"})
         if "{question}" not in "".join(t["description"] for t in merged["tasks"].values()):
             warnings.append({"field": "tasks", "message": "no task contains {question}, so the person's question reaches no agent"})
+    bounds = ceilings(crew)
     for k, v in (config.get("limits") or {}).items():
-        lo_hi = ceilings().get(k)
+        lo_hi = bounds.get(k)
         if lo_hi is None:
-            errors.append({"field": f"limits.{k}", "message": f"unknown limit; expected one of {', '.join(ceilings())}"})
+            errors.append({"field": f"limits.{k}", "message": f"unknown limit; expected one of {', '.join(bounds)}"})
         elif not isinstance(v, int) or isinstance(v, bool) or not lo_hi[0] <= v <= lo_hi[1]:
             errors.append({"field": f"limits.{k}", "message": f"a whole number from {lo_hi[0]} to {lo_hi[1]}"})
     for k, v in (config.get("defaults") or {}).items():
@@ -202,14 +242,16 @@ def check(config: dict[str, Any]) -> tuple[list[dict[str, str]], list[dict[str, 
             errors.append({"field": "defaults.kind", "message": f"one of {', '.join(KINDS)}"})
         elif k == "minutes" and v is not None and (not isinstance(v, int) or isinstance(v, bool) or not 5 <= v <= 10080):
             errors.append({"field": "defaults.minutes", "message": "empty, or a whole number from 5 to 10080"})
-        elif k not in ("kind", "minutes"):
+        elif k == "change_window" and k in base["defaults"] and v not in incident.CHANGE_WINDOWS:
+            errors.append({"field": "defaults.change_window", "message": f"one of {', '.join(incident.CHANGE_WINDOWS)}"})
+        elif k not in base["defaults"]:
             errors.append({"field": f"defaults.{k}", "message": "unknown default"})
     return errors, warnings
 
 
-def diff(overlay: dict[str, Any] | None) -> list[dict[str, Any]]:
+def diff(overlay: dict[str, Any] | None, crew: str = CREW) -> list[dict[str, Any]]:
     """Each edited field with the code's default beside it, for the console's word diff."""
-    base, out = defaults(), []
+    base, out = defaults(crew), []
     for section in ("agents", "tasks", "limits", "defaults"):
         for key, fields in ((overlay or {}).get(section) or {}).items():
             if section in ("limits", "defaults"):

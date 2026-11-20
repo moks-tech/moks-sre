@@ -198,13 +198,31 @@ function DocumentDetail({ id, onClose, onChange, onOpen }: { id: string; onClose
 const MODES = ["keyword", "vector", "hybrid"];
 const VERDICTS: [string, string][] = [["relevant", "Relevant"], ["irrelevant", "Irrelevant"], ["outdated", "Outdated"]];
 
+// What a passage is about, from its chunk metadata (rag/structure.py): one short phrase, or nothing.
+export function about(meta: any): string {
+  if (!meta) return "";
+  const r = meta.resource;
+  if (r) return [r.kind, [r.namespace, r.name].filter(Boolean).join("/")].filter(Boolean).join(" ");
+  if (meta.alert) return `alert ${meta.alert}${meta.severity ? ` (${meta.severity})` : ""}`;
+  if (meta.record) return `recording rule ${meta.record}`;
+  if (meta.operation) return meta.operation;
+  if (meta.panel) return `panel ${meta.panel}`;
+  if (meta.section) return words(meta.section) + (meta.steps ? `, steps ${meta.steps[0]}–${meta.steps[1]}` : "");
+  if (meta.resources?.length) return meta.resources.slice(0, 3).join(", ");
+  if (meta.first_event) return `log ${meta.first_event}${meta.last_event && meta.last_event !== meta.first_event ? ` to ${meta.last_event}` : ""}`;
+  return "";
+}
+
 function Hit({ h, rank, onFeedback }: { h: any; rank: number; onFeedback: (verdict: string, h: any) => void }) {
   const href = safeHref(h.citation.url);
   const signals = Object.entries(h.signals ?? {}) as [string, number][];
+  const what = about(h.meta);
   return (
     <div className="ke-hit">
-      <div className="row between nowrap"><strong className="trunc" title={h.title}>{rank}. {h.title}{h.heading && h.heading !== h.title && <span className="muted"> › {h.heading}</span>}</strong><Badge kind={FRESH[h.freshness.state]}>{h.freshness.state}</Badge></div>
-      <div className="small">{href ? <a href={href} target="_blank" rel="noreferrer noopener"><Truncate text={`${h.citation.path} L${h.citation.lines?.[0]}-${h.citation.lines?.[1]}`} mono /></a> : <Truncate text={h.citation.path} mono />}
+      <div className="row between nowrap"><strong className="trunc" title={h.title}>{rank}. {h.title}{h.heading && h.heading !== h.title && <span className="muted"> › {h.heading}</span>}</strong>
+        <span className="row tight nowrap">{h.doc_type && <Badge kind="neutral">{words(h.doc_type)}</Badge>}{h.freshness.historical && <Badge kind="info">historical</Badge>}<Badge kind={FRESH[h.freshness.state]}>{h.freshness.state}</Badge></span></div>
+      {what && <div className="small muted">About {what}</div>}
+      <div className="small">{href ? <a href={href} target="_blank" rel="noreferrer noopener"><Truncate text={h.citation.rendered ? h.citation.path : `${h.citation.path} L${h.citation.lines?.[0]}-${h.citation.lines?.[1]}`} mono /></a> : <Truncate text={h.citation.path} mono />}
         <span className="muted"> {h.citation.source} · {h.scope.environment}/{h.scope.namespace}{h.citation.revision ? ` · ${h.citation.revision.slice(0, 10)}` : ""}</span></div>
       {h.freshness.reason && <div className="small muted">{h.freshness.reason}</div>}
       {h.freshness.possible_conflict && <div className="small"><Badge kind="warn">may conflict</Badge> <span className="muted">with {h.freshness.conflict_with?.join(", ")}. MOKS does not decide which is right.</span></div>}
@@ -217,11 +235,30 @@ function Hit({ h, rank, onFeedback }: { h: any; rank: number; onFeedback: (verdi
   );
 }
 
+// What search read in the question. Each item only shaped ranking: none of it filtered anything or widened access.
+export function Understood({ u }: { u: any }) {
+  if (!u) return null;
+  const parts: string[] = [];
+  if (u.intents?.length) parts.push(`asks for ${u.intents.map(words).join(", ")}`);
+  if (u.services?.length) parts.push(`names ${u.services.join(", ")}`);
+  if (u.environments?.length || u.namespaces?.length) parts.push(`in ${[...(u.environments ?? []), ...(u.namespaces ?? [])].join(", ")}`);
+  if (u.time_window) parts.push(`since ${new Date(u.time_window.since).toLocaleString()} (${u.time_window.phrase})`);
+  const deps = Object.entries(u.dependents ?? {}) as [string, string[]][];
+  if (!parts.length && !deps.length) return null;
+  return (
+    <div className="small muted" aria-label="How the question was read">
+      {parts.length > 0 && <>Read as: {parts.join("; ")}.</>}
+      {deps.map(([svc, users]) => <div key={svc}>Declared as depending on {svc}: {users.join(", ")} <span className="muted">({u.dependents_basis ?? "from knowledge sources"})</span></div>)}
+    </div>
+  );
+}
+
 function Variant({ v, onFeedback, onMissing }: { v: any; onFeedback: (verdict: string, h: any, v: any) => void; onMissing: (v: any) => void }) {
   return (
     <div className="card stack ke-variant">
       <div className="row between"><h3>{words(v.name)}</h3><span className="row tight"><Badge kind={v.mode === "none" ? "warn" : "info"}>ran: {v.mode}</Badge>{v.abstain ? <Badge kind="warn">abstains</Badge> : <Badge kind="ok">has passages</Badge>}</span></div>
       <div className="small muted">{v.latency_ms != null ? `${v.latency_ms} ms` : ""}{v.reranking ? ` · reranking ${v.reranking.state}` : ""}</div>
+      <Understood u={v.understanding} />
       {v.fallback_reason && <div className="alert warn small">{v.fallback_reason}</div>}
       {v.note && <div className="alert info small">{v.note}</div>}
       <div className="small">{v.evidence.reason}{v.evidence.missing_identifiers?.length > 0 && <> Not found: <span className="mono">{v.evidence.missing_identifiers.join(", ")}</span>.</>}</div>

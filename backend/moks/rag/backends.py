@@ -17,6 +17,7 @@ import ssl
 import time
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -82,25 +83,56 @@ class Hit:
     sources: list[str] = field(default_factory=list)
 
 
-def rrf(*rankings: list[str]) -> list[tuple[str, float]]:
+def rrf(*rankings: list[str], weights: list[float] | None = None, k: int = RRF_K) -> list[tuple[str, float]]:
+    """Reciprocal rank fusion: each ranker adds weight / (k + rank). Equal weights and k = 60 are the textbook form;
+    a weight of 2 is the same as listing a ranking twice, which is how an exact identifier counted before weights."""
     scores: dict[str, float] = {}
-    for ranking in rankings:
+    for i, ranking in enumerate(rankings):
+        w = 1.0 if weights is None else weights[i]
+        if w <= 0:
+            continue
         for rank, cid in enumerate(ranking):
-            scores[cid] = scores.get(cid, 0.0) + 1.0 / (RRF_K + rank + 1)
+            scores[cid] = scores.get(cid, 0.0) + w / (k + rank + 1)
     return sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
 
 
-def _filters_sql(found: list[access.Grant], params: dict, only: list[str] | None = None) -> str:
+@dataclass(frozen=True)
+class Narrow:
+    """Filters a request may add. Each can only remove candidates: none reaches past the grants."""
+    doc_types: tuple[str, ...] = ()
+    changed_since: datetime | None = None
+
+    def __bool__(self) -> bool:
+        return bool(self.doc_types or self.changed_since)
+
+
+def _filters_sql(found: list[access.Grant], params: dict, only: list[str] | None = None, narrow: Narrow | None = None) -> str:
     params["realm"] = access.realm()
     narrowed = ""
     if only:
         params["only"] = [uuid.UUID(i) for i in only]
         narrowed = " AND s.id = ANY(CAST(:only AS uuid[]))"
+    if narrow and narrow.doc_types:
+        params["doc_types"] = list(narrow.doc_types)
+        narrowed += " AND d.doc_type = ANY(CAST(:doc_types AS varchar[]))"
+    if narrow and narrow.changed_since:
+        params["changed_since"] = narrow.changed_since
+        narrowed += " AND d.content_changed_at >= :changed_since"
     return f"d.status = 'active' AND d.lifecycle = 'active' AND s.lifecycle = 'active' AND d.realm = :realm AND s.realm = :realm AND {access.sql(found, params)}{narrowed}"
 
 
 class PostgresBackend:
     name = "postgres"
+
+    async def catalog(self, found: list[access.Grant], limit: int = 2000) -> list[tuple]:
+        """(environment, namespace, document service, source service, applies_to) for what these grants can read: the
+        names a question may be resolved against. Built from readable documents only, so resolving a name can never
+        reveal that something unreadable exists."""
+        params: dict[str, Any] = {"lim": limit}
+        where = _filters_sql(found, params)
+        return [tuple(r) for r in (await self.db.execute(text(f"""
+            SELECT DISTINCT d.environment, d.namespace, d.service, s.service, s.applies_to
+            FROM documents d JOIN knowledge_sources s ON s.id = d.source_id WHERE {where} LIMIT :lim"""), params)).all()]
 
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -122,13 +154,13 @@ class PostgresBackend:
         await self.db.execute(text("ALTER TABLE chunk_embeddings ADD COLUMN IF NOT EXISTS embedding vector"))
         return True
 
-    async def keyword(self, query: str, found: list[access.Grant], k: int, only: list[str] | None = None) -> list[str]:
+    async def keyword(self, query: str, found: list[access.Grant], k: int, only: list[str] | None = None, narrow: Narrow | None = None) -> list[str]:
         params: dict[str, Any] = {"q": query, "k": k}
-        where = _filters_sql(found, params, only)
+        where = _filters_sql(found, params, only, narrow)
         rows = (await self.db.execute(text(f"""
             SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id JOIN knowledge_sources s ON s.id = d.source_id
             WHERE {where} AND c.tsv @@ websearch_to_tsquery('english', :q)
-            ORDER BY ts_rank_cd(c.tsv, websearch_to_tsquery('english', :q)) DESC LIMIT :k"""), params)).all()
+            ORDER BY ts_rank_cd(c.tsv, websearch_to_tsquery('english', :q)) DESC, d.path, c.ord LIMIT :k"""), params)).all()
         if not rows:  # fall back to OR-semantics so partial matches still rank
             terms = [t for t in "".join(ch if ch.isalnum() else " " for ch in query).split() if len(t) > 2][:12]
             if terms:
@@ -136,16 +168,16 @@ class PostgresBackend:
                 rows = (await self.db.execute(text(f"""
                     SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id JOIN knowledge_sources s ON s.id = d.source_id
                     WHERE {where} AND c.tsv @@ to_tsquery('english', :q2)
-                    ORDER BY ts_rank_cd(c.tsv, to_tsquery('english', :q2)) DESC LIMIT :k"""), params)).all()
+                    ORDER BY ts_rank_cd(c.tsv, to_tsquery('english', :q2)) DESC, d.path, c.ord LIMIT :k"""), params)).all()
         return [str(r[0]) for r in rows]
 
-    async def identifiers(self, tokens: list[str], found: list[access.Grant], k: int, only: list[str] | None = None) -> list[str]:
+    async def identifiers(self, tokens: list[str], found: list[access.Grant], k: int, only: list[str] | None = None, narrow: Narrow | None = None) -> list[str]:
         """Exact matches for error codes, resource names, paths and configuration keys, which a text
         search stems and splits. PostgreSQL holds the text whichever backend ranks the rest."""
         if not tokens:
             return []
         params: dict[str, Any] = {"k": k}
-        where = _filters_sql(found, params, only)
+        where = _filters_sql(found, params, only, narrow)
         hits = []
         for i, t in enumerate(tokens[:6]):
             params[f"t{i}"] = "%" + t.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
@@ -153,36 +185,35 @@ class PostgresBackend:
         score = " + ".join(hits)
         rows = (await self.db.execute(text(f"""
             SELECT c.id FROM chunks c JOIN documents d ON d.id = c.document_id JOIN knowledge_sources s ON s.id = d.source_id
-            WHERE {where} AND ({score}) > 0 ORDER BY ({score}) DESC, c.id LIMIT :k"""), params)).all()
+            WHERE {where} AND ({score}) > 0 ORDER BY ({score}) DESC, d.path, c.ord LIMIT :k"""), params)).all()
         return [str(r[0]) for r in rows]
 
-    async def vector(self, embedding: list[float], index_id: uuid.UUID, found: list[access.Grant], k: int, only: list[str] | None = None) -> list[str]:
+    async def vector(self, embedding: list[float], index_id: uuid.UUID, found: list[access.Grant], k: int, only: list[str] | None = None, narrow: Narrow | None = None) -> list[str]:
         params: dict[str, Any] = {"v": json.dumps(embedding), "k": k, "idx": index_id}
-        where = _filters_sql(found, params, only)
+        where = _filters_sql(found, params, only, narrow)
         rows = (await self.db.execute(text(f"""
             SELECT c.id FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id JOIN documents d ON d.id = c.document_id JOIN knowledge_sources s ON s.id = d.source_id
             WHERE {where} AND e.index_id = :idx
             ORDER BY e.embedding <=> CAST(:v AS vector) LIMIT :k"""), params)).all()
         return [str(r[0]) for r in rows]
 
-    async def upsert_embeddings(self, index_id: uuid.UUID, items: list[tuple[uuid.UUID, list[float]]], dims: int | None = None, hashes: list[str] | None = None) -> None:
+    async def upsert_embeddings(self, index_id: uuid.UUID, items: list[tuple[uuid.UUID, list[float]]], dims: int | None = None) -> None:
         """One statement for the batch. With `dims`, the cast is to vector(dims), so PostgreSQL itself refuses a
         vector of another size: one generation's vectors can never mix sizes, whatever the caller checked."""
         if not items:
             return
         cast = f"vector({int(dims)})" if dims else "vector"
-        hashes = hashes or [None] * len(items)
         await self.db.execute(text(f"""
-            INSERT INTO chunk_embeddings (chunk_id, index_id, embedding, input_hash) VALUES (:c, :i, CAST(:v AS {cast}), :h)
-            ON CONFLICT (chunk_id, index_id) DO UPDATE SET embedding = EXCLUDED.embedding, input_hash = EXCLUDED.input_hash"""),
-            [{"c": chunk_id, "i": index_id, "v": json.dumps(emb), "h": h} for (chunk_id, emb), h in zip(items, hashes)])
+            INSERT INTO chunk_embeddings (chunk_id, index_id, embedding) VALUES (:c, :i, CAST(:v AS {cast}))
+            ON CONFLICT (chunk_id, index_id) DO UPDATE SET embedding = EXCLUDED.embedding"""),
+            [{"c": chunk_id, "i": index_id, "v": json.dumps(emb)} for chunk_id, emb in items])
 
     async def delete_document(self, document_id: uuid.UUID) -> None:
         pass  # chunk rows (and their embeddings) are deleted by FK cascade
 
-    async def index_chunks(self, index, rows: list[dict], embeddings: list[list[float]] | None, hashes: list[str] | None = None) -> None:
+    async def index_chunks(self, index, rows: list[dict], embeddings: list[list[float]] | None) -> None:
         if embeddings and index is not None:
-            await self.upsert_embeddings(index.id, [(uuid.UUID(r["chunk_id"]), e) for r, e in zip(rows, embeddings)], index.dimensions, hashes)
+            await self.upsert_embeddings(index.id, [(uuid.UUID(r["chunk_id"]), e) for r, e in zip(rows, embeddings)], index.dimensions)
 
 
 class SigV4(httpx.Auth):

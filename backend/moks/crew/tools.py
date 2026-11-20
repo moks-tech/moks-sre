@@ -22,9 +22,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from typing import Annotated, Literal
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..tools.contracts import K8S_NAME
+
+METRIC_NAME = r"^[a-zA-Z_:][a-zA-Z0-9_:]{0,200}$"
+LABEL = r"^[a-zA-Z_][a-zA-Z0-9_]{0,99}$"
+CLUSTER = r"^[a-z0-9][a-z0-9-]{0,99}$"
 
 NAMESPACE_HINT = "Leave empty. The namespace is fixed by MOKS; any other value is refused."
 
@@ -64,6 +70,38 @@ class QueryArgs(Narrow):
     query: str = Field(min_length=2, max_length=300, description="what to look for in runbooks and docs")
 
 
+class MetricArgs(Narrow):
+    """One metric in the target's namespace. The namespace label is MOKS's; the model may filter on other labels only."""
+    metric: str = Field(pattern=METRIC_NAME, description="a metric name, e.g. rabbitmq_queue_messages_ready or pg_stat_activity_count")
+    labels: dict[Annotated[str, Field(pattern=LABEL)], Annotated[str, Field(max_length=200)]] = Field(default_factory=dict, max_length=5,
+                                                                                                    description="label -> exact value, or ~regex; never namespace")
+    aggregate: Literal["sum", "avg", "max", "min", "count"] = "sum"
+    by: list[Annotated[str, Field(pattern=LABEL)]] = Field(default_factory=list, max_length=3)
+
+
+class TraceArgs(Narrow):
+    trace_id: str = Field(pattern=r"^[A-Fa-f0-9]{16,32}$", description="a trace id seen in the workload's logs")
+
+
+class DashboardArgs(Narrow):
+    query: str | None = Field(default=None, max_length=100, description="words from a dashboard title")
+
+
+class SimilarArgs(Narrow):
+    symptoms: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,40}$")]] = Field(default_factory=list, max_length=8, description="e.g. crashloop, oomkilled, image_pull")
+    signature: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,40}$")]] = Field(default_factory=list, max_length=20, description="normalised error words")
+    text: str = Field(default="", max_length=300, description="the symptoms in a sentence")
+    changes: bool = Field(default=False, description="a rollout or change preceded the problem")
+
+
+class ClusterArgs(Narrow):
+    cluster: str = Field(pattern=CLUSTER, description="a cluster name from datastores")
+
+
+class EvidenceArgs(Narrow):
+    id: str = Field(pattern=r"^E\d{1,4}$", description="an evidence id, e.g. E3")
+
+
 @dataclass(frozen=True)
 class Target:
     environment: str
@@ -72,6 +110,7 @@ class Target:
     kind: str
     minutes: int
     repository: str  # "" when no single repository is configured
+    change_hours: int = 0  # how far back to look for changes; 0: the investigation window
 
 
 class Refused(Exception):
@@ -89,6 +128,7 @@ class Members:
     pods: frozenset[str]
     owners: frozenset[tuple[str, str, str | None]]
     reason: str = ""  # why there are none, when there are none
+    nodes: frozenset[str] = frozenset()  # the nodes those pods run on
 
     def regex(self) -> str:
         """An exact alternation of the member pod names, for Loki and Prometheus pod matchers."""
@@ -126,7 +166,7 @@ Binder = Callable[[Target, Any, Members], dict[str, Any]]
 class CrewTool:
     name: str
     tool: str  # the MOKS tool it runs
-    agent: str
+    agent: str  # its agent in the workload crew; "" for tools only the incident crew offers (crew/incident_config.py)
     description: str
     args: type[Narrow]
     bind: Binder
@@ -163,7 +203,23 @@ def _pods(t: Target, m: Members) -> str:
     return m.regex()
 
 
-NEEDS_MEMBERS = frozenset({"describe_pod", "pod_logs", "recent_events", "search_logs", "pod_metrics", "workload_pods", "namespace_health"})
+def _hours(t: Target) -> int:
+    return max(1, t.change_hours or -(-t.minutes // 60))
+
+
+def _metric(t: Target, a: Any) -> dict[str, Any]:
+    fixed = [k for k in (*a.labels, *a.by) if "namespace" in k.lower() or k.startswith("__")]
+    if fixed:
+        raise Refused(f"label {fixed[0]} is fixed by MOKS to namespace {t.namespace}")
+    return {"metric": a.metric, "namespace": t.namespace, "labels": dict(a.labels), "aggregate": a.aggregate, "by": list(a.by), "minutes": max(5, t.minutes)}
+
+
+def _signals(t: Target, m: Members) -> dict[str, Any]:
+    return {"namespace": t.namespace, "workload": t.workload, "pod_regex": m.regex() if m.pods else None, "minutes": max(5, t.minutes)}
+
+
+NEEDS_MEMBERS = frozenset({"describe_pod", "pod_logs", "recent_events", "search_logs", "pod_metrics", "workload_pods", "namespace_health",
+                           "trace_logs", "service_signals", "storage", "services", "node_health"})
 
 TOOLS: tuple[CrewTool, ...] = (
     CrewTool("namespace_health", "k8s_triage", "workload", "Health check of the target namespace with automatic findings (pods, warning events, services, workloads). Start here.",
@@ -195,6 +251,38 @@ TOOLS: tuple[CrewTool, ...] = (
              NoArgs, lambda t, a, m: {"namespace": t.namespace, "deployment": _deployment(t), "repository": _repository(t)}, "git"),
     CrewTool("search_runbooks", "kb_search", "change", "Search runbooks, docs and approved postmortems you may read (cited passages).",
              QueryArgs, lambda t, a, m: {"query": a.query, "k": 4}, "knowledge"),
+    # Offered only by the incident crew (crew/incident_config.py decides which agent gets which).
+    CrewTool("node_health", "k8s_nodes", "", "Readiness, memory/disk/PID pressure, taints and capacity of the nodes the workload's pods run on (cluster-scoped: needs cluster-wide access).",
+             NoArgs, lambda t, a, m: {}, "kubernetes"),
+    CrewTool("autoscaling", "k8s_autoscaling", "", "HPAs and KEDA ScaledObjects that scale the workload: bounds, current/desired replicas, metrics, stuck at max or unable to scale.",
+             NoArgs, lambda t, a, m: {"namespace": t.namespace}, "kubernetes"),
+    CrewTool("storage", "k8s_storage", "", "PersistentVolumeClaims the workload's pods mount: phase, capacity, storage class, resize conditions, missing claims.",
+             NoArgs, lambda t, a, m: {"namespace": t.namespace}, "kubernetes"),
+    CrewTool("services", "k8s_services", "", "Services that select the workload's pods: ports, ready endpoints, selector mismatches (its dependencies' entry points).",
+             NoArgs, lambda t, a, m: {"namespace": t.namespace}, "kubernetes"),
+    CrewTool("service_signals", "prom_service_signals", "", "The workload's golden signals: throughput, 5xx error ratio and latency p50/p95/p99 (Istio or OpenTelemetry metrics).",
+             NoArgs, lambda t, a, m: _signals(t, m), "prometheus"),
+    CrewTool("metric", "prom_metric", "", "One Prometheus metric in the workload's namespace (queues, connection pools, caches), aggregated; the namespace is fixed by MOKS.",
+             MetricArgs, lambda t, a, m: _metric(t, a), "prometheus"),
+    CrewTool("trace_logs", "loki_search", "", "The workload's log lines that carry one trace id (no trace backend is connected: this is how a request is followed).",
+             TraceArgs, lambda t, a, m: {"namespace": t.namespace, "pod": _pods(t, m), "trace_id": a.trace_id, "limit": 0, "minutes": t.minutes}, "loki"),
+    CrewTool("dashboards", "grafana_dashboards", "", "Grafana dashboards whose title matches, with links that open at the investigation window.",
+             DashboardArgs, lambda t, a, m: {"query": a.query, "limit": 10}, "grafana"),
+    CrewTool("grafana_alerts", "grafana_alerts", "", "Grafana-managed alert rules firing within your scope.",
+             NoArgs, lambda t, a, m: {"firing_only": True}, "grafana"),
+    CrewTool("datastores", "datastore_clusters", "", "PostgreSQL and Redis clusters configured here that you may read, with reachability and health findings (their names for the next tools).",
+             NoArgs, lambda t, a, m: {"health": True}, "datastore"),
+    CrewTool("postgres_health", "pg_overview", "", "One PostgreSQL cluster: connections by state and client against max_connections, long and blocked transactions, replication.",
+             ClusterArgs, lambda t, a, m: {"cluster": a.cluster}, "postgres"),
+    CrewTool("redis_health", "redis_overview", "", "One Redis/Valkey deployment: memory against maxmemory, clients, evictions, replication and reachability.",
+             ClusterArgs, lambda t, a, m: {"cluster": a.cluster}, "redis"),
+    CrewTool("gitops_status", "k8s_argocd_status", "", "Argo CD applications that deploy to the workload's namespace: sync status, health, last sync result and revision.",
+             NoArgs, lambda t, a, m: {}, "kubernetes"),
+    CrewTool("changed_commits", "git_recent_commits", "", "Commits in the change window, optionally touching one path (deploy/, helm/, terraform/, k8s/ for manifest and infrastructure changes).",
+             PathArgs, lambda t, a, m: {"repository": _repository(t), "path": a.path, "hours": _hours(t), "limit": 30}, "git"),
+    CrewTool("similar_incidents", "similar_incidents", "", "Approved past incidents with similar symptoms on this workload, and how they were resolved. Historical leads, never proof.",
+             SimilarArgs, lambda t, a, m: {"symptoms": list(a.symptoms), "services": [t.workload], "signature": list(a.signature), "text": a.text, "changes": a.changes, "k": 5},
+             "knowledge"),
 )
 BY_NAME = {t.name: t for t in TOOLS}
 ALLOWED_MOKS_TOOLS = frozenset(t.tool for t in TOOLS)
@@ -227,10 +315,30 @@ def _workload_row(t: Target, w: Any) -> bool:
     return isinstance(w, dict) and w.get("name") == t.workload and w.get("kind", t.kind) == t.kind
 
 
+def _scales_target(target: Target, scaler: Any) -> bool:
+    ref = scaler.get("target") if isinstance(scaler, dict) else None
+    return isinstance(ref, dict) and ref.get("name") == target.workload and (ref.get("kind") or target.kind) == target.kind
+
+
 def focus(target: Target, tool: str, data: Any, members: Members = NOBODY) -> Any:
     """The target's part of a namespace-wide result, for the excerpt. None means the result is about the target
     already (one pod, one Deployment); a namespace-wide result is always narrowed, to an empty one when nothing in
     it is the target's. The stored evidence row keeps everything; this only decides what the model is shown."""
+    if tool == "k8s_autoscaling" and isinstance(data, dict):
+        return {"hpas": [h for h in data.get("hpas") or [] if _scales_target(target, h)],
+                "scaledObjects": None if data.get("scaledObjects") is None else [o for o in data["scaledObjects"] if _scales_target(target, o)],
+                "keda": data.get("keda")}
+    if tool == "k8s_storage" and isinstance(data, dict):
+        claims = [c for c in data.get("claims") or [] if set(c.get("mountedBy") or []) & members.pods]
+        return {"claims": claims, "problems": [p for p in data.get("problems") or [] if any(c["name"] in p for c in claims)]}
+    if tool == "k8s_services" and isinstance(data, list):
+        return [x for x in data if isinstance(x, dict) and (set(x.get("matchingPods") or []) & members.pods or any(n.get("pod") in members.pods for n in x.get("nearMissPods") or []))]
+    if tool == "k8s_nodes" and isinstance(data, list):
+        return [n for n in data if isinstance(n, dict) and n.get("name") in members.nodes] if members.nodes else data
+    if tool == "k8s_argocd_status" and isinstance(data, dict):
+        mine_ = lambda r: isinstance(r, dict) and r.get("namespace") == target.namespace  # noqa: E731
+        return {"installed": data.get("installed"), "problems": [r for r in data.get("problems") or [] if mine_(r)],
+                "findings": [f for f in data.get("findings") or [] if f.get("namespace") == target.namespace], "error": data.get("error")}
     if tool == "k8s_list_pods" and isinstance(data, list):
         return [p for p in data if isinstance(p, dict) and p.get("name") in members.pods]
     if tool == "k8s_workloads" and isinstance(data, list):

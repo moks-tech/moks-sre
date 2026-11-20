@@ -50,7 +50,7 @@ class Spec:
     helm: str = ""           # the values.yaml path, when the chart exposes one
 
 
-GROUPS = {"investigations": "Investigations", "llm": "LLM spend", "knowledge": "Knowledge search", "ml": "Machine learning", "crewai": "CrewAI"}
+GROUPS = {"investigations": "Investigations", "llm": "LLM spend", "ml": "Machine learning", "crewai": "CrewAI", "knowledge": "Knowledge search"}
 
 SPECS: dict[str, Spec] = {s.key: s for s in (
     Spec("auto_investigations_per_hour", "investigations", "Automatic investigations per hour",
@@ -67,12 +67,6 @@ SPECS: dict[str, Spec] = {s.key: s for s in (
     Spec("llm_investigation_budget_usd", "llm", "LLM budget per investigation",
          "Model spend one investigation may cause, follow-up questions included. Empty: no per-investigation limit.",
          "float", 0.01, 10000, limit=True, optional=True, unit="USD"),
-    Spec("rag_query_expansion", "knowledge", "Expand questions with SRE synonyms",
-         "Adds related terms (restarting: CrashLoopBackOff, OOMKilled; slow: latency, p99) as one more keyword ranking. The question itself, its identifiers and its vector never change.",
-         "bool"),
-    Spec("rag_require_embedding_evaluation", "knowledge", "Evaluate a new embedding model before it replaces the current one",
-         "A rebuild with a different embedding model starts only after that model passed the embedding evaluation against the one serving search. Off: any model can replace it.",
-         "bool"),
     Spec("ml_anomaly_interval_minutes", "ml", "Anomaly scoring interval",
          "How often the worker scores each environment that has an active anomaly model. Nothing is scored while anomaly detection is disabled.",
          "int", 5, 240, unit="minutes", helm="ml.anomaly.intervalMinutes"),
@@ -90,6 +84,32 @@ SPECS: dict[str, Spec] = {s.key: s for s in (
          "int", 1, 20, limit=True, helm="crewai.maxIterations"),
     Spec("crewai_max_tool_calls", "crewai", "Tool calls per crew run",
          "Across the whole crew, and never more than the investigation ceiling (MOKS_MAX_TOOL_CALLS).", "int", 1, 100, limit=True, helm="crewai.maxToolCalls"),
+    Spec("rag_query_expansion", "knowledge", "Expand questions with SRE synonyms",
+         "Adds related terms (restarting: CrashLoopBackOff, OOMKilled; slow: latency, p99) as one more keyword ranking. The question itself, its identifiers and its vector never change.",
+         "bool"),
+    Spec("rag_require_embedding_evaluation", "knowledge", "Evaluate a new embedding model before it replaces the current one",
+         "A rebuild with a different embedding model starts only after that model passed the embedding evaluation against the one serving search. Off: any model can replace it.",
+         "bool"),
+    Spec("rag_weight_keyword", "knowledge", "Keyword ranking weight",
+         "How much the full-text ranking counts when rankings are fused (reciprocal rank fusion). 0 leaves it out.", "float", 0, 5),
+    Spec("rag_weight_vector", "knowledge", "Vector ranking weight",
+         "How much the embedding (semantic) ranking counts when rankings are fused. 0 leaves it out.", "float", 0, 5),
+    Spec("rag_weight_identifier", "knowledge", "Exact identifier weight",
+         "How much an exact match on an error code, resource name, path or setting counts. 2 is what search did before this was a setting.", "float", 0, 5),
+    Spec("rag_weight_entity", "knowledge", "Named service weight",
+         "How much a search for the services a question names counts, when they are among the services you can read about. 0 leaves it out.", "float", 0, 5),
+    Spec("rag_query_signals", "knowledge", "Read intent, services and time from questions",
+         "Small ranking signals from what a question names: the kind of answer (runbook, past incident, alert), services, environments and a time window. Never a filter.", "bool"),
+    Spec("rag_rerank_min_score", "knowledge", "Reranker score floor",
+         "With the reranker on, passages it scores below this are dropped; an exact identifier match never is. Empty: nothing is dropped.",
+         "float", -20, 20, optional=True),
+    Spec("rag_rerank_interactive", "knowledge", "Rerank on the Knowledge search page",
+         "Off: only investigations wait for the reranker, and the search page answers without it.", "bool"),
+    Spec("rag_structured_chunking", "knowledge", "Split documents by their structure",
+         "Alert rules per rule, manifests per resource, OpenAPI per operation, dashboards per panel, logs per event. Changing it re-reads every document at its next sync.", "bool"),
+    Spec("rag_index_investigations", "knowledge", "Search past investigations",
+         "Finished investigations become searchable history, readable only by those who may read the investigation. Off: the history is removed at the next sync.", "bool"),
+    Spec("rag_history_days", "knowledge", "Investigation history reaches back", "Older investigations leave the history.", "int", 7, 3650, unit="days"),
 )}
 
 _helm: dict[str, Any] = {}     # each key's value before this process first overrode it

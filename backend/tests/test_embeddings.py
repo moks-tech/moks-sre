@@ -14,7 +14,7 @@ from moks.connectors.base import ConnectorError
 from moks.llm import providers
 from moks.llm.providers import LLMError, provider_for
 from moks.rag import embeddings
-from moks.rag.embeddings import EmbeddingSpec, Embedder, clean_options, input_hash, model_key, normalize, profile_for
+from moks.rag.embeddings import EmbeddingSpec, Embedder, clean_options, model_key, normalize, profile_for
 
 
 def cfg(provider="ollama", model="bge-m3:567m", dims=None, **options):
@@ -102,12 +102,6 @@ async def test_the_probe_reports_the_real_size_and_a_configured_size_must_agree(
     assert await Embedder(cfg(), Recorder(size=5)).probe() == 5
     with pytest.raises(ConnectorError, match="configured for 8 dimensions but returns 5"):
         await Embedder(cfg(dims=8), Recorder(size=5)).probe()
-
-
-def test_the_input_hash_covers_the_model_key_and_the_exact_input():
-    assert input_hash("k/m/1", "text") == input_hash("k/m/1", "text")
-    assert input_hash("k/m/1", "text") != input_hash("k/m/2", "text") != input_hash("k/m/1", "text ")
-    assert len(input_hash("k", "t")) == 64
 
 
 def test_spec_describes_what_produced_the_vectors():

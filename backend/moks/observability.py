@@ -63,6 +63,7 @@ EMBED_LATENCY = Histogram("moks_embedding_latency_seconds", "Embedding call late
 SSE_STREAMS_OPEN = Gauge("moks_sse_streams_open", "Investigation event streams open in this process")
 SSE_STREAMS = Counter("moks_sse_streams_total", "Investigation event streams by how they ended", ["outcome"])
 RERANK_CALLS = Counter("moks_rerank_calls_total", "Reranking attempts by outcome", ["outcome"])
+EMBEDDING_INPUTS = Counter("moks_rag_embedding_inputs_total", "Texts that needed a vector, by whether the model was called or the cache answered", ["outcome"])
 RERANK_SECONDS = Histogram("moks_rerank_seconds", "Round trip to the reranking service", buckets=(0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2))
 RERANK_CANDIDATES = Histogram("moks_rerank_candidates", "Authorized candidates sent for reranking", buckets=(1, 5, 10, 20, 30, 40, 50))
 RERANK_TRUNCATED = Counter("moks_rerank_truncated_passages_total", "Passages only partly scored")

@@ -102,11 +102,6 @@ def model_key(cfg: Any) -> str:
     return EmbeddingSpec.of(cfg).key() if cfg else "keyword-only"
 
 
-def input_hash(key: str, model_input: str) -> str:
-    """Identifies one vector: the same model key and the same input give the same vector, so a rebuild can reuse it."""
-    return hashlib.sha256(f"{key}\x00{model_input}".encode()).hexdigest()
-
-
 def normalize(vectors: list[list[float]]) -> list[list[float]]:
     out = []
     for v in vectors:

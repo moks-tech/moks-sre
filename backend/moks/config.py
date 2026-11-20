@@ -114,11 +114,24 @@ class Settings(BaseSettings):
     rag_rerank_timeout_ms: int = 1500
     rag_rerank_max_query_chars: int = 1000
     rag_rerank_max_passage_chars: int = 2000
+    rag_rerank_min_score: float | None = None  # a reranked passage scoring below this is dropped (exact identifiers never are); empty: none
+    rag_rerank_interactive: bool = True  # false: the Knowledge search page skips the reranker; investigations still use it
     rag_decompose: bool = False  # off: the rag dataset measured no gain from it. Turn on only with a dataset that shows one.
     rag_activation: str = "strict"  # strict: a reindex with any incomplete document fails. degraded: it activates and says so.
     rag_query_expansion: bool = False  # SRE synonyms as one more keyword ranking (rag/query.py); the query and its identifiers never change
     rag_require_embedding_evaluation: bool = True  # replacing a model whose index has vectors needs a passed embedding evaluation of the new one
     rag_embedding_eval_tolerance: float = 0.02  # how far below the serving model a candidate may score (nDCG@10, Recall@5) and still pass
+    # Fusion weights for reciprocal rank fusion. 1/1/2 is what search did before they were settings: an exact
+    # identifier counted twice. 0 leaves a ranker out. rag/service.py bounds each to 0..5.
+    rag_weight_keyword: float = 1.0
+    rag_weight_vector: float = 1.0
+    rag_weight_identifier: float = 2.0
+    rag_weight_entity: float = 0.5  # services a question names, resolved against what the asker can read, searched by name
+    rag_rrf_k: int = 60
+    rag_structured_chunking: bool = True  # alert rules per rule, manifests per resource, ...; false: split by format only
+    rag_query_signals: bool = True  # intent, services, environments and time a question names, as small ranking signals
+    rag_index_investigations: bool = False  # finished investigations become searchable history, scoped like the investigation
+    rag_history_days: int = 180  # how far back investigation history reaches
     evidence_max_age_seconds: int = 900  # older evidence cannot back a claim about the current state without saying so
     # Opt-in CrewAI workload investigation (docs/crewai-investigation.md). Off unless MOKS_CREWAI_ENABLED is true and the
     # image was built with the crewai extra. The global ceilings (max_tool_calls, max_duration_seconds) still apply.
@@ -131,6 +144,11 @@ class Settings(BaseSettings):
     crewai_slot_wait_seconds: int = Field(default=20, ge=0, le=300)
     crewai_excerpt_chars: int = Field(default=2000, ge=200, le=20000)  # what one tool result shows the model and the report
     crewai_log_lines: int = Field(default=100, ge=10, le=500)
+    # The CrewAI worker's run time limit (its MOKS_MAX_DURATION_SECONDS) as the api sees it, for the crews' timeout ceilings. 0: max_duration_seconds.
+    crewai_max_duration_seconds: int = Field(default=0, ge=0, le=3600)
+    # The incident flow (docs/crewai-sre-engine.md): when the crew cannot start (no slot, flow switched off, wrong crewai version), run the
+    # LangGraph investigation instead ("langgraph") or fail ("none"). Console test runs never fall back.
+    crewai_fallback: Literal["langgraph", "none"] = "langgraph"
 
     # Kubernetes <-> AWS Secrets Manager sync (docs/SECRETS_SYNC.md). Off unless MOKS_SECRETS_SYNC_ENABLED is true in the api and
     # the executor. Values are read and written only by the executor; nothing here schedules a sync, only discovery.

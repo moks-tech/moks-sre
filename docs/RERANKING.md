@@ -101,6 +101,19 @@ Helm values are under `reranker`. `reranker.enabled` deploys the service, and `r
 | `MOKS_RAG_RERANK_TIMEOUT_MS` | 1500 | 5000 |
 | `MOKS_RAG_RERANK_MAX_QUERY_CHARS` | 1000 | 2000 |
 | `MOKS_RAG_RERANK_MAX_PASSAGE_CHARS` | 2000 | 8000 |
+| `MOKS_RAG_RERANK_MIN_SCORE` | empty (none) | -20 to 20 |
+| `MOKS_RAG_RERANK_INTERACTIVE` | true | |
+
+**Score floor.** With `MOKS_RAG_RERANK_MIN_SCORE` set (Settings > Knowledge search > Reranker score floor), passages the
+model scores below it are dropped, and so are candidates it was never shown; a passage that matches an exact
+identifier is never dropped, because matching it is why it was found. `reranking.below_threshold` and `min_score` say
+what happened. This is the one setting by which a reranker score changes what is returned rather than its order, so
+it also changes what abstention and evidence see: rerun `moks eval rerank` before setting it. The model returns raw
+logits, so the floor is in logits too (for this model roughly: relevant above 0, unrelated below -5).
+
+**Search page.** `MOKS_RAG_RERANK_INTERACTIVE=false` keeps the reranker out of the Knowledge search page and
+`POST /knowledge/context`, where a person waits for the answer; investigations, which run in the worker, still use it,
+and the Retrieval test still runs it when asked. The response says `reranking.state: skipped` and why.
 
 The service has its own `RERANKER_*` settings for threads, batch size, concurrency and queue, and its own ceilings. Falling back to the existing order is the only failure policy, so there is no setting for it.
 
