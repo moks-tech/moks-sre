@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,7 +35,9 @@ CONNECTOR_TYPES = ["kubernetes", "prometheus", "loki", "grafana", "cloudwatch", 
 
 
 class CredentialRef(BaseModel):
-    type: Literal["none", "env", "file"] = "none"
+    """Where a credential comes from. A pasted value is stored first (POST /admin/credentials) and referenced by id."""
+    type: Literal["none", "stored", "env", "file"] = "none"
+    id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     name: str | None = Field(default=None, pattern=r"^MOKS_CRED_[A-Z0-9_]{1,80}$")
     path: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._/-]{1,200}$")
 
@@ -45,6 +47,12 @@ class CredentialRef(BaseModel):
         if v and (".." in v.split("/") or v.startswith("/")):
             raise ValueError("path must be relative to MOKS_CREDENTIALS_DIR")
         return v
+
+    @model_validator(mode="after")
+    def _complete(self) -> "CredentialRef":
+        if self.type == "stored" and not self.id:
+            raise ValueError("a stored credential reference needs its id")
+        return self
 
 
 def _check_no_secrets(config: dict[str, Any]) -> None:

@@ -49,9 +49,14 @@ def _fingerprint(row: Connector) -> str:
 
 
 def _build_key(row: Connector) -> str:
-    """A mounted credential file can rotate with nothing else changing, so its age is part of the key."""
+    """A mounted credential file or a stored credential can change with nothing else changing, so its age or version
+    is part of the key."""
     stamp = None
-    if (row.credential_ref or {}).get("type") == "file":
+    if (row.credential_ref or {}).get("type") == "stored":
+        from .. import credentials
+
+        stamp = credentials.version(row.credential_ref)
+    elif (row.credential_ref or {}).get("type") == "file":
         try:
             stamp = resolve_credential_path(row.credential_ref).stat().st_mtime
         except (ConnectorError, OSError):

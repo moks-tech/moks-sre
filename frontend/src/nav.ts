@@ -56,6 +56,7 @@ export const SETTINGS: NavGroup[] = [
   ] },
   { label: "Access", items: [
     { to: "/settings/users", label: "Users & roles", icon: "users", keywords: "rbac roles permissions access", show: (can) => can("admin.users") },
+    { to: "/settings/credentials", label: "Credentials", icon: "key", keywords: "api keys tokens passwords secrets import encryption", show: (can) => can("admin.settings") },
   ] },
   { label: "Infrastructure", items: [
     { to: "/settings/environments", label: "Environments", icon: "layers", keywords: "clusters namespaces detection", show: (can) => can("admin.policies") },

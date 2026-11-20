@@ -648,7 +648,7 @@ class DatabaseBackupSchedule(Base):
 
 
 class BackupStore(Base):
-    """Cloudflare R2 settings. `credentials` holds references (env or file), never values."""
+    """Cloudflare R2 settings. `credentials` holds references (stored, env or file), never values."""
     __tablename__ = "backup_stores"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(40), unique=True)
@@ -1385,6 +1385,21 @@ class CrewSetting(Base):
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[dict] = mapped_column(JSONB)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StoredCredential(Base):
+    """A credential typed into Settings, encrypted (moks/credentials.py). References point here as {"type": "stored", "id": ...}."""
+    __tablename__ = "stored_credentials"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    label: Mapped[str] = mapped_column(String(200))
+    key_id: Mapped[str] = mapped_column(String(16))
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

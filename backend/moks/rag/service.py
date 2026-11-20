@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import os
 import re
 import time
 import uuid
@@ -61,11 +60,20 @@ def opensearch() -> OpenSearchBackend:
     return _opensearch
 
 
+_pinecone_key: Any = (None, None)  # (stored credential id, version) the client was built with
+
+
 def pinecone() -> PineconeBackend:
-    global _pinecone
-    if _pinecone is None:
+    """Rebuilt when the stored API key is replaced, so a new key works without a restart."""
+    global _pinecone, _pinecone_key
+    from .. import credentials
+
+    cid = credentials.named("MOKS_CRED_PINECONE_API_KEY")
+    stamp = (cid, credentials.version({"type": "stored", "id": str(cid)}) if cid else None)
+    if _pinecone is None or stamp != _pinecone_key:
         s = get_settings()
-        _pinecone = PineconeBackend(os.environ.get("MOKS_CRED_PINECONE_API_KEY"), s.pinecone_cloud, s.pinecone_region)
+        _pinecone = PineconeBackend(credentials.deployment_value("MOKS_CRED_PINECONE_API_KEY"), s.pinecone_cloud, s.pinecone_region)
+        _pinecone_key = stamp
     return _pinecone
 
 

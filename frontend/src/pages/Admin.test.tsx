@@ -34,11 +34,11 @@ describe("LLM presets", () => {
   });
 });
 
-const source = (extra: any = {}) => ({ source: "prometheus", name: "prom", enabled: true, config: { base_url: "http://p", auth: "none" }, advanced: false, json: "", credType: "env", credName: "MOKS_CRED_X", credPath: "", ...extra });
+const source = (extra: any = {}) => ({ source: "prometheus", name: "prom", enabled: true, config: { base_url: "http://p", auth: "none" }, advanced: false, json: "", cred: { type: "env", name: "MOKS_CRED_X" }, ...extra });
 
 describe("connector form rules", () => {
   it("sends data-store clusters with their password as a credential reference, never in config", () => {
-    const pg = connectorBody(source({ source: "postgres", name: "shop-db", config: { host: "shop-db-rw.shop.svc", port: 5432, database: "app", username: "moks_monitor", sslmode: "require", namespace: "shop" }, credName: "MOKS_CRED_PG_SHOP" }), "demo");
+    const pg = connectorBody(source({ source: "postgres", name: "shop-db", config: { host: "shop-db-rw.shop.svc", port: 5432, database: "app", username: "moks_monitor", sslmode: "require", namespace: "shop" }, cred: { type: "env", name: "MOKS_CRED_PG_SHOP" } }), "demo");
     expect(pg).toMatchObject({ type: "postgres", name: "shop-db", credential_ref: { type: "env", name: "MOKS_CRED_PG_SHOP" } });
     expect(JSON.stringify(pg.config)).not.toMatch(/password/i);
     expect(connectorBody(source({ source: "redis", name: "cache", config: { host: "redis", mode: "sentinel" } }), "demo").type).toBe("redis");
@@ -48,6 +48,16 @@ describe("connector form rules", () => {
   it("does not store a credential the connector would ignore", () => {
     expect(connectorBody(source(), "demo").credential_ref).toEqual({ type: "none" });
     expect(connectorBody(source({ config: { base_url: "http://p", auth: "basic", username: "eks" } }), "demo").credential_ref).toEqual({ type: "env", name: "MOKS_CRED_X" });
+  });
+  it("sends a pasted credential as a stored reference, and AWS keys inside config.credentials", () => {
+    const id = "6f1c2a3b-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+    expect(connectorBody(source({ source: "grafana", config: { base_url: "http://g" }, cred: { type: "stored", id } }), "demo").credential_ref).toEqual({ type: "stored", id });
+    const aws = connectorBody(source({ source: "aws_secrets", config: { account_id: "123456789012", region: "us-east-1", allowed_prefixes: ["moks/"] }, cred: { type: "none" },
+      aws: { access_key_id: { type: "stored", id }, secret_access_key: { type: "stored", id } } }), "demo");
+    expect(aws.config.credentials).toEqual({ access_key_id: { type: "stored", id }, secret_access_key: { type: "stored", id } });
+    const pod = connectorBody(source({ source: "aws_secrets", config: { account_id: "123456789012", credentials: { access_key_id: {}, secret_access_key: {} } }, cred: { type: "none" },
+      aws: { access_key_id: { type: "none" }, secret_access_key: { type: "none" } } }), "demo");
+    expect(pod.config.credentials).toBeUndefined();
   });
   it("finds a name already used in that environment, but not the connector being edited", () => {
     const rows = [{ id: "c1", environment: "demo", name: "prometheus" }];

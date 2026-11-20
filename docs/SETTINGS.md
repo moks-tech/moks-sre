@@ -60,6 +60,12 @@ Not editable here, on purpose: hard ceilings (`max_tool_calls`, `max_duration_se
 who may sign in or what MOKS may reach (auth, OIDC, connectors' credentials, secret sync policy), terminal values
 (the terminal gateway has its own), and anything read only at start-up (worker pools, rate limiters).
 
+## Credentials
+
+API keys, tokens and passwords are pasted into the form that uses them, stored encrypted, and listed here with where
+each is used. **Import from Kubernetes Secret** moves existing `MOKS_CRED_*` values in. See
+[CREDENTIALS.md](CREDENTIALS.md).
+
 ## Deployment: the rest, read-only
 
 Every other `MOKS_*` value, grouped, as this API process started with it, filterable by name or value. Secrets

@@ -102,8 +102,8 @@ class AwsSecretsConnector:
         self.name_template = config.get("name_template") or "moks/{environment}/{cluster}/{namespace}/{name}"
         self.credentials = config.get("credentials") or None
         if self.credentials is not None:
-            if set(self.credentials) != {"access_key_id", "secret_access_key"} or not all(isinstance(r, dict) and r.get("type") in ("env", "file") for r in self.credentials.values()):
-                raise ConnectorError("config", "config.credentials needs access_key_id and secret_access_key credential references (env or file); values are never accepted")
+            if set(self.credentials) != {"access_key_id", "secret_access_key"} or not all(isinstance(r, dict) and r.get("type") in ("stored", "env", "file") for r in self.credentials.values()):
+                raise ConnectorError("config", "config.credentials needs access_key_id and secret_access_key credential references (stored, env or file); values are never accepted here")
         self._client = client
         self._sts = sts
         self._verified = False

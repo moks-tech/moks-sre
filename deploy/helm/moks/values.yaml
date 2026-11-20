@@ -40,8 +40,10 @@ config:
   autoInvestigationsPerHour: 6  # automatic investigations per environment per hour, per trigger (alerts, detection); 1 to 120
   # Alertmanager/Grafana webhook: put MOKS_ALERT_WEBHOOK_TOKEN in existingSecret (unset = webhook disabled)
 
-# Existing Secret with MOKS_DATABASE_URL, MOKS_SESSION_SECRET, MOKS_OIDC_CLIENT_SECRET and any
-# MOKS_CRED_* connector/LLM credentials. Never committed; see deploy/secrets/.
+# Existing Secret with MOKS_DATABASE_URL, MOKS_SESSION_SECRET and MOKS_OIDC_CLIENT_SECRET. Connector, LLM,
+# knowledge and backup credentials are pasted into Settings and stored encrypted (docs/CREDENTIALS.md); MOKS_CRED_*
+# entries here still work. Optional: MOKS_CREDENTIALS_KEY (otherwise derived from the session secret).
+# Never committed; see deploy/secrets/.
 existingSecret: moks-secrets
 # Extra Secret mounted at /var/run/moks-credentials for file credential references (kubeconfigs).
 credentialsSecret: ""

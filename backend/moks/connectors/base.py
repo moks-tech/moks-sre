@@ -41,19 +41,27 @@ def resolve_credential(ref: dict[str, Any] | None) -> str | None:
     """Resolve a credential reference to its secret value. Values never leave the process:
     they are not stored in the database, logged, audited, returned by the API or put in prompts.
 
+    {"type": "stored", "id": "<uuid>"}           -> a value typed into Settings, encrypted in PostgreSQL (moks/credentials.py)
     {"type": "env", "name": "MOKS_CRED_X"}       -> environment variable (from a Kubernetes Secret)
     {"type": "file", "path": "prom/token"}       -> file under MOKS_CREDENTIALS_DIR (mounted Secret)
     """
     if not ref or ref.get("type") in (None, "none"):
         return None
     kind = ref.get("type")
+    if kind == "stored":
+        from .. import credentials
+
+        try:
+            return credentials.reveal(ref).strip()
+        except credentials.CredentialUnavailable as exc:
+            raise ConnectorError("config", str(exc)) from None
     if kind == "env":
         name = str(ref.get("name", ""))
         if not name.startswith("MOKS_CRED_"):
             raise ConnectorError("config", "environment credential names must start with MOKS_CRED_")
         value = os.environ.get(name)
         if value is None:
-            raise ConnectorError("config", f"credential environment variable {name} is not set")
+            raise ConnectorError("config", f"credential environment variable {name} is not set: paste the value into this form instead, or add {name} to the Secret")
         return value.strip()  # a value made with `echo` or from a file ends in a newline, which is an illegal header
     if kind == "file":
         path = resolve_credential_path(ref)
@@ -76,6 +84,10 @@ def describe_credential_ref(ref: dict[str, Any] | None) -> str:
     """Safe, value-free description for the admin UI."""
     if not ref or ref.get("type") in (None, "none"):
         return "none"
+    if ref.get("type") == "stored":
+        from .. import credentials
+
+        return f"stored ({'set' if credentials.known(ref) else 'missing'})"
     if ref.get("type") == "env":
         return f"env:{ref.get('name')} ({'set' if os.environ.get(str(ref.get('name'))) else 'missing'})"
     if ref.get("type") == "file":

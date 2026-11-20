@@ -17,7 +17,7 @@ from typing import Any
 
 from .. import argocd, cnpg, velero
 from ..redaction import redact
-from .base import ConnectorError, resolve_credential_path
+from .base import ConnectorError, resolve_credential, resolve_credential_path
 
 LIST_PAGE = 250
 # Literal env values under names like these are masked: a value alone ("s3cr3t") has no
@@ -105,11 +105,20 @@ class KubernetesConnector:
                 elif mode == "in_cluster":
                     kconfig.load_incluster_config(client_configuration=cfg)
                 elif mode == "kubeconfig":
-                    if not self.credential_ref or self.credential_ref.get("type") != "file":
-                        raise ConnectorError("config", "kubeconfig mode needs a file credential reference to the kubeconfig")
-                    path = resolve_credential_path(self.credential_ref)
-                    await kconfig.load_kube_config(config_file=str(path), context=self.config.get("context") or None,
-                                                   client_configuration=cfg)
+                    kind = (self.credential_ref or {}).get("type")
+                    if kind == "stored":  # the kubeconfig pasted into Settings
+                        import yaml
+
+                        loaded = yaml.safe_load(resolve_credential(self.credential_ref) or "")
+                        if not isinstance(loaded, dict):
+                            raise ConnectorError("config", "the stored kubeconfig is not a kubeconfig (YAML mapping)")
+                        await kconfig.load_kube_config_from_dict(loaded, context=self.config.get("context") or None, client_configuration=cfg)
+                    elif kind == "file":
+                        path = resolve_credential_path(self.credential_ref)
+                        await kconfig.load_kube_config(config_file=str(path), context=self.config.get("context") or None,
+                                                       client_configuration=cfg)
+                    else:
+                        raise ConnectorError("config", "kubeconfig mode needs the kubeconfig: paste it, or reference a file")
                 else:
                     raise ConnectorError("config", f"unknown kubernetes mode {mode!r} (in_cluster | kubeconfig | eks)")
             except ConnectorError:

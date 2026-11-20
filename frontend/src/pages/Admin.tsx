@@ -5,6 +5,7 @@ import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, ListHeader, Loadin
 import { type Chip, FilterPanel } from "../filters";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
 import { ModelPicker, type ModelInfo } from "./ModelPicker";
+import { type Cred, CredentialInput, credFromRef, NO_CRED, PASTE, refOf, saveCred } from "../credentials";
 
 function useAction() {
   const [error, setError] = useState<unknown>();
@@ -40,7 +41,7 @@ const SOURCES: Record<string, Source> = {
   eks: { label: "Amazon EKS", type: "kubernetes", hint: "Reads the cluster with a short-lived token from the pod's AWS identity. That identity needs an EKS access entry. Read-only until you add config.executor (edit as JSON).",
     defaults: { mode: "eks", region: "us-east-1", timeout_seconds: 15 }, fields: [{ key: "cluster_name", label: "Cluster name", required: true }, REGION, ROLE] },
   in_cluster: { label: "Kubernetes (this cluster)", type: "kubernetes", hint: "Uses the ServiceAccount of the MOKS pod.", defaults: { mode: "in_cluster", timeout_seconds: 15, executor: { mode: "in_cluster" } }, fields: [] },
-  kubeconfig: { label: "Kubernetes (kubeconfig)", type: "kubernetes", hint: "Needs a mounted kubeconfig file as the credential.", defaults: { mode: "kubeconfig", timeout_seconds: 15 }, fields: [{ key: "context", label: "Context (optional)" }] },
+  kubeconfig: { label: "Kubernetes (kubeconfig)", type: "kubernetes", hint: "Paste the kubeconfig as the credential, or point at a mounted file.", defaults: { mode: "kubeconfig", timeout_seconds: 15 }, fields: [{ key: "context", label: "Context (optional)" }] },
   cloudwatch: { label: "CloudWatch Logs", type: "cloudwatch", hint: "Logs Insights over the listed log groups only.", defaults: { region: "us-east-1", allowed_log_groups: [], max_window_minutes: 360, max_concurrent_queries: 2, poll_timeout_seconds: 60 },
     fields: [REGION, { key: "allowed_log_groups", label: "Allowed log groups", kind: "list", required: true, placeholder: "/aws/eks/prod/*" }, ROLE, { key: "max_window_minutes", label: "Max window (min)", kind: "number" }] },
   prometheus: { label: "Prometheus", type: "prometheus", hint: "PromQL over HTTP, from a server the MOKS pods can reach; usually its in-cluster service URL, with any path prefix. FinOps and rightsizing need this server to scrape cAdvisor.", auth: true, cred: "MOKS_CRED_PROMETHEUS_PASSWORD", defaults: { base_url: "http://prometheus.monitoring.svc:9090/prometheus", public_url: "https://jithendar.com/prometheus", timeout_seconds: 15, auth: "none" }, fields: URLS },
@@ -51,7 +52,7 @@ const SOURCES: Record<string, Source> = {
     fields: [{ key: "repositories", label: "Repositories", kind: "list", required: true, placeholder: "owner/repo" }] },
   aws_cost: { label: "AWS Cost Explorer", type: "aws_cost", hint: "Each uncached request costs $0.01, so results are cached and capped.", defaults: { metric: "UnblendedCost", cache_minutes: 60, max_requests_per_hour: 60, allocation_tag_keys: [] },
     fields: [{ key: "cache_minutes", label: "Cache (min)", kind: "number" }, { key: "max_requests_per_hour", label: "Max requests / hour", kind: "number" }, ROLE] },
-  aws_secrets: { label: "AWS Secrets Manager", type: "aws_secrets", hint: "Secret sync (docs/SECRETS_SYNC.md). Only the executor calls AWS. On Minikube add config.credentials references (edit as JSON); on EKS use Pod Identity.",
+  aws_secrets: { label: "AWS Secrets Manager", type: "aws_secrets", hint: "Secret sync (docs/SECRETS_SYNC.md). Only the executor calls AWS. On EKS use Pod Identity; elsewhere paste an access key below.",
     defaults: { region: "us-east-1", allowed_prefixes: ["moks/"], kubernetes_namespaces: [], required_tags: {}, allow_delete: false, recovery_window_days: 30 },
     fields: [{ key: "account_id", label: "AWS account ID", required: true }, REGION, { key: "allowed_prefixes", label: "Allowed name prefixes", kind: "list", required: true, placeholder: "moks/" },
       { key: "kubernetes_namespaces", label: "Kubernetes namespaces (empty: all of secretsSync.namespaces)", kind: "list", placeholder: "shop" }, ROLE, { key: "kms_key_id", label: "KMS key for new secrets (optional)" },
@@ -91,9 +92,25 @@ export const duplicateConnector = (connectors: any[], environment: string, name:
 
 const PRESETS: Record<string, string[]> = { minikube: ["in_cluster", "prometheus", "loki", "cost_model"], eks: ["eks", "cloudwatch", "aws_cost"], kubernetes: ["kubeconfig"] };
 
-interface SourceValue { source: string; name: string; enabled: boolean; config: any; advanced: boolean; json: string; credType: string; credName: string; credPath: string }
+interface AwsKeys { access_key_id: Cred; secret_access_key: Cred }
+interface SourceValue { source: string; name: string; enabled: boolean; config: any; advanced: boolean; json: string; cred: Cred; aws?: AwsKeys }
 
-const blankSource = (source: string): SourceValue => ({ source, name: source.replace(/_/g, "-"), enabled: true, config: { ...SOURCES[source].defaults }, advanced: false, json: "", credType: source === "kubeconfig" ? "file" : "none", credName: "", credPath: "" });
+const NEEDS_CRED = new Set(["kubeconfig", "grafana", "git", "postgres", "redis"]);
+const blankSource = (source: string): SourceValue => ({ source, name: source.replace(/_/g, "-"), enabled: true, config: { ...SOURCES[source].defaults }, advanced: false, json: "",
+  cred: NEEDS_CRED.has(source) ? PASTE : NO_CRED, aws: { access_key_id: NO_CRED, secret_access_key: NO_CRED } });
+
+const awsKeysOf = (config: any): AwsKeys => ({ access_key_id: credFromRef(config?.credentials?.access_key_id), secret_access_key: credFromRef(config?.credentials?.secret_access_key) });
+
+/** Saves every value pasted into the form and returns the form with references in their place. */
+export async function storePasted(v: SourceValue, environment: string): Promise<SourceValue> {
+  const label = (what: string) => `${what} for connector ${environment}/${v.name}`;
+  const keep = async (c: Cred, what: string): Promise<Cred> => (c.type === "stored" && c.value ? credFromRef(await saveCred(c, label(what))) : c);
+  const anonymous = SOURCES[v.source].auth && ((v.advanced ? JSON.parse(v.json) : v.config).auth ?? "none") === "none";
+  const cred = anonymous ? v.cred : await keep(v.cred, "Credential");
+  const aws = v.source === "aws_secrets" && v.aws && v.aws.access_key_id.type !== "none"
+    ? { access_key_id: await keep(v.aws.access_key_id, "AWS access key ID"), secret_access_key: await keep(v.aws.secret_access_key, "AWS secret access key") } : v.aws;
+  return { ...v, cred, aws };
+}
 
 function sourceOf(c: any): string {
   if (c.type !== "kubernetes") return SOURCES[c.type] ? c.type : "prometheus";
@@ -103,10 +120,14 @@ function sourceOf(c: any): string {
 export const endpointOf = (c: any): string => c.config.base_url ?? (c.config.host ? `${c.config.host}:${c.config.port ?? ""}` : c.config.mode ?? "");
 
 export function connectorBody(v: SourceValue, environment: string) {
-  const config = v.advanced ? JSON.parse(v.json) : v.config;
+  const config = v.advanced ? JSON.parse(v.json) : { ...v.config };
   // With no authentication the connector ignores any credential, so do not store one that looks in use.
   const anonymous = SOURCES[v.source].auth && (config.auth ?? "none") === "none";
-  const credential_ref = anonymous ? { type: "none" } : v.credType === "env" ? { type: "env", name: v.credName } : v.credType === "file" ? { type: "file", path: v.credPath } : { type: "none" };
+  const credential_ref = anonymous ? { type: "none" } : refOf(v.cred) ?? { type: "none" };
+  if (v.source === "aws_secrets" && !v.advanced && v.aws) {
+    if (v.aws.access_key_id.type === "none") delete config.credentials;
+    else config.credentials = { access_key_id: refOf(v.aws.access_key_id), secret_access_key: refOf(v.aws.secret_access_key) };
+  }
   return { environment, type: SOURCES[v.source].type, name: v.name, enabled: v.enabled, config, credential_ref };
 }
 
@@ -115,8 +136,9 @@ function SourceFields({ value, onChange }: { value: SourceValue; onChange: (v: S
   const src = SOURCES[value.source];
   const setCfg = (k: string, v: unknown) => onChange({ ...value, config: { ...value.config, [k]: v } });
   const auth = value.config.auth ?? "none";
-  const setAuth = (next: string) => onChange({ ...value, credType: next === "none" ? "none" : value.credType === "none" ? "env" : value.credType,
+  const setAuth = (next: string) => onChange({ ...value, cred: next === "none" ? NO_CRED : value.cred.type === "none" ? PASTE : value.cred,
     config: { ...value.config, auth: next, username: next === "basic" ? value.config.username : undefined } });
+  const aws = value.aws ?? { access_key_id: NO_CRED, secret_access_key: NO_CRED };
   return (
     <div className="stack">
       <div className="small muted">{src.hint}</div>
@@ -134,14 +156,15 @@ function SourceFields({ value, onChange }: { value: SourceValue; onChange: (v: S
           <select value={auth} onChange={(e) => setAuth(e.target.value)}><option value="none">None</option><option value="basic">Username and password</option><option value="bearer">Bearer token</option></select>
         </label>}
         {auth === "basic" && !value.advanced && <label>Username<input required value={value.config.username ?? ""} onChange={(e) => setCfg("username", e.target.value)} /></label>}
-        {(!src.auth || auth !== "none" || value.advanced) && <label>{auth === "basic" ? "Password from" : "Credential"}
-          <select value={value.credType} onChange={(e) => onChange({ ...value, credType: e.target.value })}>
-            {!src.auth && <option value="none">{src.type === "kubernetes" || src.type === "cloudwatch" || src.type === "aws_cost" ? "Pod identity" : "None"}</option>}
-            <option value="env">Environment variable</option><option value="file">Mounted file</option>
-          </select>
-        </label>}
-        {value.credType === "env" && <label>Variable in moks-secrets<input required pattern="MOKS_CRED_[A-Z0-9_]+" title="MOKS_CRED_ followed by capitals, digits and underscores" value={value.credName} onChange={(e) => onChange({ ...value, credName: e.target.value })} placeholder={src.cred ?? "MOKS_CRED_…"} /></label>}
-        {value.credType === "file" && <label>Path under credentials dir<input required value={value.credPath} onChange={(e) => onChange({ ...value, credPath: e.target.value })} placeholder="eks/kubeconfig" /></label>}
+        {value.source !== "aws_secrets" && (!src.auth || auth !== "none" || value.advanced) &&
+          <CredentialInput label={value.source === "kubeconfig" ? "Kubeconfig" : auth === "basic" || value.source === "postgres" || value.source === "redis" ? "Password" : auth === "bearer" ? "Bearer token" : "Token"}
+            value={value.cred} onChange={(cred) => onChange({ ...value, cred })} multiline={value.source === "kubeconfig"} envPlaceholder={src.cred}
+            none={src.auth || NEEDS_CRED.has(value.source) ? undefined : src.type === "kubernetes" || src.type === "cloudwatch" || src.type === "aws_cost" ? "Pod identity" : "None"} />}
+        {value.source === "aws_secrets" && !value.advanced && <>
+          <CredentialInput label="AWS access key ID" value={aws.access_key_id} none="Pod Identity or IRSA (no keys)" files
+            onChange={(c) => onChange({ ...value, aws: { access_key_id: c, secret_access_key: c.type === "none" ? NO_CRED : aws.secret_access_key.type === "none" ? PASTE : aws.secret_access_key } })} />
+          {aws.access_key_id.type !== "none" && <CredentialInput label="AWS secret access key" value={aws.secret_access_key} onChange={(c) => onChange({ ...value, aws: { ...aws, secret_access_key: c } })} />}
+        </>}
       </div>
       <div className="row">
         <label className="inline"><input type="checkbox" checked={value.enabled} onChange={(e) => onChange({ ...value, enabled: e.target.checked })} /> Enabled</label>
@@ -297,7 +320,7 @@ export function Connectors() {
   function addFound(kind: string, cand: any) {
     a.clear();
     setEditing(null);
-    setForm({ ...blankSource(kind), name: cand.name, config: { ...SOURCES[kind].defaults, ...cand.config }, credType: "env", credName: `MOKS_CRED_${kind === "postgres" ? "PG" : "REDIS"}_${cand.name.toUpperCase().replace(/-/g, "_")}` });
+    setForm({ ...blankSource(kind), name: cand.name, config: { ...SOURCES[kind].defaults, ...cand.config }, cred: PASTE });
     setOpen(true);
   }
   const clash = duplicateConnector(connectors, activeEnv, form.name, editing);
@@ -338,13 +361,16 @@ export function Connectors() {
     a.clear();
     setEditing(c.id);
     setEnvironment(c.environment);
-    setForm({ ...blankSource(sourceOf(c)), name: c.name, enabled: c.enabled, config: c.config,
-      credType: c.credential_ref?.type ?? "none", credName: c.credential_ref?.name ?? "", credPath: c.credential_ref?.path ?? "" });
+    setForm({ ...blankSource(sourceOf(c)), name: c.name, enabled: c.enabled, config: c.config, cred: credFromRef(c.credential_ref), aws: awsKeysOf(c.config) });
     setOpen(true);
   }
   async function save(e: FormEvent) {
     e.preventDefault();
-    const saved = await a.run(() => api<any>(editing ? `/admin/connectors/${editing}` : "/admin/connectors", { method: editing ? "PUT" : "POST", body: connectorBody(form, activeEnv) }));
+    const saved = await a.run(async () => {
+      const ready = await storePasted(form, activeEnv);
+      setForm(ready);  // a retry after a failed save reuses what was stored
+      return api<any>(editing ? `/admin/connectors/${editing}` : "/admin/connectors", { method: editing ? "PUT" : "POST", body: connectorBody(ready, activeEnv) });
+    });
     if (saved) {
       setOpen(false);
       setEditing(null);
@@ -357,7 +383,7 @@ export function Connectors() {
   }
   return (
     <>
-      <PageHead title="Connectors" sub="Live data sources per environment. Credentials are references to mounted Secrets, never stored here.">
+      <PageHead title="Connectors" sub="Live data sources per environment. Paste each credential into its connector: MOKS stores it encrypted and never shows it again.">
         <button className="ghost" onClick={discover} disabled={!activeEnv || a.busy}>Discover databases</button>
         <button className="ghost" onClick={testAll} disabled={testingAll || !connectors.some((c) => c.enabled && c.implemented !== false)}>{testingAll ? "Testing…" : untested ? `Test all (${untested} untested)` : "Test all"}</button>
         <button onClick={() => add("prometheus")}>Add connector</button>
@@ -473,7 +499,7 @@ export function suggestedModels(preset: string): ModelInfo[] {
 export function LLMProviders() {
   const { confirm: ask, toast } = useFeedback();
   const list = useLoad(() => api<any[]>("/admin/llm"), []);
-  const blank = { name: "", purpose: "chat", provider: "bedrock", model: "", endpoint: "", region: "us-east-1", credType: "none", credName: "",
+  const blank = { name: "", purpose: "chat", provider: "bedrock", model: "", endpoint: "", region: "us-east-1", cred: NO_CRED as Cred,
     timeout_seconds: 60, max_output_tokens: 2000, daily_budget_usd: "5", input_price_per_mtok: "0", output_price_per_mtok: "0" };
   const [form, setForm] = useState<any>(blank);
   const [open, setOpen] = useState(false);
@@ -484,15 +510,19 @@ export function LLMProviders() {
   const edit = (c: any) => {
     a.clear();
     setEditing(c.id);
-    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", credType: c.credential_ref?.type ?? "none", credName: c.credential_ref?.name ?? "" });
+    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", cred: credFromRef(c.credential_ref) });
     setOpen(true);
   };
   async function save(e: FormEvent) {
     e.preventDefault();
-    const body = { ...form, endpoint: form.endpoint || null, region: form.provider === "bedrock" ? form.region : null,
-      credential_ref: form.credType === "env" ? { type: "env", name: form.credName } : { type: "none" } };
-    delete body.credType; delete body.credName; delete body.autoName;
-    if (await a.run(() => api(editing ? `/admin/llm/${editing}` : "/admin/llm", { method: editing ? "PUT" : "POST", body }))) {
+    const saved = await a.run(async () => {
+      const credential_ref = form.provider === "bedrock" ? { type: "none" } : await saveCred(form.cred, `API key for LLM provider ${form.name}`);
+      setForm({ ...form, cred: credFromRef(credential_ref) });  // a retry after a failed save reuses what was stored
+      const body = { ...form, endpoint: form.endpoint || null, region: form.provider === "bedrock" ? form.region : null, credential_ref };
+      delete body.cred; delete body.autoName;
+      return api(editing ? `/admin/llm/${editing}` : "/admin/llm", { method: editing ? "PUT" : "POST", body });
+    });
+    if (saved) {
       toast(`Saved ${form.name}`);
       close();
       list.reload();
@@ -534,7 +564,7 @@ export function LLMProviders() {
       {open && <FormDrawer title={editing ? `Edit ${form.name}` : "Add provider"} submit={editing ? "Save" : "Add provider"} busy={a.busy} error={a.error} onSubmit={save} onClose={close}>
         <FormSection title="Provider" help={LLM_PRESETS[presetOf(form)].hint}>
           <div className="form-grid">
-            <label>Provider<select value={presetOf(form)} onChange={(e) => { const p = LLM_PRESETS[e.target.value]; setForm({ ...form, provider: p.provider, endpoint: p.endpoint ?? "", model: "", credType: p.key ? "env" : "none", credName: p.key ?? "",
+            <label>Provider<select value={presetOf(form)} onChange={(e) => { const p = LLM_PRESETS[e.target.value]; setForm({ ...form, provider: p.provider, endpoint: p.endpoint ?? "", model: "", cred: p.key ? PASTE : NO_CRED,
               input_price_per_mtok: "0", output_price_per_mtok: "0", ...(form.autoName ? { name: "", autoName: false } : {}) }); }}>{Object.entries(LLM_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}</select></label>
             <label>Purpose<select value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })}><option>chat</option><option>embedding</option></select></label>
             <label>Name<input required pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and hyphens" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
@@ -546,16 +576,16 @@ export function LLMProviders() {
             {form.provider === "bedrock" ? <label>Region<input list="aws-regions" value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} /></label> :
               <label>Endpoint{form.provider === "ollama" ? " (required)" : " (optional)"}<input value={form.endpoint} onChange={(e) => setForm({ ...form, endpoint: e.target.value })} placeholder={form.provider === "ollama" ? "http://ollama.ollama:11434" : "default"} /></label>}
             {form.provider !== "bedrock" && (
-              <label>API key reference<select value={form.credType} onChange={(e) => setForm({ ...form, credType: e.target.value })}><option value="none">None</option><option value="env">Environment variable</option></select></label>
+              <CredentialInput label="API key" value={form.cred} onChange={(cred) => setForm({ ...form, cred })} none="None (no key)" files={false}
+                envPlaceholder={LLM_PRESETS[presetOf(form)].key} storeAs={`API key for ${LLM_PRESETS[presetOf(form)].label}${form.name ? ` (${form.name})` : ""}`} />
             )}
-            {form.credType === "env" && form.provider !== "bedrock" && <label>Variable in moks-secrets<input value={form.credName} onChange={(e) => setForm({ ...form, credName: e.target.value })} placeholder="MOKS_CRED_OPENAI_API_KEY" /></label>}
             <label>Timeout (s)<input type="number" value={form.timeout_seconds} onChange={(e) => setForm({ ...form, timeout_seconds: Number(e.target.value) })} /></label>
             <label>Max output tokens<input type="number" value={form.max_output_tokens} onChange={(e) => setForm({ ...form, max_output_tokens: Number(e.target.value) })} /></label>
           </div>
         </FormSection>
         <FormSection title="Model">
           <ModelPicker provider={form.provider} endpoint={form.endpoint} region={form.region} purpose={form.purpose} value={form.model}
-            credential={form.provider !== "bedrock" && form.credType === "env" ? { type: "env", name: form.credName } : { type: "none" }}
+            credential={form.provider !== "bedrock" ? refOf(form.cred) ?? { type: "none" } : { type: "none" }}
             suggested={suggestedModels(presetOf(form))} onChange={(model, info) => setForm(chooseModel(form, model, info))} />
         </FormSection>
         <FormSection title="Budget">

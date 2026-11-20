@@ -6,6 +6,8 @@ import { canList } from "./ModelPicker";
 
 vi.mock("../auth", () => ({ useAuth: () => ({ can: () => true, me: { email: "a@x" } }) }));
 
+const KEY_ID = "6f1c2a3b-4d5e-4f60-8a9b-0c1d2e3f4a5b";
+
 /** /admin/llm/models answers with `listing(body)`; every request is recorded. */
 function server(listing: (body: any) => any) {
   const asked: any[] = [];
@@ -16,6 +18,7 @@ function server(listing: (body: any) => any) {
       asked.push(body);
       return new Response(JSON.stringify(listing(body)), { status: 200 });
     }
+    if (path === "/admin/credentials") return new Response(JSON.stringify({ ref: { type: "stored", id: KEY_ID } }), { status: 201 });
     return new Response(JSON.stringify(path === "/admin/llm" ? [] : {}), { status: 200 });
   }));
   return asked;
@@ -35,11 +38,16 @@ const groups = (d: HTMLElement) => [...select(d).querySelectorAll("optgroup")].m
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 describe("LLM provider form: models from the provider", () => {
-  it("asks Anthropic with the key reference, lists its models to choose, and fills in prices and a name", async () => {
+  it("stores the pasted Anthropic key, lists its models with it, and fills in prices and a name", async () => {
     const asked = server(() => ({ models: [{ id: "claude-opus-5-5", label: "Claude Opus 5.5", purpose: "chat" }, { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", purpose: "chat" }], error: null, note: null }));
     const d = await openForm("anthropic");
+    expect(asked).toHaveLength(0);  // nothing to ask with until a key is pasted
+    const key = within(d).getByLabelText("API key");
+    fireEvent.change(key, { target: { value: "sk-ant-pasted" } });
+    fireEvent.blur(key);
     await waitFor(() => expect(groups(d)).toEqual(["Chat models (2)"]));
-    expect(asked[0]).toEqual({ provider: "anthropic", endpoint: null, region: null, credential_ref: { type: "env", name: "MOKS_CRED_ANTHROPIC_API_KEY" }, fresh: false });
+    expect(asked[0]).toEqual({ provider: "anthropic", endpoint: null, region: null, credential_ref: { type: "stored", id: KEY_ID }, fresh: false });
+    expect(JSON.stringify(asked)).not.toContain("sk-ant-pasted");
     expect(within(d).getByRole("status").textContent).toContain("2 models from the provider");
     fireEvent.change(select(d), { target: { value: "claude-opus-5-5" } });
     expect(select(d).value).toBe("claude-opus-5-5");
@@ -68,6 +76,8 @@ describe("LLM provider form: models from the provider", () => {
     const asked = server(() => ({ models: [], error: "credential environment variable MOKS_CRED_OPENAI_API_KEY is not set", note: null }));
     const d = await openForm("openai");
     expect(groups(d)[0]).toMatch(/^Suggested chat models \(\d+\)$/);  // at once, before the provider is asked
+    fireEvent.change(within(d).getByLabelText("API key from"), { target: { value: "env" } });  // the older way still works
+    fireEvent.change(within(d).getByLabelText("Variable"), { target: { value: "MOKS_CRED_OPENAI_API_KEY" } });
     expect([...select(d).options].map((o) => o.value)).toContain("gpt-5");
     await waitFor(() => expect(within(d).getByRole("status").textContent).toContain("MOKS_CRED_OPENAI_API_KEY is not set"));
     expect(within(d).getByRole("status").textContent).toContain("Showing the usual models");
