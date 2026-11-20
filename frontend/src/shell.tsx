@@ -3,13 +3,32 @@ import { Link, NavLink, useLocation } from "react-router-dom";
 import { api } from "./api";
 import { useAuth } from "./auth";
 import { Badge, useInterval } from "./components";
-import { navFor, titleFor } from "./nav";
+import { CLOSED_BY_DEFAULT, type NavGroup, navFor, titleFor } from "./nav";
+import { type Command, CommandPalette, IS_MAC } from "./palette";
 import { ScopeIndicator, scopeSearch } from "./scope";
 import { Icon, useModal } from "./ui";
 
 const THEME_KEY = "moks.theme";
 const COLLAPSE_KEY = "moks.sidebar";
 const DENSITY_KEY = "moks.density";
+
+const GROUPS_KEY = "moks.nav.closed";
+
+type Theme = "dark" | "light";
+type Density = "compact" | "comfortable";
+
+function setTheme(next: Theme) {
+  try { localStorage.setItem(THEME_KEY, next); } catch { /* private mode: the choice lasts for this page */ }
+  document.documentElement.dataset.theme = next;
+}
+
+function setDensity(next: Density) {
+  try { localStorage.setItem(DENSITY_KEY, next); } catch { /* as above */ }
+  document.documentElement.dataset.density = next;
+}
+
+const currentTheme = (): Theme => (document.documentElement.dataset.theme === "light" ? "light" : "dark");
+const currentDensity = (): Density => (document.documentElement.dataset.density === "compact" ? "compact" : "comfortable");
 
 export function applyStoredTheme() {
   document.documentElement.dataset.theme = localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark";
@@ -25,23 +44,53 @@ function Brand({ wordmark = true }: { wordmark?: boolean }) {
   );
 }
 
+/** Which groups are closed, kept across visits. Opening a page inside a closed group opens it. */
+function useClosedGroups(active?: string): [Set<string>, (group: string) => void] {
+  const [closed, setClosed] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(GROUPS_KEY);
+      return new Set<string>(saved ? JSON.parse(saved) : CLOSED_BY_DEFAULT);
+    } catch { return new Set(CLOSED_BY_DEFAULT); }
+  });
+  const save = (next: Set<string>) => { try { localStorage.setItem(GROUPS_KEY, JSON.stringify([...next])); } catch { /* not kept */ } return next; };
+  const toggle = (group: string) => setClosed((cur) => {
+    const next = new Set(cur);
+    if (next.has(group)) next.delete(group); else next.add(group);
+    return save(next);
+  });
+  useEffect(() => {
+    if (active) setClosed((cur) => (cur.has(active) ? save(new Set([...cur].filter((g) => g !== active))) : cur));
+  }, [active]);
+  return [closed, toggle];
+}
+
 function NavList({ collapsed = false, label }: { collapsed?: boolean; label: string }) {
   const { can } = useAuth();
   const loc = useLocation();
   const groups = useMemo(() => navFor(can), [can]);
+  const [closed, toggle] = useClosedGroups(titleFor(loc.pathname).group);
   const carry = scopeSearch(loc.search); // scoped pages keep the environment and namespace
-  return (
-    <nav aria-label={label} className="nav-list">
-      {groups.map((g) => (
-        <div key={g.label} role="group" aria-label={g.label}>
-          {!collapsed && <div className="nav-group">{g.label}</div>}
+  const group = (g: NavGroup) => {
+    const open = collapsed || !closed.has(g.label);
+    const id = `${label}-${g.label}`.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+    return (
+      <div key={g.label} role="group" aria-label={g.label}>
+        {!collapsed && <button type="button" className="nav-group" aria-expanded={open} aria-controls={id} onClick={() => toggle(g.label)}><span>{g.label}</span><Icon name="chevron" size={14} /></button>}
+        {open && <div id={id} className="nav-items">
           {g.items.map((i) => (
             <NavLink key={i.to} to={{ pathname: i.to, search: i.scoped ? carry : "" }} end={i.end} aria-label={collapsed ? i.label : undefined} data-tip={collapsed ? i.label : undefined}>
               <Icon name={i.icon} />{!collapsed && <span>{i.label}</span>}
             </NavLink>
           ))}
-        </div>
-      ))}
+        </div>}
+      </div>
+    );
+  };
+  const bottom = groups.filter((g) => g.bottom);
+  return (
+    <nav aria-label={label} className="nav-list">
+      <div className="nav-main">{groups.filter((g) => !g.bottom).map(group)}</div>
+      {bottom.length > 0 && <div className="nav-bottom">{bottom.map(group)}</div>}
     </nav>
   );
 }
@@ -49,8 +98,9 @@ function NavList({ collapsed = false, label }: { collapsed?: boolean; label: str
 function ProfileMenu({ commit, version }: { commit?: string; version?: string }) {
   const { me, logout } = useAuth();
   const [open, setOpen] = useState(false);
-  const [theme, setTheme] = useState(() => document.documentElement.dataset.theme ?? "dark");
-  const [density, setDensity] = useState(() => document.documentElement.dataset.density ?? "comfortable");
+  const [theme, setThemeState] = useState(currentTheme);
+  const [density, setDensityState] = useState(currentDensity);
+  useEffect(() => { if (open) { setThemeState(currentTheme()); setDensityState(currentDensity()); } }, [open]); // the palette may have changed them
   const box = useRef<HTMLDivElement>(null);
   const [mixed, setMixed] = useState(false);
   useEffect(() => {
@@ -66,15 +116,13 @@ function ProfileMenu({ commit, version }: { commit?: string; version?: string })
   }, [open]);
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
-    localStorage.setItem(THEME_KEY, next);
-    document.documentElement.dataset.theme = next;
     setTheme(next);
+    setThemeState(next);
   }
   function toggleDensity() {
     const next = density === "compact" ? "comfortable" : "compact";
-    localStorage.setItem(DENSITY_KEY, next);
-    document.documentElement.dataset.density = next;
     setDensity(next);
+    setDensityState(next);
   }
   const initial = (me?.display_name || me?.email || "?").slice(0, 1).toUpperCase();
   return (
@@ -145,12 +193,34 @@ export function Layout({ children }: { children: ReactNode }) {
   const [drawer, setDrawer] = useState(false);
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const [scope, setScope] = useState<HeaderScope | null>(null);
+  const [palette, setPalette] = useState(false);
+  const { logout } = useAuth();
   const { state: connection, commit, version } = useConnection();
   const panel = useRef<HTMLDivElement>(null);
   const title = titleFor(loc.pathname);
   useViewportHeight();
   useModal(panel, drawer, () => setDrawer(false));
   useEffect(() => { setDrawer(false); }, [loc.pathname]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() !== "k" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.ctrlKey && !e.metaKey && (e.target as HTMLElement | null)?.closest?.(".xterm")) return; // Ctrl+K belongs to the shell in a terminal
+      e.preventDefault();
+      setPalette((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const commands = useMemo<Command[]>(() => [
+    { id: "cmd:theme", label: currentTheme() === "dark" ? "Use light theme" : "Use dark theme", group: "Preferences", icon: "moon", keywords: "dark light appearance colour color",
+      run: () => setTheme(currentTheme() === "dark" ? "light" : "dark") },
+    { id: "cmd:density", label: currentDensity() === "compact" ? "Comfortable tables" : "Compact tables", group: "Preferences", icon: "lines", keywords: "density rows spacing",
+      run: () => setDensity(currentDensity() === "compact" ? "comfortable" : "compact") },
+    { id: "cmd:collapse", label: collapsed ? "Expand navigation" : "Collapse navigation", group: "Preferences", icon: collapsed ? "expand" : "collapse", keywords: "sidebar menu",
+      run: () => toggle() },
+    { id: "cmd:logout", label: "Sign out", group: "Account", icon: "logout", keywords: "log out logout", run: () => logout() },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  ], [palette, collapsed, logout]);
   function toggle() {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? "0" : "1");
     setCollapsed(!collapsed);
@@ -170,6 +240,9 @@ export function Layout({ children }: { children: ReactNode }) {
           <button type="button" className="ghost menu-btn" aria-expanded={drawer} aria-haspopup="dialog" onClick={() => setDrawer(true)}><Icon name="menu" size={20} /><span>Menu</span></button>
           <div className="crumbs">{title.group && <span className="muted crumb-group">{title.group}</span>}<strong>{title.label}</strong></div>
           <div className="top-right">
+            <button type="button" className="ghost palette-trigger" onClick={() => setPalette(true)} aria-label="Go to a page or command" aria-haspopup="dialog" aria-keyshortcuts={IS_MAC ? "Meta+K" : "Control+K"}>
+              <Icon name="search" size={16} /><span>Go to…</span><kbd>{IS_MAC ? "⌘K" : "Ctrl K"}</kbd>
+            </button>
             <ScopeIndicator fixed={scope} />
             {scope?.production && <Badge kind="warn">production</Badge>}
             <span className={`conn ${connection}`} role="status" title={connection === "connected" ? "Connected to MOKS" : "Cannot reach MOKS"}>
@@ -180,6 +253,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </header>
         <main id="main" tabIndex={-1} className={`main${FLUSH.test(loc.pathname) ? " flush" : ""}`}>{children}</main>
       </div>
+      {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
       {drawer && (
         <div className="backdrop drawer-backdrop" onMouseDown={(e) => { if (e.target === e.currentTarget) setDrawer(false); }}>
           <div ref={panel} className="nav-drawer" role="dialog" aria-modal="true" aria-label="Navigation" tabIndex={-1}>
