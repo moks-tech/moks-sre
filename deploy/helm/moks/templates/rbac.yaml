@@ -30,6 +30,10 @@ rules:
   - apiGroups: [autoscaling]
     resources: [horizontalpodautoscalers]
     verbs: [get, list, watch]
+  # KEDA ScaledObjects (k8s_autoscaling): targets, bounds and conditions. Never TriggerAuthentications, which name credentials.
+  - apiGroups: [keda.sh]
+    resources: [scaledobjects]
+    verbs: [get, list]
   - apiGroups: [metrics.k8s.io]
     resources: [pods, nodes]
     verbs: [get, list]

@@ -30,6 +30,7 @@ WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job", "R
 # recognisable shape, so pattern redaction cannot catch it.
 SENSITIVE_ENV = re.compile(r"(?i)(pass|secret|token|key|credential|auth|cert|private|dsn|salt|signature|cookie|session)")
 MAX_ITEMS = 1000
+KEDA_GROUP = "keda.sh"
 
 
 def _api_error(exc: Exception, what: str) -> ConnectorError:
@@ -257,8 +258,27 @@ class KubernetesConnector:
         items, _ = await self._list(f"list pvcs in {namespace}", core.list_namespaced_persistent_volume_claim, namespace)
         return [{"name": i["metadata"]["name"], "storage_class": i["spec"].get("storageClassName"),
                  "request": ((i["spec"].get("resources") or {}).get("requests") or {}).get("storage"),
-                 "capacity": (i.get("status") or {}).get("capacity", {}).get("storage"), "phase": (i.get("status") or {}).get("phase")}
+                 "capacity": (i.get("status") or {}).get("capacity", {}).get("storage"), "phase": (i.get("status") or {}).get("phase"),
+                 "access_modes": i["spec"].get("accessModes") or [], "volume": i["spec"].get("volumeName"),
+                 "conditions": [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason"), "message": redact((c.get("message") or "")[:300])}
+                                for c in (i.get("status") or {}).get("conditions") or []]}
                 for i in items]
+
+    async def hpas(self, namespace: str) -> list[dict]:
+        """HorizontalPodAutoscalers (autoscaling/v2): target, bounds, replicas, metrics and conditions."""
+        from kubernetes_asyncio import client
+
+        api = await self._client()
+        items, _ = await self._list(f"list hpas in {namespace}", client.AutoscalingV2Api(api).list_namespaced_horizontal_pod_autoscaler, namespace)
+        return [summarize_hpa(i) for i in items]
+
+    async def scaled_objects(self, namespace: str) -> list[dict] | None:
+        """KEDA ScaledObjects, or None when KEDA is not installed. Trigger metadata is left out: it can name credentials."""
+        if KEDA_GROUP not in await self.api_groups():
+            return None
+        custom = await self.custom()
+        items, _ = await self._list(f"list keda scaledobjects in {namespace}", custom.list_namespaced_custom_object, KEDA_GROUP, "v1alpha1", namespace, "scaledobjects")
+        return [summarize_scaled_object(i) for i in items]
 
     async def describe_pod(self, namespace: str, name: str) -> dict:
         core = await self.core()
@@ -605,6 +625,41 @@ def summarize_event(e: dict) -> dict:
         "firstSeen": e.get("firstTimestamp") or e.get("eventTime"),
         "lastSeen": e.get("lastTimestamp") or (e.get("series") or {}).get("lastObservedTime") or e.get("eventTime"),
     }
+
+
+def _conditions(status: dict) -> list[dict]:
+    return [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason"), "message": redact((c.get("message") or "")[:300])}
+            for c in status.get("conditions") or []]
+
+
+def summarize_hpa(h: dict) -> dict:
+    """An autoscaling/v2 HPA: what it scales, its bounds, the replicas it wants and has, and why (metrics, conditions)."""
+    spec, st = h.get("spec") or {}, h.get("status") or {}
+    ref = spec.get("scaleTargetRef") or {}
+
+    def metric(m: dict) -> dict:
+        kind = m.get("type")
+        body = m.get(kind[0].lower() + kind[1:]) if kind else None
+        body = body or {}
+        name = (body.get("metric") or {}).get("name") or body.get("name")
+        return {"type": kind, "name": name, "target": body.get("target") or body.get("current")}
+
+    return {"name": (h.get("metadata") or {}).get("name"), "target": {"kind": ref.get("kind"), "name": ref.get("name")},
+            "minReplicas": spec.get("minReplicas", 1), "maxReplicas": spec.get("maxReplicas"),
+            "currentReplicas": st.get("currentReplicas"), "desiredReplicas": st.get("desiredReplicas"), "lastScaleTime": st.get("lastScaleTime"),
+            "metrics": [metric(m) for m in spec.get("metrics") or []], "current": [metric(m) for m in st.get("currentMetrics") or []],
+            "atMax": spec.get("maxReplicas") is not None and st.get("desiredReplicas") == spec.get("maxReplicas"), "conditions": _conditions(st)}
+
+
+def summarize_scaled_object(o: dict) -> dict:
+    """A KEDA ScaledObject without trigger metadata or authentication references (they can name credentials)."""
+    spec, st = o.get("spec") or {}, o.get("status") or {}
+    ref = spec.get("scaleTargetRef") or {}
+    return {"name": (o.get("metadata") or {}).get("name"), "target": {"kind": ref.get("kind") or "Deployment", "name": ref.get("name")},
+            "minReplicas": spec.get("minReplicaCount", 0), "maxReplicas": spec.get("maxReplicaCount", 100), "paused": bool((o.get("metadata") or {}).get("annotations", {}).get("autoscaling.keda.sh/paused")),
+            "triggers": [{"type": t.get("type"), "name": t.get("name")} for t in spec.get("triggers") or []],
+            "hpa": st.get("hpaName"), "lastActiveTime": st.get("lastActiveTime"), "health": {k: (v or {}).get("status") for k, v in (st.get("health") or {}).items()},
+            "conditions": _conditions(st)}
 
 
 def summarize_workload(kind: str, w: dict) -> dict:
