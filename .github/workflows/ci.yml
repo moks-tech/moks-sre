@@ -51,6 +51,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: {persist-credentials: false}
+      # Argo CD refuses to render a repository with a symlink that leaves it ("out-of-bounds symlinks"), which stops
+      # every MOKS Application from syncing; a committed frontend/node_modules link did that once.
+      - name: No symlink points outside the repository
+        run: |
+          bad=""
+          while IFS= read -r f; do
+            link="$(readlink "$f")"
+            case "$link" in /*) target="$(realpath -m "$link")";; *) target="$(realpath -m "$(dirname "$f")/$link")";; esac
+            case "$target" in "$PWD"/*) ;; *) bad="$bad $f";; esac
+          done < <(git ls-files -s | awk '$1 == "120000" {print $4}')
+          [[ -z "$bad" ]] || { echo "::error::symlinks outside the repository:$bad"; exit 1; }
       - uses: actions/setup-python@v7
         with: {python-version: "3.12"}
       - name: Backend tests

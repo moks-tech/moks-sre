@@ -4,8 +4,8 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.egg-info/
-# Node
-node_modules/
+# Node. No trailing slash: a node_modules symlink (a worktree borrowing another checkout's) is ignored too.
+node_modules
 frontend/dist/
 *.tsbuildinfo
 # Local state and secrets: only examples are committed
