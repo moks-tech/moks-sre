@@ -75,6 +75,41 @@ describe("the CrewAI investigation option", () => {
   });
 });
 
+describe("the CrewAI incident investigation option", () => {
+  afterEach(() => { cleanup(); state.posts = []; });
+  const flow = (available: boolean) => ({ label: "Incident investigation", description: "d", enabled: true, available, reason: null, agents: 7,
+    limits: { timeout_seconds: 600, max_tool_calls: 24, review_rounds: 2, token_budget: 150000 },
+    inputs: [{ name: "change_window", default: "24h", choices: ["15m", "1h", "6h", "24h"] }] });
+
+  it("offers both crews and posts the incident flow with its change window and description", async () => {
+    state.crewai = { ...on, flows: { workload_investigation: { ...flow(true), label: "Workload investigation", agents: 3 }, incident_investigation: flow(true) } };
+    page();
+    fireEvent.click(await screen.findByLabelText("CrewAI investigation"));
+    fireEvent.click(await screen.findByLabelText("Incident investigation (7 agents)"));
+    expect(screen.getByText(/independent reviewer/)).toBeTruthy();
+    const ns = await screen.findByRole("combobox", { name: "Namespace" });
+    await waitFor(() => expect([...(ns as HTMLSelectElement).options].map((o) => o.value)).toContain("crewai-demo"));
+    fireEvent.change(ns, { target: { value: "crewai-demo" } });
+    const wl = screen.getByRole("combobox", { name: "Workload" }) as HTMLSelectElement;
+    await waitFor(() => expect([...wl.options].map((o) => o.value)).toContain("web"));
+    fireEvent.change(wl, { target: { value: "web" } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Change window" }), { target: { value: "1h" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "Incident" }), { target: { value: "5xx since the 10:00 release" } });
+    fireEvent.click(screen.getByText("Run incident investigation"));
+    await waitFor(() => expect(state.posts).toHaveLength(1));
+    expect(state.posts[0].body).toEqual({ flow: "incident_investigation", environment: "mk4", namespace: "crewai-demo", workload: "web", kind: "Deployment", minutes: undefined,
+                                          change_window: "1h", question: "5xx since the 10:00 release" });
+  });
+
+  it("is the only choice when the workload flow is switched off", async () => {
+    state.crewai = { ...on, available: false, available_any: true, flows: { workload_investigation: { ...flow(false) }, incident_investigation: flow(true) } };
+    page();
+    fireEvent.click(await screen.findByLabelText("CrewAI investigation"));
+    expect(await screen.findByText("Run incident investigation")).toBeTruthy();
+    expect(screen.queryByLabelText("Workload investigation (3 agents)")).toBeNull();
+  });
+});
+
 describe("the CrewAI part of a report", () => {
   afterEach(cleanup);
   const base = { summary: "s", observed_facts: [], suspected_causes: [], missing_evidence: [], next_steps: [], proposed_remediation: [], generated_by: "llm" };

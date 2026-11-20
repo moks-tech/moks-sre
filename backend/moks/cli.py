@@ -338,9 +338,17 @@ async def _eval(dataset: str, mode: str) -> None:
 
     async with session_scope() as db:
         run = await db.get(EvalRun, rid)
-        for r in run.results:
-            failed = [k for k, v in r["checks"].items() if not v]
-            print(f"{r['case']:40} {r['score']:.2f}  {'FAILED: ' + ', '.join(failed) if failed else 'ok'}")
+        if summary.get("kind") == "crewai":  # the incident scenarios: one row of metrics per case, then the gates
+            print(f"{'case':32} score  compl  evid   rca    cite   unsup  seconds  tokens")
+            for r in run.results:
+                print(f"{r['id'][:31]:32} {r['score']:.2f}   {r['completeness']:.2f}   {r['evidence_quality']:.2f}   {r['root_cause_accuracy']:.2f}   "
+                      f"{r['citation_validity']:.2f}   {r['unsupported_conclusions']:>3}   {r['execution_seconds']:>7.1f}  {r['tokens']:>6}")
+            for g in run.gates:
+                print(f"gate {g['name']:22} {g['state']}" + (f" ({g['value']})" if "value" in g else "") + (f": {'; '.join(g['failures'][:3])}" if g["failures"] else ""))
+        else:
+            for r in run.results:
+                failed = [k for k, v in r["checks"].items() if not v]
+                print(f"{r['case']:40} {r['score']:.2f}  {'FAILED: ' + ', '.join(failed) if failed else 'ok'}")
     print(f"score {summary['score']:.3f} over {summary['cases']} cases (run {rid})")
 
 

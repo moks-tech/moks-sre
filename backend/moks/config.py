@@ -141,6 +141,11 @@ class Settings(BaseSettings):
     crewai_slot_wait_seconds: int = Field(default=20, ge=0, le=300)
     crewai_excerpt_chars: int = Field(default=2000, ge=200, le=20000)  # what one tool result shows the model and the report
     crewai_log_lines: int = Field(default=100, ge=10, le=500)
+    # The CrewAI worker's run time limit (its MOKS_MAX_DURATION_SECONDS) as the api sees it, for the crews' timeout ceilings. 0: max_duration_seconds.
+    crewai_max_duration_seconds: int = Field(default=0, ge=0, le=3600)
+    # The incident flow (docs/crewai-sre-engine.md): when the crew cannot start (no slot, flow switched off, wrong crewai version), run the
+    # LangGraph investigation instead ("langgraph") or fail ("none"). Console test runs never fall back.
+    crewai_fallback: Literal["langgraph", "none"] = "langgraph"
 
     # Kubernetes <-> AWS Secrets Manager sync (docs/SECRETS_SYNC.md). Off unless MOKS_SECRETS_SYNC_ENABLED is true in the api and
     # the executor. Values are read and written only by the executor; nothing here schedules a sync, only discovery.

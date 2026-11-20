@@ -5,6 +5,10 @@ an incident summary in which every finding cites recorded evidence. The LangGrap
 default for everything else. CrewAI runs only when `MOKS_CREWAI_ENABLED=true` **and** the image was built
 with the crewai extra.
 
+A second, larger flow, the seven-agent **incident investigation** with graded findings and hypotheses, a bounded
+evidence review and an RCA, is described in [crewai-sre-engine.md](crewai-sre-engine.md). Everything below about the
+target, safety, the worker and the image applies to it too.
+
 Runs, logs, schedules and the crew's prompts are managed in the **CrewAI console** at `/moks/crewai`
 ([crewai-console.md](crewai-console.md)). `POST /investigations/crewai` (the form on New investigation) starts the
 console's *Workload investigation* flow, so every run is numbered, logged step by step and uses the crew's active

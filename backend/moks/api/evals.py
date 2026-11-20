@@ -32,6 +32,9 @@ async def datasets(ctx: AuthContext = Depends(needs(P.ADMIN_POLICIES))) -> list[
 
 @router.post("/runs", status_code=201)
 async def start(body: RunIn, ctx: AuthContext = Depends(needs(P.ADMIN_POLICIES))) -> dict:
+    if next((d for d in runner.list_datasets() if d["name"] == body.dataset), {}).get("kind") == "crewai":
+        raise HTTPException(422, "The CrewAI incident scenarios need the crewai package, which only the CrewAI worker has: run "
+                                 f"`moks eval {body.dataset} --mode llm` in the moks-crewai pod (docs/crewai-sre-engine.md)")
     try:
         rid = await runner.start(body.dataset, body.mode, ctx.user.id)
     except ValueError as exc:

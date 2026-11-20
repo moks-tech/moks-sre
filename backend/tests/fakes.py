@@ -177,6 +177,16 @@ class FakeKubernetes:
     async def nodes(self):
         return [{"name": "node-1", "ready": True, "pressure": [], "unschedulable": False, "taints": [], "allocatable": {"cpu": "4", "memory": "8Gi", "pods": "110"}}]
 
+    async def hpas(self, namespace):
+        self._ns(namespace)
+        return list(self._ns(namespace).get("hpas", []))
+
+    async def scaled_objects(self, namespace):
+        return self._ns(namespace).get("scaled_objects")
+
+    async def pvcs(self, namespace):
+        return [dict(c) for c in self._ns(namespace).get("pvcs", [])]
+
     async def dns_health(self):
         return {"deployment": {}, "services": [], "pods": []}
 
