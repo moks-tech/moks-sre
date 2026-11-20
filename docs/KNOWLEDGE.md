@@ -150,6 +150,8 @@ Conflicts are flagged when two documents share a title and scope, and each resul
 
 Scores order one result list. They are not probabilities, and a citation existing does not show that it supports a claim. `claim_support` checks literal overlap in one passage, and says so. Documents are guidance: what is true of a cluster now needs live tool evidence.
 
+Embedding models, their options, index generations, rebuilding with a new model and rolling back are in [EMBEDDINGS.md](EMBEDDINGS.md).
+
 ## Index coverage
 
 `document_index_state` records, per document and index generation, the revision, expected and written chunks and vectors, the model and dimensions, the last error and retries. An index is `complete` or `degraded` from that record, and a degraded one becomes complete only when the record shows every document whole. With Pinecone, written counts are what MOKS recorded, because Pinecone cannot count by metadata; OpenSearch is also sampled by `verify_index`.
@@ -180,7 +182,7 @@ Evaluation content lives in `realm = 'evaluation'`, enforced in every candidate 
 
 ## Query understanding
 
-Search reads identifiers, error names, resource types and time references without a model, and returns them as `understanding`. `MOKS_RAG_DECOMPOSE` splits multi-part questions into separate rankings. It is off: on the `rag` dataset it changed neither recall, MRR nor nDCG and added latency. That dataset is small and synthetic, so re-measure on real questions before turning it on.
+Search reads identifiers, error names, resource types and time references without a model, and returns them as `understanding`, with typed entities (Kubernetes objects and statuses, AWS ARNs and resource ids, Terraform addresses, metrics, PromQL and LogQL, OpenTelemetry attributes), a question type, and optional SRE synonym expansion: [EMBEDDINGS.md](EMBEDDINGS.md#query-understanding). Normalization never changes an identifier. `MOKS_RAG_DECOMPOSE` splits multi-part questions into separate rankings. It is off: on the `rag` dataset it changed neither recall, MRR nor nDCG and added latency. That dataset is small and synthetic, so re-measure on real questions before turning it on.
 
 ## Knowledge in investigations
 

@@ -232,7 +232,7 @@ def handlers() -> dict[str, Handler]:
         return result
 
     async def knowledge_reindex(db: AsyncSession, p: dict) -> dict:
-        return await service.reindex(db, p.get("_job_id"))
+        return await service.reindex(db, p.get("_job_id"), uuid.UUID(p["llm_config_id"]) if p.get("llm_config_id") else None)
 
     async def alert_poll(db: AsyncSession, p: dict) -> dict:
         return await alerts.poll_environment(uuid.UUID(p["environment_id"]))

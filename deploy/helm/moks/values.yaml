@@ -394,6 +394,36 @@ reranker:
     maxQueryChars: 1000
     maxPassageChars: 2000
 
+# Embedding model service (docs/EMBEDDINGS.md): the reranker's image built around reranker/embedder.lock.json
+# (BAAI/bge-base-en-v1.5, chosen by the SRE benchmark), serving /embed and /info as Text Embeddings Inference does.
+# It changes nothing on its own: search uses it once an embedding configuration points at it (provider huggingface,
+# endpoint http://moks-embedder:8090) and an index has been rebuilt with that configuration.
+embedder:
+  enabled: false
+  image:
+    repository: registry.jithendar.com/jithendar/moks-embedder
+    tag: latest             # CI moves it on every master build. Pods get it when they restart (docs/RELEASES.md).
+    digest: ""              # if set, replaces the tag
+  model:                    # what embedder.lock.json pins; the configuration's connection test compares it with /info
+    id: BAAI/bge-base-en-v1.5
+    revision: a5beb1e3e68b9ab74eb54cfd186867f64f240e1a
+  tokenSecret: moks-reranker-secrets  # the reranker's token: both services answer only the API and worker
+  tokenKey: MOKS_CRED_RERANKER_TOKEN
+  replicas: 1
+  threads: 2
+  batchSize: 8              # smaller batches hold peak memory down; an indexing request of 32 runs as four
+  concurrency: 1
+  queue: 8                  # searches wait behind at most this many requests, then get 429 and go keyword-only
+  maxInputs: 64
+  maxInputChars: 16000
+  timeoutMs: 60000
+  drainSeconds: 30
+  # From an arm64 Mac at batch 8 (docs/EMBEDDINGS.md): peak 0.79 GB at 2 threads, 0.87 GB at 4; 13-17 chunks/s.
+  # Measure on the cluster before tightening.
+  resources:
+    requests: {cpu: 250m, memory: 1Gi}
+    limits: {cpu: "2", memory: 1536Mi}
+
 terminal:
   enabled: false
   namespace: ""          # empty: the release namespace (sessions.quota applies); a name gives shells a namespace of their own

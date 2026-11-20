@@ -475,7 +475,13 @@ const LLM_PRESETS: Record<string, Preset> = {
   qwen: { label: "Alibaba Qwen (Model Studio)", provider: "openai", endpoint: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", key: "MOKS_CRED_DASHSCOPE_API_KEY", models: ["qwen-max", "qwen-plus", "qwen-turbo"], embed: ["text-embedding-v3"], hint: "OpenAI-compatible mode of Model Studio (international endpoint)." },
   ollama: { label: "Ollama", provider: "ollama", endpoint: "http://ollama.ollama:11434", models: ["llama3.2", "llama3.1:8b", "qwen2.5:7b", "mistral", "gemma3"], embed: ["bge-m3", "nomic-embed-text", "mxbai-embed-large"], hint: "Self-hosted; the endpoint is required. The models pulled on that server are listed." },
   compatible: { label: "Other OpenAI-compatible server", provider: "openai", endpoint: "https://", hint: "vLLM, LiteLLM, LM Studio or any server that speaks the OpenAI chat API." },
+  embedder: { label: "MOKS embedding service", provider: "huggingface", endpoint: "http://moks-embedder:8090", key: "MOKS_CRED_RERANKER_TOKEN", embed: ["BAAI/bge-base-en-v1.5"],
+    hint: "The chart's moks-embedder (docs/EMBEDDINGS.md), embedding only. The Test checks that the server runs the model and revision configured here." },
+  tei: { label: "Hugging Face Text Embeddings Inference", provider: "huggingface", endpoint: "https://", key: "MOKS_CRED_HF_API_KEY", hint: "A TEI server or a Hugging Face Inference Endpoint (POST /embed). Embedding only." },
+  sentence_transformers: { label: "Sentence Transformers (in-process)", provider: "sentence_transformers", embed: ["BAAI/bge-base-en-v1.5", "BAAI/bge-small-en-v1.5", "intfloat/e5-base-v2", "sentence-transformers/all-MiniLM-L6-v2"],
+    hint: "Loads the model inside MOKS. For development and single-node installs: the MOKS image does not include sentence-transformers, so on a cluster use the embedding service." },
 };
+const EMBEDDING_ONLY = ["huggingface", "sentence_transformers"];
 const presetOf = (form: any) => Object.keys(LLM_PRESETS).find((k) => LLM_PRESETS[k].provider === form.provider && (LLM_PRESETS[k].endpoint ?? "") === (form.endpoint ?? "")) ?? (form.provider === "openai" ? "compatible" : Object.keys(LLM_PRESETS).find((k) => LLM_PRESETS[k].provider === form.provider) ?? "compatible");
 
 export { LLM_PRESETS, presetOf };
@@ -500,7 +506,8 @@ export function LLMProviders() {
   const { confirm: ask, toast } = useFeedback();
   const list = useLoad(() => api<any[]>("/admin/llm"), []);
   const blank = { name: "", purpose: "chat", provider: "bedrock", model: "", endpoint: "", region: "us-east-1", cred: NO_CRED as Cred,
-    timeout_seconds: 60, max_output_tokens: 2000, daily_budget_usd: "5", input_price_per_mtok: "0", output_price_per_mtok: "0" };
+    timeout_seconds: 60, max_output_tokens: 2000, daily_budget_usd: "5", input_price_per_mtok: "0", output_price_per_mtok: "0", embedding_options: { ...NO_OPTIONS } };
+  const profiles = useLoad(() => api<any[]>("/admin/llm/embedding-profiles").then((p) => (Array.isArray(p) ? p : [])).catch(() => []), []);
   const [form, setForm] = useState<any>(blank);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
@@ -510,7 +517,7 @@ export function LLMProviders() {
   const edit = (c: any) => {
     a.clear();
     setEditing(c.id);
-    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", cred: credFromRef(c.credential_ref, c.credential) });
+    setForm({ ...c, endpoint: c.endpoint ?? "", region: c.region ?? "us-east-1", cred: credFromRef(c.credential_ref, c.credential), embedding_options: { ...NO_OPTIONS, ...(c.embedding_options ?? {}) } });
     setOpen(true);
   };
   async function save(e: FormEvent) {
@@ -518,8 +525,9 @@ export function LLMProviders() {
     const saved = await a.run(async () => {
       const credential_ref = form.provider === "bedrock" ? { type: "none" } : await saveCred(form.cred, `API key for LLM provider ${form.name}`);
       setForm({ ...form, cred: credFromRef(credential_ref) });  // a retry after a failed save reuses what was stored
-      const body = { ...form, endpoint: form.endpoint || null, region: form.provider === "bedrock" ? form.region : null, credential_ref };
-      delete body.cred; delete body.autoName;
+      const body = { ...form, endpoint: form.endpoint || null, region: form.provider === "bedrock" ? form.region : null, credential_ref,
+        embedding_options: form.purpose === "embedding" ? optionsBody(form.embedding_options) : undefined, embedding_dimensions: form.embedding_dimensions || null };
+      delete body.cred; delete body.autoName; delete body.model_key; delete body.spent_last_24h_usd; delete body.credential; delete body.is_active; delete body.id;
       return api(editing ? `/admin/llm/${editing}` : "/admin/llm", { method: editing ? "PUT" : "POST", body });
     });
     if (saved) {
@@ -554,7 +562,7 @@ export function LLMProviders() {
             { key: "n", head: "Name", primary: true, cell: (c) => <Truncate text={c.name} /> },
             { key: "s", head: "Status", status: true, cell: (c) => (c.is_active ? <Badge kind="ok">active</Badge> : <Badge>inactive</Badge>) },
             { key: "p", head: "Purpose", cell: (c) => c.purpose },
-            { key: "m", head: "Provider / model", cell: (c) => <span className="mono small">{c.provider} / {c.model}{c.region && <span className="muted"> {c.region}</span>}</span> },
+            { key: "m", head: "Provider / model", cell: (c) => <span className="mono small">{c.provider} / {c.model}{c.region && <span className="muted"> {c.region}</span>}{c.model_key && c.model_key.split("/").length > 3 && <span className="muted" title={c.model_key}> + options</span>}</span> },
             { key: "e", head: "Endpoint", wide: true, cell: (c) => <Truncate text={c.endpoint ?? ""} mono /> },
             { key: "c", head: "Credential", wide: true, cell: (c) => <Truncate text={c.credential ?? ""} mono /> },
             { key: "b", head: "Budget (24 h)", cell: (c) => <span className="small">${Number(c.spent_last_24h_usd ?? 0).toFixed(4)} of ${c.daily_budget_usd}</span> },
@@ -565,8 +573,9 @@ export function LLMProviders() {
         <FormSection title="Provider" help={LLM_PRESETS[presetOf(form)].hint}>
           <div className="form-grid">
             <label>Provider<select value={presetOf(form)} onChange={(e) => { const p = LLM_PRESETS[e.target.value]; setForm({ ...form, provider: p.provider, endpoint: p.endpoint ?? "", model: "", cred: p.key ? PASTE : NO_CRED,
+              ...(EMBEDDING_ONLY.includes(p.provider) ? { purpose: "embedding" } : {}),
               input_price_per_mtok: "0", output_price_per_mtok: "0", ...(form.autoName ? { name: "", autoName: false } : {}) }); }}>{Object.entries(LLM_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}</select></label>
-            <label>Purpose<select value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })}><option>chat</option><option>embedding</option></select></label>
+            <label>Purpose<select value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })}>{!EMBEDDING_ONLY.includes(form.provider) && <option>chat</option>}<option>embedding</option></select></label>
             <label>Name<input required pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and hyphens" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           </div>
           <datalist id="aws-regions">{REGIONS.map((r) => <option key={r} value={r} />)}</datalist>
@@ -585,8 +594,9 @@ export function LLMProviders() {
         <FormSection title="Model">
           <ModelPicker provider={form.provider} endpoint={form.endpoint} region={form.region} purpose={form.purpose} value={form.model}
             credential={form.provider !== "bedrock" ? refOf(form.cred) ?? { type: "none" } : { type: "none" }}
-            suggested={suggestedModels(presetOf(form))} onChange={(model, info) => setForm(chooseModel(form, model, info))} />
+            suggested={suggestedModels(presetOf(form))} onChange={(model, info) => setForm(withProfile(chooseModel(form, model, info), profiles.data ?? [], !editing, info))} />
         </FormSection>
+        {form.purpose === "embedding" && <EmbeddingOptions form={form} setForm={setForm} profiles={profiles.data ?? []} />}
         <FormSection title="Budget">
           <div className="form-grid">
             <label>Daily budget (USD)<input value={form.daily_budget_usd} onChange={(e) => setForm({ ...form, daily_budget_usd: e.target.value })} /></label>
@@ -597,6 +607,54 @@ export function LLMProviders() {
         </FormSection>
       </FormDrawer>}
     </>
+  );
+}
+
+// ---- Embedding options ------------------------------------------------------------------------
+
+const NO_OPTIONS = { query_prefix: "", document_prefix: "", max_input_chars: "", revision: "" };
+
+/** Only what is set: an empty option is no option, and keeps the model key every existing index has. */
+export function optionsBody(o: any): any {
+  const out: any = {};
+  for (const k of ["query_prefix", "document_prefix", "revision"]) if (o?.[k]) out[k] = o[k];
+  if (o?.max_input_chars) out.max_input_chars = Number(o.max_input_chars);
+  return out;
+}
+
+/** The profile for a model name, matched on its last path part like moks/rag/embeddings.py profile_for. */
+export function profileFor(model: string, profiles: any[]): any | undefined {
+  if (!Array.isArray(profiles)) return undefined;
+  const name = model.replace(/\/+$/, "").split("/").pop()!.split(":")[0].toLowerCase();
+  return profiles.find((p) => (p.match ?? []).map((m: string) => m.toLowerCase()).includes(name));
+}
+
+/** A new embedding configuration starts from the model's measured prefixes; an existing one is never changed unasked. */
+export function withProfile(form: any, profiles: any[], fresh: boolean, info?: any): any {
+  if (form.purpose !== "embedding" || !fresh) return form;
+  const p = profileFor(form.model, profiles);
+  const revision = info?.revision ?? form.embedding_options?.revision ?? "";
+  return { ...form, embedding_options: { ...NO_OPTIONS, ...(form.embedding_options ?? {}), query_prefix: p?.query_prefix ?? "", document_prefix: p?.document_prefix ?? "", revision } };
+}
+
+function EmbeddingOptions({ form, setForm, profiles }: { form: any; setForm: (f: any) => void; profiles: any[] }) {
+  const o = form.embedding_options ?? NO_OPTIONS;
+  const set = (k: string, v: string) => setForm({ ...form, embedding_options: { ...o, [k]: v } });
+  const p = profileFor(form.model ?? "", profiles);
+  const differs = p && (p.query_prefix !== (o.query_prefix ?? "") || p.document_prefix !== (o.document_prefix ?? ""));
+  return (
+    <FormSection title="Embedding" help="What the model is given besides the text. Any change here makes different vectors: an index built before it needs a rebuild, so the configuration an index uses cannot be changed. Add a new one instead.">
+      <div className="form-grid">
+        <label>Query prefix<input value={o.query_prefix} onChange={(e) => set("query_prefix", e.target.value)} placeholder="none" /></label>
+        <label>Document prefix<input value={o.document_prefix} onChange={(e) => set("document_prefix", e.target.value)} placeholder="none" /></label>
+        <label>Model revision<input value={o.revision} onChange={(e) => set("revision", e.target.value)} placeholder="any" pattern="[A-Za-z0-9._/\-]*" /></label>
+        <label>Truncate inputs at (characters)<input type="number" min={64} value={o.max_input_chars} onChange={(e) => set("max_input_chars", e.target.value)} placeholder="the model's own limit" /></label>
+        <label>Dimensions<input type="number" min={8} value={form.embedding_dimensions ?? ""} onChange={(e) => setForm({ ...form, embedding_dimensions: e.target.value ? Number(e.target.value) : null })} placeholder="what the model returns" /></label>
+      </div>
+      {p && <div className="small muted">{p.model}: {p.query_prefix ? <>query prefix <span className="mono">"{p.query_prefix}"</span></> : "no query prefix"}{p.document_prefix ? <>, document prefix <span className="mono">"{p.document_prefix}"</span></> : ""}
+        {p.measured ? " (measured on MOKS's SRE questions, docs/EMBEDDINGS.md)." : " (from the model card, not yet measured)."}
+        {differs && <> <button type="button" className="ghost small" onClick={() => setForm({ ...form, embedding_options: { ...o, query_prefix: p.query_prefix, document_prefix: p.document_prefix } })}>Use these</button></>}</div>}
+    </FormSection>
   );
 }
 

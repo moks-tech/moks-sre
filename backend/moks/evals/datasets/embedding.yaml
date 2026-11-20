@@ -1,0 +1,1158 @@
+# Embedding and retrieval quality for SRE questions. Every document is synthetic, written for this dataset:
+# no record, name or number in it comes from a real system. Grades: 3 answers the question, 2 is clearly
+# relevant, 1 is related background. A document not listed for a case counts as 0. `hard_negatives` share
+# words with the question but do not answer it; they are what separates a good model from a lexical one.
+name: embedding
+kind: embedding
+version: 1
+description: SRE retrieval quality for embedding models (Kubernetes, AWS, Terraform, Prometheus and Grafana, Loki, OpenTelemetry, incidents, runbooks, code). Synthetic documents.
+categories: [kubernetes, aws, terraform, prometheus, loki, opentelemetry, incidents, runbooks, code]
+query_types: [troubleshooting, how_to, identifier, conceptual, incident_history, code]
+documents:
+  # ---- Kubernetes ------------------------------------------------------------------------------
+  - id: k8s-crashloop-runbook
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/crashloopbackoff.md
+    text: |
+      # CrashLoopBackOff
+      A pod in CrashLoopBackOff starts, its container exits, and the kubelet restarts it with an increasing back-off
+      (10s, 20s, 40s, up to five minutes). The restart count in `kubectl get pod` keeps climbing.
+      1. Read the logs of the previous container: `kubectl logs <pod> --previous`. The current one has usually not logged yet.
+      2. `kubectl describe pod <pod>` and read Last State: the exit code and the reason. Exit code 1 is the application;
+         137 is SIGKILL, usually OOMKilled; 143 is SIGTERM from a failed liveness probe or a shutdown.
+      3. Check what changed: a new image tag, a ConfigMap or Secret the container reads at start, a missing environment variable.
+      4. If the liveness probe kills a slow-starting container, add a startupProbe instead of raising the liveness delay.
+      Roll back with `kubectl rollout undo deployment/<name>` when the change is recent and the cause is not obvious.
+  - id: k8s-restart-policy-doc
+    category: kubernetes
+    kind: doc
+    path: docs/kubernetes/container-restarts.md
+    text: |
+      # How Kubernetes restarts containers
+      The pod's restartPolicy (Always, OnFailure, Never) decides whether the kubelet restarts a container that exits.
+      Deployments always use Always. Each restart increments restartCount in the container status, and repeated
+      failures put the container into a back-off delay that doubles up to five minutes and resets after ten minutes
+      of running cleanly. A container is also restarted when its liveness probe fails failureThreshold times in a row.
+      Readiness probe failures never restart a container: they only remove the pod from Service endpoints.
+      The previous container's logs stay available with --previous until the next restart.
+  - id: k8s-oomkilled-doc
+    category: kubernetes
+    kind: doc
+    path: docs/kubernetes/memory-limits-oomkilled.md
+    text: |
+      # Memory limits and OOMKilled
+      When a container's memory use passes its limit, the kernel OOM killer ends the process and Kubernetes records
+      reason OOMKilled with exit code 137. The limit applies to the container's cgroup: page cache counts too, but
+      reclaimable cache is dropped first, so compare container_memory_working_set_bytes with the limit, not RSS.
+      JVM and Node.js runtimes size their heap from the container limit only when told to (-XX:MaxRAMPercentage,
+      --max-old-space-size). A node under memory pressure can also evict pods that exceed their requests, which
+      shows as reason Evicted, not OOMKilled. Raise the limit only after checking for a leak: a steady climb after
+      every deploy is a leak, a spike under load is sizing.
+  - id: k8s-imagepull-runbook
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/imagepullbackoff.md
+    text: |
+      # ImagePullBackOff and ErrImagePull
+      The kubelet cannot pull the container image, so the pod never starts and the restart count stays at zero.
+      `kubectl describe pod` shows the registry's answer in Events:
+      - "manifest unknown" or "not found": the tag does not exist; check the CI build pushed it.
+      - "unauthorized" or "pull access denied": the imagePullSecret is missing, expired or in another namespace.
+      - "toomanyrequests": the registry rate limited the node; use a mirror or authenticated pulls.
+      - "i/o timeout": the node cannot reach the registry; check egress NetworkPolicy, NAT and DNS.
+      Fix the cause and delete the pod, or wait for the back-off to retry.
+  - id: k8s-pending-scheduling
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/pod-pending-failedscheduling.md
+    text: |
+      # Pod stuck in Pending (FailedScheduling)
+      A Pending pod has not been placed on a node. The scheduler explains why in Events, for example
+      "0/3 nodes are available: 3 Insufficient memory" or "1 node(s) had untolerated taint {node-role.kubernetes.io/control-plane: }".
+      - Insufficient cpu or memory: requests are too high for any node; lower requests or add capacity (cluster autoscaler).
+      - Untolerated taint: add a toleration or schedule elsewhere.
+      - node(s) didn't match Pod's node affinity/selector: the label is wrong or no such node exists.
+      - pod has unbound immediate PersistentVolumeClaims: see the PVC Pending runbook.
+      Requests count, not actual usage: a node at 20% CPU can still be full for the scheduler.
+  - id: k8s-pvc-pending
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/pvc-pending.md
+    text: |
+      # PersistentVolumeClaim stuck in Pending
+      A PVC stays Pending when no PersistentVolume can be bound or provisioned.
+      `kubectl describe pvc` shows the provisioner's message. Common causes: the StorageClass name is wrong or has
+      no provisioner; WaitForFirstConsumer delays binding until a pod uses the claim; the requested size exceeds the
+      backend quota; with local volumes, "volume node affinity conflict" means the volume lives on a node the pod
+      cannot run on. For EBS-backed claims, the volume is zonal, so a pod in another availability zone cannot attach it.
+  - id: k8s-node-notready
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/node-notready.md
+    text: |
+      # Node NotReady
+      The node's kubelet has stopped reporting. After the pod eviction timeout, pods on it are marked for deletion
+      and recreated elsewhere if they belong to a controller.
+      Check `kubectl describe node` conditions: MemoryPressure, DiskPressure, PIDPressure and NetworkUnavailable.
+      On the host: `systemctl status kubelet`, `journalctl -u kubelet --since -30m`, container runtime health
+      (`crictl ps`), disk space on /var/lib/kubelet and /var/lib/containerd, and clock skew for certificate errors.
+      If the node cannot be recovered, cordon and drain it, then replace it.
+  - id: k8s-dns-coredns
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/dns-resolution-coredns.md
+    text: |
+      # DNS resolution failures inside the cluster
+      Symptoms: "dial tcp: lookup payments.prod.svc.cluster.local: no such host", NXDOMAIN or i/o timeout to 10.96.0.10:53.
+      1. Test from a debug pod: `kubectl run -it --rm dnsutils --image=registry.k8s.io/e2e-test-images/jessie-dnsutils -- nslookup kubernetes.default`.
+      2. Check CoreDNS pods and logs in kube-system; a CrashLoopBackOff there usually means a bad Corefile.
+      3. ndots:5 makes every external name try the search domains first; a trailing dot or lower ndots cuts latency.
+      4. A NetworkPolicy that denies egress must still allow UDP and TCP 53 to kube-dns.
+      Conntrack races on UDP can drop lookups under load; NodeLocal DNSCache avoids them.
+  - id: k8s-hpa-not-scaling
+    category: kubernetes
+    kind: runbook
+    path: runbooks/kubernetes/hpa-not-scaling.md
+    text: |
+      # HorizontalPodAutoscaler does not scale
+      `kubectl describe hpa` shows the current and target metric and the last scaling decision.
+      "unable to get metrics for resource cpu" means metrics-server is missing or unhealthy, or the pods have no CPU requests:
+      utilization is measured against requests, so a container without requests can never be scaled on CPU.
+      "the HPA was unable to compute the replica count" with custom metrics means the adapter cannot answer the query.
+      maxReplicas caps scaling silently; check it before assuming the metric is wrong. Scale-down waits for the
+      stabilization window (five minutes by default).
+  - id: k8s-probes-doc
+    category: kubernetes
+    kind: doc
+    path: docs/kubernetes/probes.md
+    text: |
+      # Liveness, readiness and startup probes
+      readinessProbe: decides whether a pod receives traffic. Failing removes it from Service endpoints, nothing more.
+      livenessProbe: decides whether the container is restarted. It must only check the process itself, never a
+      database or another service, or one dependency outage restarts every replica at once.
+      startupProbe: holds the other two off until the application has started, for slow starts.
+      Probe timeouts default to one second; a garbage-collection pause can fail an HTTP probe that is otherwise fine.
+  - id: k8s-evicted-diskpressure
+    category: kubernetes
+    kind: doc
+    path: docs/kubernetes/eviction-disk-pressure.md
+    text: |
+      # Pods Evicted for DiskPressure or MemoryPressure
+      The kubelet evicts pods when node resources fall below eviction thresholds (memory.available<100Mi,
+      nodefs.available<10%, imagefs.available<15% by default). Evicted pods stay listed with status Failed and reason
+      Evicted until deleted. BestEffort pods go first, then Burstable pods that exceed their requests.
+      Disk pressure usually comes from container logs, emptyDir volumes or unused images; the kubelet garbage-collects
+      images above imageGCHighThresholdPercent. Set ephemeral-storage requests and limits on pods that write to disk.
+  - id: k8s-networkpolicy-doc
+    category: kubernetes
+    kind: doc
+    path: docs/kubernetes/networkpolicy.md
+    text: |
+      # NetworkPolicy basics
+      Without a NetworkPolicy selecting a pod, all traffic to and from it is allowed. Once any policy selects a pod
+      for a direction (Ingress or Egress), only what some policy allows in that direction gets through.
+      Policies are additive; there is no deny rule. A default-deny policy is an empty podSelector with policyTypes
+      set and no rules. Egress policies must allow DNS. Enforcement needs a CNI that implements NetworkPolicy
+      (Calico, Cilium); on a CNI that does not, policies are accepted and silently ignored.
+
+  # ---- AWS ------------------------------------------------------------------------------------
+  - id: aws-irsa-accessdenied
+    category: aws
+    kind: runbook
+    path: runbooks/aws/irsa-access-denied.md
+    text: |
+      # AccessDenied from a pod using IAM roles for service accounts (IRSA)
+      Errors look like "AccessDenied: Not authorized to perform sts:AssumeRoleWithWebIdentity" or an SDK falling back
+      to the node role. Check in order:
+      1. The ServiceAccount has the eks.amazonaws.com/role-arn annotation and the pod was created after it was added.
+      2. The pod has AWS_ROLE_ARN and AWS_WEB_IDENTITY_TOKEN_FILE set (injected by the pod identity webhook).
+      3. The role's trust policy names the cluster's OIDC provider and the exact system:serviceaccount:<namespace>:<name> subject.
+      4. The SDK is new enough to read web identity credentials.
+      An explicit Deny in an SCP or permissions boundary wins over any Allow; CloudTrail shows which policy denied.
+  - id: aws-vpc-cni-ip-exhaustion
+    category: aws
+    kind: runbook
+    path: runbooks/aws/eks-ip-exhaustion.md
+    text: |
+      # EKS pods cannot get an IP address
+      With the Amazon VPC CNI every pod takes a real VPC address from the node's subnet. When a subnet runs out, new pods
+      stay in ContainerCreating with "failed to assign an IP address to container" and aws-node logs
+      InsufficientFreeAddressesInSubnet. Fixes: add secondary CIDR ranges and custom networking, enable prefix
+      delegation (ENABLE_PREFIX_DELEGATION=true) to assign /28 prefixes, or lower WARM_IP_TARGET so idle nodes hold
+      fewer addresses. The per-instance ENI limit also caps pods per node regardless of subnet size.
+  - id: aws-rds-max-connections
+    category: aws
+    kind: runbook
+    path: runbooks/aws/rds-too-many-connections.md
+    text: |
+      # RDS PostgreSQL: too many connections
+      "FATAL: remaining connection slots are reserved for non-replication superuser connections" means the instance
+      reached max_connections, which RDS derives from instance memory (LEAST({DBInstanceClassMemory/9531392},5000)).
+      Find who holds them: `SELECT usename, application_name, state, count(*) FROM pg_stat_activity GROUP BY 1,2,3`.
+      Many idle connections point at an application pool sized per replica times replica count; scaling the deployment
+      multiplies it. Use RDS Proxy or PgBouncer, lower per-pod pool sizes, and alarm on DatabaseConnections.
+  - id: aws-alb-504
+    category: aws
+    kind: runbook
+    path: runbooks/aws/alb-502-504.md
+    text: |
+      # Application Load Balancer 502 and 504 errors
+      HTTPCode_ELB_504_Count: the target did not answer within the idle timeout (60 s by default). Slow requests, a
+      saturated target or a target security group that drops traffic.
+      HTTPCode_ELB_502_Count: the target closed the connection or sent a malformed response. A keep-alive timeout on
+      the application shorter than the ALB idle timeout causes intermittent 502s; set it longer than the ALB's.
+      HTTPCode_Target_5XX_Count is the application's own errors, not the load balancer's. Check TargetResponseTime and
+      UnHealthyHostCount in CloudWatch, and access logs for the target status code.
+  - id: aws-s3-403
+    category: aws
+    kind: doc
+    path: docs/aws/s3-access-denied.md
+    text: |
+      # S3 403 Access Denied
+      S3 evaluates the IAM policy of the caller, the bucket policy, ACLs, Block Public Access and, for SSE-KMS objects,
+      the KMS key policy. A 403 on GetObject for an encrypted object is often kms:Decrypt missing, not an S3 permission.
+      Cross-account access needs both sides to allow it. Object Ownership set to BucketOwnerEnforced disables ACLs.
+      A VPC endpoint policy can deny requests that the IAM policy allows. Use the IAM policy simulator and the
+      CloudTrail event's errorCode and errorMessage to see which layer refused.
+  - id: aws-nat-gateway-ports
+    category: aws
+    kind: doc
+    path: docs/aws/nat-gateway-errors.md
+    text: |
+      # NAT gateway connection errors
+      A NAT gateway supports up to 55,000 simultaneous connections to each unique destination. Above that,
+      ErrorPortAllocation increases in CloudWatch and new connections fail, which applications report as connection
+      timeouts to one external API. Spread traffic across destinations or NAT gateways, reuse HTTP connections, and
+      use VPC endpoints for AWS services (S3, ECR, STS) so that traffic never crosses the NAT at all, which also
+      lowers data processing charges.
+  - id: aws-eks-nodegroup-upgrade
+    category: aws
+    kind: runbook
+    path: runbooks/aws/eks-managed-nodegroup-upgrade.md
+    text: |
+      # Upgrading an EKS managed node group
+      Upgrade the control plane first, then add-ons (VPC CNI, CoreDNS, kube-proxy), then node groups one minor version
+      at a time. A managed node group upgrade launches new nodes and drains the old ones; a PodDisruptionBudget that
+      allows zero disruptions blocks the drain and the update fails with PodEvictionFailure after the timeout.
+      Check PDBs with `kubectl get pdb -A` before starting. Use maxUnavailable in the node group update config to
+      control how many nodes are replaced at once.
+  - id: aws-cloudwatch-alarm-doc
+    category: aws
+    kind: doc
+    path: docs/aws/cloudwatch-alarms.md
+    text: |
+      # CloudWatch alarm states
+      An alarm is OK, ALARM or INSUFFICIENT_DATA. Missing data is treated per alarm (missing, notBreaching, breaching,
+      ignore); a metric that only reports on errors should treat missing data as notBreaching. Evaluation uses
+      "M out of N" datapoints over the period. Composite alarms combine others to cut noise. Alarms on percentiles
+      (p99 latency) need enough samples per period or they flap.
+  - id: aws-kms-accessdenied
+    category: aws
+    kind: doc
+    path: docs/aws/kms-access-denied.md
+    text: |
+      # KMS AccessDeniedException
+      KMS keys have their own key policy, and IAM policies only apply when the key policy delegates to the account.
+      "AccessDeniedException: User ... is not authorized to perform: kms:Decrypt on resource" with a correct IAM policy
+      means the key policy does not allow the principal, or a grant was revoked. Services such as EBS, RDS and S3
+      call KMS on your behalf, so the error can surface as a volume that will not attach or an instance that will not start.
+
+  # ---- Terraform ------------------------------------------------------------------------------
+  - id: tf-state-lock-runbook
+    category: terraform
+    kind: runbook
+    path: runbooks/terraform/state-lock.md
+    text: |
+      # Terraform state lock
+      "Error acquiring the state lock: ConditionalCheckFailedException: The conditional request failed" means another
+      run holds the lock in the DynamoDB table (or the S3 lockfile with use_lockfile). The message shows the lock ID,
+      who holds it and when it was taken.
+      1. Check whether that run is still going: a CI job, a colleague's terminal.
+      2. If it crashed, release the lock: `terraform force-unlock <LOCK_ID>`. Never do this while the run is alive:
+         two applies writing the same state corrupt it.
+      3. Add `-lock-timeout=5m` in CI so that queued jobs wait instead of failing.
+  - id: tf-vpc-module-doc
+    category: terraform
+    kind: doc
+    path: infra/modules/vpc/README.md
+    text: |
+      # Module vpc
+      Creates a VPC with public and private subnets across availability zones, one NAT gateway per zone (or one shared
+      when single_nat_gateway = true), route tables and VPC endpoints for S3 and ECR.
+      Inputs: name, cidr, azs, private_subnets, public_subnets, single_nat_gateway (default false), enable_endpoints (default true), tags.
+      Outputs: vpc_id, private_subnet_ids, public_subnet_ids, nat_gateway_ids.
+      Changing azs or the subnet lists replaces subnets and everything in them; add new subnets at the end of the lists.
+  - id: tf-eks-module-doc
+    category: terraform
+    kind: doc
+    path: infra/modules/eks/README.md
+    text: |
+      # Module eks
+      Creates the EKS control plane, managed node groups, the OIDC provider for IRSA and the core add-ons.
+      Inputs: cluster_name, cluster_version, vpc_id, subnet_ids, node_groups (map of instance_types, min_size,
+      max_size, desired_size, labels, taints), enable_irsa (default true).
+      desired_size is ignored after creation (lifecycle ignore_changes) so that the cluster autoscaler owns it.
+      Upgrading cluster_version upgrades the control plane only; node groups follow in a separate apply.
+  - id: tf-for-each-count
+    category: terraform
+    kind: doc
+    path: docs/terraform/count-vs-for-each.md
+    text: |
+      # count versus for_each
+      Resources created with count are addressed by position: aws_subnet.private[0], [1], [2]. Removing an element from
+      the middle of the list shifts every later index, so Terraform plans to destroy and recreate them.
+      for_each addresses instances by key (aws_subnet.private["eu-west-1a"]), so removing one key touches only that
+      instance. Moving from count to for_each needs `moved` blocks or `terraform state mv` for each address,
+      otherwise the plan destroys everything and creates it again.
+  - id: tf-provider-lock
+    category: terraform
+    kind: doc
+    path: docs/terraform/dependency-lock-file.md
+    text: |
+      # The dependency lock file
+      .terraform.lock.hcl records the exact provider versions and checksums chosen by `terraform init`. Commit it.
+      "Error: Inconsistent dependency lock file" means the configuration's required_providers no longer match the lock:
+      run `terraform init -upgrade` deliberately and review the diff. A lock created on macOS lacks linux_amd64
+      checksums; run `terraform providers lock -platform=linux_amd64 -platform=darwin_arm64` so CI can verify them.
+  - id: tf-import-existing
+    category: terraform
+    kind: doc
+    path: docs/terraform/import.md
+    text: |
+      # Bringing existing resources under Terraform
+      An `import` block (Terraform 1.5+) maps an existing resource ID to an address, and `terraform plan
+      -generate-config-out=generated.tf` writes a starting configuration. Plan until there is no change, then apply,
+      which records the resource in state without modifying it. "Error: resource already exists" on apply means the
+      resource was created outside Terraform and should be imported instead of created.
+  - id: tf-drift
+    category: terraform
+    kind: doc
+    path: docs/terraform/drift.md
+    text: |
+      # Configuration drift
+      Drift is a difference between state and the real infrastructure, usually from console changes. `terraform plan
+      -refresh-only` shows what changed outside Terraform without proposing to undo it, and apply -refresh-only
+      accepts it into state. A scheduled plan in CI that fails on a non-empty diff (-detailed-exitcode returns 2)
+      catches drift early. ignore_changes is for attributes another system owns, not for silencing drift.
+  - id: tf-ci-pipeline
+    category: terraform
+    kind: doc
+    path: docs/terraform/ci-pipeline.md
+    text: |
+      # How infrastructure changes are deployed
+      Pull requests run terraform fmt -check, validate, and plan per environment; the plan is posted on the PR.
+      Merging to main runs apply for dev, then staging, then prod after an approval. Every job uses the S3 backend
+      with DynamoDB locking and -lock-timeout=10m. Credentials come from GitHub OIDC (role terraform-deployer),
+      never from long-lived keys. A failed apply leaves the state as far as it got: rerun the job, do not edit state by hand.
+  - id: tf-eks-nodegroup-timeout
+    category: terraform
+    kind: doc
+    path: docs/terraform/eks-node-group-errors.md
+    text: |
+      # EKS node group errors during apply
+      "Error: waiting for EKS Node Group ... create: unexpected state 'CREATE_FAILED'" with NodeCreationFailure means
+      instances launched but never joined the cluster: the node role is missing AmazonEKSWorkerNodePolicy or
+      AmazonEC2ContainerRegistryReadOnly, the subnets have no route to the API endpoint, or the aws-auth / access entry
+      does not map the node role. Timeouts during update usually come from pods that cannot be evicted (PodDisruptionBudget).
+
+  # ---- Prometheus and Grafana -----------------------------------------------------------------
+  - id: prom-latency-runbook
+    category: prometheus
+    kind: runbook
+    path: runbooks/observability/high-api-latency.md
+    text: |
+      # High API latency
+      Alert APIHighLatencyP99 fires when
+      `histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket{job="api"}[5m]))) > 1`
+      for ten minutes.
+      1. Find which routes are slow: the same query by route. One route points at its dependency; all routes point at
+         the service or the platform.
+      2. Check saturation: CPU throttling (container_cpu_cfs_throttled_periods_total), database pool wait time, GC pauses.
+      3. Compare with deploys and traffic: a latency step at a deploy is a regression; a slope with traffic is capacity.
+      4. Check downstream latency in traces for the slow route before scaling anything.
+  - id: grafana-api-latency-dashboard
+    category: prometheus
+    kind: dashboard
+    path: dashboards/api-latency.md
+    text: |
+      # Dashboard: API latency (uid api-latency)
+      Panels: request rate by route; p50, p90 and p99 latency from http_request_duration_seconds_bucket; error ratio
+      (5xx over all); latency heatmap; top ten slowest routes; database query time; upstream dependency latency from
+      the span metrics. Variables: $cluster, $namespace, $route. Annotations mark deploys from the CD pipeline.
+      Use it to tell whether latency is one route or all of them, and whether it started at a deploy.
+  - id: prom-target-down
+    category: prometheus
+    kind: runbook
+    path: runbooks/observability/target-down.md
+    text: |
+      # TargetDown: Prometheus cannot scrape a target
+      `up == 0` for a target means the last scrape failed. The Targets page shows the error:
+      "context deadline exceeded" (scrape slower than scrape_timeout), "connection refused" (wrong port or the process
+      is down), "server returned HTTP status 401" (the endpoint needs auth), "dial tcp: lookup ... no such host".
+      With the Prometheus Operator a target that is missing entirely, rather than down, means no ServiceMonitor or
+      PodMonitor matched: check the selector labels and the namespace selector.
+  - id: prom-cardinality
+    category: prometheus
+    kind: runbook
+    path: runbooks/observability/prometheus-high-cardinality.md
+    text: |
+      # Prometheus memory growth from high cardinality
+      Memory grows with active series. prometheus_tsdb_head_series shows the count; a sudden jump follows a new label
+      with unbounded values (user IDs, request IDs, full URLs). Find the offenders with
+      `topk(10, count by (__name__) ({__name__=~".+"}))` or the TSDB status page. Drop or relabel the label in the
+      scrape config (metric_relabel_configs with action labeldrop), set sample_limit per job, and fix the instrumentation.
+  - id: prom-remote-write
+    category: prometheus
+    kind: runbook
+    path: runbooks/observability/remote-write-falling-behind.md
+    text: |
+      # Prometheus remote_write falling behind
+      prometheus_remote_storage_samples_pending growing and prometheus_remote_storage_highest_timestamp_in_seconds
+      lagging behind now() means samples are produced faster than they are sent. Check
+      prometheus_remote_storage_samples_failed_total and the receiver's 429 or 5xx responses. Raise
+      queue_config.max_shards when the receiver has headroom; if it is throttling, the fix is on the receiver side.
+      The WAL holds about two hours; a longer outage loses data.
+  - id: prom-rate-vs-increase
+    category: prometheus
+    kind: doc
+    path: docs/observability/promql-rate-increase.md
+    text: |
+      # rate, irate and increase in PromQL
+      rate(counter[5m]) is the per-second average increase over five minutes, handling counter resets.
+      increase(counter[1h]) is rate times the range: the total increase in that hour, extrapolated, so it can be
+      fractional. irate uses only the last two samples: responsive but noisy, for graphs not alerts.
+      The range must cover at least four scrape intervals; in Grafana use $__rate_interval. Always rate before sum:
+      sum(rate(x[5m])), never rate(sum(x)).
+  - id: grafana-no-data
+    category: prometheus
+    kind: doc
+    path: docs/observability/grafana-no-data.md
+    text: |
+      # Grafana panel shows "No data"
+      Check, in order: the panel's data source and the dashboard variables (an empty $namespace selects nothing),
+      the time range against the metric's retention, the query in Explore with the variables expanded, and whether
+      the metric name changed in a new exporter version. A rate() with a range shorter than two scrape intervals
+      returns nothing; use $__rate_interval. "No data" in an alert rule is a state of its own, configured separately from Error.
+  - id: alertmanager-routing
+    category: prometheus
+    kind: doc
+    path: docs/observability/alertmanager-routing.md
+    text: |
+      # Alertmanager routing, grouping and inhibition
+      Alerts walk the route tree; the first matching child wins unless continue: true. group_by decides which alerts
+      become one notification; group_wait, group_interval and repeat_interval control timing. Inhibition rules mute
+      alerts (for example every warning in a cluster) while a matching critical alert fires. Silences mute by matchers
+      for a time window and are the tool for planned maintenance.
+  - id: prom-error-rate-alert
+    category: prometheus
+    kind: runbook
+    path: runbooks/observability/high-error-rate.md
+    text: |
+      # High 5xx error rate
+      Alert APIHighErrorRate: `sum(rate(http_requests_total{status=~"5.."}[5m])) / sum(rate(http_requests_total[5m])) > 0.05`.
+      Split by route and status to see whether one endpoint fails. 503s from the mesh with response flag UH mean no
+      healthy upstream; UF is a connection failure; UO is overflow from a circuit breaker. 500s are the application:
+      read its logs for the same window. Roll back if errors began at a deploy.
+
+  # ---- Loki and LogQL -------------------------------------------------------------------------
+  - id: loki-logql-basics
+    category: loki
+    kind: doc
+    path: docs/observability/logql-basics.md
+    text: |
+      # LogQL basics
+      A query starts with a stream selector, {namespace="payments", app="api"}, then filters: |= "error" contains,
+      != excludes, |~ "timeout|refused" regex. Parsers turn lines into labels: | json, | logfmt, | pattern "<ip> - <_> <status>".
+      After parsing, filter on fields: | status >= 500. line_format rewrites the output.
+      Metric queries wrap a range: sum by (level) (count_over_time({app="api"} | json [5m])), or rate() for per-second.
+      Put the most selective label matchers in the selector; line filters run on every line of every matching stream.
+  - id: loki-ingestion-rate-limit
+    category: loki
+    kind: runbook
+    path: runbooks/observability/loki-ingestion-rate-limit.md
+    text: |
+      # Loki rejects logs: ingestion rate limit
+      Agents log "server returned HTTP status 429 Too Many Requests: ingestion rate limit exceeded for user fake
+      (limit: 4194304 bytes/sec)". The tenant sends more than ingestion_rate_mb (with burst ingestion_burst_size_mb).
+      Find the noisy streams with sum by (namespace, app) (rate({job=~".+"}[5m])) in bytes, or the
+      loki_distributor_bytes_received_total metric. Raise the limit per tenant in runtime overrides if the volume is
+      legitimate; otherwise drop debug logs at the agent. Logs refused with 429 are retried by the agent, then dropped.
+  - id: loki-out-of-order
+    category: loki
+    kind: doc
+    path: docs/observability/loki-out-of-order.md
+    text: |
+      # Loki "entry out of order" and "timestamp too old"
+      Loki accepts out-of-order writes within a window (unordered_writes, about one hour behind the newest line of a
+      stream). Older lines fail with "entry too far behind"; lines older than reject_old_samples_max_age fail with
+      "timestamp too old". Usually an agent replaying a backlog after downtime, or a clock that is wrong on one node.
+      Each stream is ordered separately, so adding a label that splits streams does not help.
+  - id: loki-cardinality-labels
+    category: loki
+    kind: doc
+    path: docs/observability/loki-labels.md
+    text: |
+      # Choosing Loki labels
+      Labels define streams. Use few, bounded labels: cluster, namespace, app, container, level. Never put request IDs,
+      user IDs, trace IDs or IPs in labels: each value creates a stream, and millions of tiny streams make ingestion
+      and queries slow ("maximum active stream limit exceeded"). Keep high-cardinality values in the line and
+      extract them at query time with | json or structured metadata.
+  - id: loki-query-limits
+    category: loki
+    kind: runbook
+    path: runbooks/observability/loki-query-errors.md
+    text: |
+      # Loki query errors
+      "the query time range exceeds the limit (query length: 744h, limit: 721h)": narrow the range or raise max_query_length.
+      "maximum of series (500) reached for a single query": a metric query grouped by a high-cardinality label; aggregate more.
+      "too many outstanding requests": the query frontend queue is full; retry later or split the query.
+      "context deadline exceeded": the query scanned too much; add label matchers and line filters before parsers.
+  - id: alloy-pipeline
+    category: loki
+    kind: doc
+    path: docs/observability/alloy-log-pipeline.md
+    text: |
+      # Log collection with Grafana Alloy
+      Alloy discovers pods (discovery.kubernetes), tails container logs (loki.source.kubernetes), and runs
+      loki.process stages before loki.write sends them. Stages: stage.cri parses the container runtime format,
+      stage.json extracts fields, stage.labels promotes bounded fields to labels, stage.drop removes debug lines,
+      stage.structured_metadata keeps trace_id attached without making it a label. Check alloy's /metrics for
+      loki_write_dropped_entries_total when logs go missing.
+  - id: loki-trace-correlation
+    category: loki
+    kind: doc
+    path: docs/observability/logs-to-traces.md
+    text: |
+      # From a log line to its trace
+      Applications that log trace_id let Grafana link logs to traces. In the Loki data source, a derived field with the
+      regex trace_id=(\w+) points at the Tempo or Jaeger data source. Structured logs work the same way with | json.
+      The trace ID must be the W3C trace ID (32 hex characters) of the active span, written by the logging integration.
+
+  # ---- OpenTelemetry --------------------------------------------------------------------------
+  - id: otel-collector-pipeline
+    category: opentelemetry
+    kind: doc
+    path: docs/observability/otel-collector-pipelines.md
+    text: |
+      # OpenTelemetry Collector pipelines
+      The collector config has receivers (otlp on 4317 gRPC and 4318 HTTP), processors, exporters and service.pipelines
+      that wire them per signal (traces, metrics, logs). A component defined but not listed in a pipeline does nothing.
+      Recommended order: memory_limiter first, then k8sattributes or resource processors, then batch last before export.
+      Validate with `otelcol validate --config=config.yaml`. The collector's own telemetry on :8888 exposes
+      otelcol_receiver_accepted_spans and otelcol_exporter_sent_spans.
+  - id: otel-exporter-queue-full
+    category: opentelemetry
+    kind: runbook
+    path: runbooks/observability/otel-exporter-queue-full.md
+    text: |
+      # Collector drops data: sending queue is full
+      Logs show "Dropping data because sending_queue is full. Try increasing queue_size" and
+      otelcol_exporter_enqueue_failed_spans rises. The backend is slower than the incoming rate or unreachable.
+      Check otelcol_exporter_send_failed_spans and the backend's health first. Increase sending_queue.queue_size and
+      num_consumers only if the backend has capacity; enable the persistent queue (file_storage) to survive restarts.
+      memory_limiter refusing data shows as "data refused due to high memory usage" instead.
+  - id: otel-context-propagation
+    category: opentelemetry
+    kind: doc
+    path: docs/observability/context-propagation.md
+    text: |
+      # Context propagation and broken traces
+      A trace crosses services through the traceparent header (W3C Trace Context). When a service does not extract it,
+      its spans start a new trace and the original one looks cut off. Causes: a propagator set to b3 on one side and
+      tracecontext on the other, a proxy that strips headers, async work (queues, thread pools) that does not carry the
+      context, or a client library that is not instrumented. Set OTEL_PROPAGATORS=tracecontext,baggage everywhere.
+  - id: otel-resource-attributes
+    category: opentelemetry
+    kind: doc
+    path: docs/observability/otel-resource-attributes.md
+    text: |
+      # Resource attributes and service.name
+      service.name identifies a service in every backend; without it spans show as unknown_service. Set it with
+      OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES=service.name=checkout,deployment.environment=prod.
+      The k8sattributes processor adds k8s.namespace.name, k8s.pod.name and k8s.deployment.name from the pod's IP.
+      Resource attributes describe the producer; span attributes (http.route, db.system) describe one operation.
+  - id: otel-tail-sampling
+    category: opentelemetry
+    kind: doc
+    path: docs/observability/otel-tail-sampling.md
+    text: |
+      # Tail sampling
+      Head sampling decides at the root span, before knowing whether the request fails. The tail_sampling processor
+      waits for the whole trace (decision_wait, 10 s by default) and keeps traces by policy: status_code ERROR,
+      latency above a threshold, and a probabilistic share of the rest. All spans of a trace must reach the same
+      collector instance, so put a load-balancing exporter keyed on trace ID in front of the sampling tier.
+  - id: otel-python-instrumentation
+    category: opentelemetry
+    kind: doc
+    path: docs/observability/otel-python.md
+    text: |
+      # Instrumenting a Python service with OpenTelemetry
+      Zero-code: pip install opentelemetry-distro opentelemetry-exporter-otlp, run opentelemetry-bootstrap -a install,
+      then start with `opentelemetry-instrument python app.py` and OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317.
+      FastAPI, requests, httpx, SQLAlchemy and psycopg are instrumented automatically. With gunicorn, initialise the
+      SDK in post_fork, since a BatchSpanProcessor thread does not survive fork.
+  - id: otel-spanmetrics
+    category: opentelemetry
+    kind: doc
+    path: docs/observability/span-metrics.md
+    text: |
+      # Metrics from spans
+      The spanmetrics connector turns spans into request counts and duration histograms (traces_span_metrics_calls_total,
+      traces_span_metrics_duration_seconds_bucket) labelled by service.name, span.name, span.kind and status.code.
+      Wire it as an exporter of the traces pipeline and a receiver of a metrics pipeline. Add dimensions with care:
+      each one multiplies the number of series.
+
+  # ---- Incident reports -----------------------------------------------------------------------
+  - id: inc-oomkilled-payments
+    category: incidents
+    kind: incident
+    path: incidents/2026-03-payments-oomkilled.md
+    text: |
+      # Incident: payments pods OOMKilled after heap change (synthetic)
+      Impact: 38 minutes of failed card payments for about 12% of requests.
+      Timeline: a release raised the JVM heap to -Xmx1800m while the container memory limit stayed at 2Gi. Under the
+      evening peak, metaspace and thread stacks pushed the container over its limit; pods were OOMKilled (exit code 137)
+      and restarted repeatedly. The HPA added replicas, which also crashed.
+      Root cause: heap sized independently of the container limit. Fix: -XX:MaxRAMPercentage=70 instead of -Xmx,
+      limit raised to 2.5Gi, and an alert on container_memory_working_set_bytes above 90% of the limit.
+  - id: inc-latency-db-pool
+    category: incidents
+    kind: incident
+    path: incidents/2026-05-api-latency-db-pool.md
+    text: |
+      # Incident: API p99 latency above 4 s (synthetic)
+      Impact: checkout API p99 latency rose from 300 ms to 4.2 s for 52 minutes; APIHighLatencyP99 fired.
+      Detection: the API latency dashboard showed all routes slow at once, not a single endpoint.
+      Cause: a batch job started holding long transactions, exhausting the HikariCP pool (maximumPoolSize 20). Requests
+      waited for connections; hikaricp_connections_pending peaked at 180. Database CPU was normal.
+      Fix: the job moved to a read replica and got its own pool; alert added on connection pool wait time.
+  - id: inc-terraform-deploy-failure
+    category: incidents
+    kind: incident
+    path: incidents/2026-06-terraform-apply-failure.md
+    text: |
+      # Incident: production infrastructure deploy blocked for 3 hours (synthetic)
+      A prod apply failed with "Error acquiring the state lock". The lock belonged to a CI job that the runner had
+      killed during an apply two hours earlier; that apply had also left a half-created RDS parameter group.
+      An engineer ran terraform force-unlock while a retried job was starting, and both briefly ran plan.
+      Resolution: the lock was released once, the partial resource imported, and apply rerun. Actions: CI jobs use
+      -lock-timeout, one concurrency group per environment, and force-unlock needs a second person.
+  - id: inc-coredns-outage
+    category: incidents
+    kind: incident
+    path: incidents/2026-02-coredns-outage.md
+    text: |
+      # Incident: service discovery failures across the cluster (synthetic)
+      Impact: 25 minutes of intermittent "no such host" errors between services.
+      Cause: a Corefile change added a forward to an internal resolver that answered slowly; CoreDNS pods hit their
+      memory limit and restarted under load, and with two replicas the cluster lost DNS in bursts.
+      Fix: reverted the Corefile, raised CoreDNS replicas and memory, and deployed NodeLocal DNSCache.
+  - id: inc-loki-ingestion-outage
+    category: incidents
+    kind: incident
+    path: incidents/2026-07-missing-logs.md
+    text: |
+      # Incident: application logs missing for 40 minutes (synthetic)
+      During an incident on the orders service, engineers found no logs in Grafana for the last 40 minutes.
+      A debug flag left on after a test made orders write 30 times its usual volume; Loki answered 429 ingestion rate
+      limit exceeded for the tenant, and the agents dropped logs from every namespace after their retries ran out.
+      Fix: per-stream rate limits, the debug flag removed, and an alert on loki_discarded_bytes_total.
+  - id: inc-eks-ip-exhaustion
+    category: incidents
+    kind: incident
+    path: incidents/2026-04-eks-subnet-exhaustion.md
+    text: |
+      # Incident: deploys stuck in ContainerCreating (synthetic)
+      Scaling for a marketing launch, new pods stayed in ContainerCreating for 20 minutes with "failed to assign an IP
+      address to container". The private subnets were /24s and the VPC CNI warm pool kept spare addresses on every node.
+      Fix: prefix delegation enabled, secondary CIDR added, and an alert on free addresses per subnet.
+  - id: inc-prometheus-oom
+    category: incidents
+    kind: incident
+    path: incidents/2026-08-prometheus-oom.md
+    text: |
+      # Incident: monitoring blind for 70 minutes (synthetic)
+      Prometheus restarted in a loop with OOMKilled after a service added a user_id label to a request counter;
+      prometheus_tsdb_head_series went from 1.2 million to 9 million in an hour. Alerts did not fire while it was down.
+      Fix: labeldrop for user_id, sample_limit on every job, and a meta-monitoring alert from a second Prometheus.
+  - id: inc-cert-expiry
+    category: incidents
+    kind: incident
+    path: incidents/2026-09-certificate-expiry.md
+    text: |
+      # Incident: public API certificate expired (synthetic)
+      The api certificate expired on a Sunday; clients failed with x509: certificate has expired or is not yet valid.
+      cert-manager had been failing to renew for three weeks: the ACME HTTP-01 challenge path was blocked by a new
+      ingress rule. The Certificate resource showed Ready=False, but nothing alerted on it.
+      Fix: the rule was corrected, renewal forced, and an alert added on certmanager_certificate_expiration_timestamp_seconds.
+  - id: inc-otel-dropped-spans
+    category: incidents
+    kind: incident
+    path: incidents/2026-10-missing-traces.md
+    text: |
+      # Incident: traces missing during a latency investigation (synthetic)
+      While investigating slow checkouts, half of the traces were missing. The collector logged "sending_queue is full"
+      because the tracing backend had been throttled after a storage migration. Spans were dropped for six hours.
+      Fix: backend capacity restored, persistent queue enabled on the collector, alert on otelcol_exporter_enqueue_failed_spans.
+
+  # ---- Runbooks (procedures) ------------------------------------------------------------------
+  - id: rb-rollback-deployment
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/rollback-a-release.md
+    text: |
+      # Roll back a release
+      Kubernetes deployment: `kubectl rollout undo deployment/<name> -n <namespace>` returns to the previous ReplicaSet;
+      `kubectl rollout history` lists revisions. Helm release: `helm rollback <release> <revision>`. Argo CD: sync the
+      previous commit or revert it in Git; a manual rollback is undone by auto-sync otherwise.
+      Database migrations do not roll back with the code: check whether the previous version still works with the new schema.
+  - id: rb-drain-node
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/drain-a-node.md
+    text: |
+      # Drain a node for maintenance
+      `kubectl cordon <node>` stops new pods; `kubectl drain <node> --ignore-daemonsets --delete-emptydir-data` evicts
+      the rest through the eviction API, which respects PodDisruptionBudgets. A drain that hangs is waiting for a PDB:
+      `kubectl get pdb -A` shows ALLOWED DISRUPTIONS 0. Pods without a controller are deleted for good unless --force is
+      refused. Uncordon when done.
+  - id: rb-disk-full
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/disk-full.md
+    text: |
+      # Disk full on a host or volume
+      Find what grew: `df -h`, then `du -xh --max-depth=1 / | sort -h`. Deleted files still held open keep their space:
+      `lsof +L1`. On Kubernetes nodes, container logs and images are the usual cause; on databases, WAL that cannot be
+      archived. Free space safely first (rotate logs, prune images), then fix the growth. For a PVC, expand it if the
+      StorageClass has allowVolumeExpansion.
+  - id: rb-certificate-renewal
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/certificate-renewal.md
+    text: |
+      # Renew a TLS certificate managed by cert-manager
+      `kubectl describe certificate <name>` shows Ready and the last failure; the CertificateRequest and the ACME Order
+      and Challenge resources say which step failed. For HTTP-01 the challenge URL /.well-known/acme-challenge/ must be
+      reachable from the internet; for DNS-01 the solver needs permission on the zone. Force a renewal with
+      `cmctl renew <name>`. Let's Encrypt rate limits duplicate certificates to five a week.
+  - id: rb-oncall-escalation
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/escalation.md
+    text: |
+      # On-call escalation
+      Declare an incident when customers are affected or the cause is unknown after 15 minutes. The incident lead owns
+      communication; the operator owns changes. Escalate to the owning team's secondary after 15 minutes without
+      progress, to the database on-call for data loss risk, and to security for any suspected compromise.
+      Post updates every 30 minutes in the incident channel, even when nothing changed.
+  - id: rb-postgres-failover
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/postgres-failover.md
+    text: |
+      # PostgreSQL primary failover
+      Confirm the primary is really down, not only unreachable from one place. With CloudNativePG, a failover happens
+      automatically; check `kubectl cnpg status <cluster>`. A manual switchover: `kubectl cnpg promote <cluster> <instance>`.
+      Applications must reconnect through the read-write Service, never a pod address. Check replication lag before
+      promoting by hand: a lagging replica loses the transactions it had not received.
+  - id: rb-scale-deployment
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/scale-up-under-load.md
+    text: |
+      # Scale a service under load
+      Short term: raise the HPA's minReplicas rather than scaling the Deployment directly, which the HPA would undo.
+      Check that the bottleneck scales: more replicas do not help a saturated database and multiply its connections.
+      Check node capacity first, or new pods stay Pending. After the event, lower minReplicas again.
+  - id: rb-rotate-credentials
+    category: runbooks
+    kind: runbook
+    path: runbooks/procedures/rotate-a-leaked-credential.md
+    text: |
+      # Rotate a leaked credential
+      Revoke first, then rotate: a leaked AWS access key is deactivated in IAM before anything else. Create the new
+      credential, update the secret store, restart or reload the consumers, then delete the old one. Check CloudTrail
+      or the provider's audit log for use of the leaked credential since the leak. Removing it from Git history does
+      not un-leak it.
+
+  # ---- Python and infrastructure code ---------------------------------------------------------
+  - id: code-python-retry
+    category: code
+    kind: code
+    path: src/common/retry.py
+    text: |
+      """Retries for calls to flaky dependencies."""
+      import random, time
+
+      def retry(fn, attempts=5, base=0.2, cap=5.0, retry_on=(TimeoutError, ConnectionError)):
+          """Exponential backoff with full jitter. Only retries errors that are safe to retry."""
+          for attempt in range(attempts):
+              try:
+                  return fn()
+              except retry_on:
+                  if attempt == attempts - 1:
+                      raise
+                  time.sleep(random.uniform(0, min(cap, base * 2 ** attempt)))
+  - id: code-boto3-paginator
+    category: code
+    kind: code
+    path: tools/aws/list_untagged.py
+    text: |
+      """List EC2 instances without an owner tag, across all pages."""
+      import boto3
+
+      def untagged_instances(region: str) -> list[str]:
+          ec2 = boto3.client("ec2", region_name=region)
+          found = []
+          for page in ec2.get_paginator("describe_instances").paginate(Filters=[{"Name": "instance-state-name", "Values": ["running"]}]):
+              for reservation in page["Reservations"]:
+                  for inst in reservation["Instances"]:
+                      tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
+                      if "owner" not in tags:
+                          found.append(inst["InstanceId"])
+          return found
+  - id: code-k8s-python-client
+    category: code
+    kind: code
+    path: tools/k8s/restarts.py
+    text: |
+      """Pods whose containers restarted more than N times, using the Kubernetes Python client."""
+      from kubernetes import client, config
+
+      def restarting_pods(namespace: str, threshold: int = 5):
+          config.load_incluster_config()
+          v1 = client.CoreV1Api()
+          for pod in v1.list_namespaced_pod(namespace).items:
+              for status in pod.status.container_statuses or []:
+                  if status.restart_count > threshold:
+                      reason = status.last_state.terminated.reason if status.last_state.terminated else None
+                      yield pod.metadata.name, status.name, status.restart_count, reason
+  - id: code-deployment-yaml
+    category: code
+    kind: code
+    path: deploy/k8s/api-deployment.yaml
+    text: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: {name: api, namespace: payments}
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: api
+                image: registry.example/payments-api:1.42.0
+                resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {memory: 1Gi}}
+                readinessProbe: {httpGet: {path: /readyz, port: 8080}, periodSeconds: 5}
+                livenessProbe: {httpGet: {path: /healthz, port: 8080}, failureThreshold: 3}
+                startupProbe: {httpGet: {path: /healthz, port: 8080}, failureThreshold: 30, periodSeconds: 2}
+  - id: code-terraform-vpc-usage
+    category: code
+    kind: code
+    path: infra/envs/prod/network.tf
+    text: |
+      module "vpc" {
+        source             = "../../modules/vpc"
+        name               = "prod"
+        cidr               = "10.20.0.0/16"
+        azs                = ["eu-west-1a", "eu-west-1b", "eu-west-1c"]
+        private_subnets    = ["10.20.0.0/19", "10.20.32.0/19", "10.20.64.0/19"]
+        public_subnets     = ["10.20.96.0/22", "10.20.100.0/22", "10.20.104.0/22"]
+        single_nat_gateway = false
+      }
+
+      terraform {
+        backend "s3" {
+          bucket         = "example-terraform-state"
+          key            = "prod/network.tfstate"
+          dynamodb_table = "terraform-locks"
+        }
+      }
+  - id: code-fastapi-health
+    category: code
+    kind: code
+    path: src/api/health.py
+    text: |
+      """Health endpoints: liveness checks only this process, readiness checks what requests need."""
+      from fastapi import APIRouter, Response
+
+      router = APIRouter()
+
+      @router.get("/healthz")
+      async def healthz():
+          return {"status": "ok"}
+
+      @router.get("/readyz")
+      async def readyz(response: Response):
+          ok = await db_ping(timeout=0.5)
+          if not ok:
+              response.status_code = 503
+          return {"database": ok}
+  - id: code-recording-rules
+    category: code
+    kind: code
+    path: deploy/prometheus/rules/api.yaml
+    text: |
+      groups:
+        - name: api.rules
+          rules:
+            - record: route:http_request_duration_seconds:p99_5m
+              expr: histogram_quantile(0.99, sum by (le, route) (rate(http_request_duration_seconds_bucket{job="api"}[5m])))
+            - alert: APIHighLatencyP99
+              expr: route:http_request_duration_seconds:p99_5m > 1
+              for: 10m
+              labels: {severity: page}
+              annotations: {runbook_url: "runbooks/observability/high-api-latency.md"}
+  - id: code-otel-collector-config
+    category: code
+    kind: code
+    path: deploy/otel/collector.yaml
+    text: |
+      receivers:
+        otlp: {protocols: {grpc: {endpoint: 0.0.0.0:4317}, http: {endpoint: 0.0.0.0:4318}}}
+      processors:
+        memory_limiter: {check_interval: 1s, limit_percentage: 80, spike_limit_percentage: 20}
+        batch: {send_batch_size: 8192, timeout: 2s}
+      exporters:
+        otlp/jaeger: {endpoint: jaeger-collector:4317, tls: {insecure: true}, sending_queue: {queue_size: 5000}}
+      service:
+        pipelines:
+          traces: {receivers: [otlp], processors: [memory_limiter, batch], exporters: [otlp/jaeger]}
+  - id: code-github-actions-terraform
+    category: code
+    kind: code
+    path: .github/workflows/terraform.yml
+    text: |
+      name: terraform
+      on: {pull_request: {paths: ["infra/**"]}, push: {branches: [main], paths: ["infra/**"]}}
+      permissions: {id-token: write, contents: read, pull-requests: write}
+      concurrency: {group: terraform-${{ github.ref }}, cancel-in-progress: false}
+      jobs:
+        plan:
+          runs-on: ubuntu-latest
+          steps:
+            - uses: actions/checkout@v4
+            - uses: aws-actions/configure-aws-credentials@v4
+              with: {role-to-assume: "arn:aws:iam::123456789012:role/terraform-deployer", aws-region: eu-west-1}
+            - run: terraform init -input=false && terraform plan -lock-timeout=10m -input=false
+  - id: code-python-structured-logging
+    category: code
+    kind: code
+    path: src/common/logging_setup.py
+    text: |
+      """JSON logs with the active trace id, so Loki can link each line to its trace."""
+      import json, logging
+      from opentelemetry import trace
+
+      class JsonFormatter(logging.Formatter):
+          def format(self, record):
+              span = trace.get_current_span().get_span_context()
+              return json.dumps({"level": record.levelname.lower(), "msg": record.getMessage(), "logger": record.name,
+                                 "trace_id": format(span.trace_id, "032x") if span.is_valid else None})
+
+      def setup():
+          handler = logging.StreamHandler()
+          handler.setFormatter(JsonFormatter())
+          logging.basicConfig(level=logging.INFO, handlers=[handler])
+  - id: code-dockerfile
+    category: code
+    kind: code
+    path: services/api/Dockerfile
+    text: |
+      FROM python:3.12-slim AS build
+      WORKDIR /src
+      COPY requirements.txt .
+      RUN pip install --prefix=/install --no-cache-dir -r requirements.txt
+      FROM python:3.12-slim
+      RUN useradd --uid 10001 --no-create-home app
+      COPY --from=build /install /usr/local
+      COPY app/ /app/
+      USER 10001
+      ENTRYPOINT ["python", "-m", "app"]
+
+cases:
+  # ---- the three from the brief ---------------------------------------------------------------
+  - {id: pod-restarting, query: "Why is my pod restarting?", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-crashloop-runbook: 3, k8s-restart-policy-doc: 2, inc-oomkilled-payments: 2, k8s-oomkilled-doc: 2, k8s-probes-doc: 1, code-k8s-python-client: 1},
+     hard_negatives: [k8s-imagepull-runbook, k8s-node-notready]}
+  - {id: prometheus-high-api-latency, query: "Prometheus shows high API latency", category: prometheus, type: troubleshooting,
+     relevant: {prom-latency-runbook: 3, grafana-api-latency-dashboard: 2, inc-latency-db-pool: 2, code-recording-rules: 1},
+     hard_negatives: [prom-remote-write, prom-target-down]}
+  - {id: terraform-deployment-failed, query: "Terraform deployment failed", category: terraform, type: troubleshooting,
+     relevant: {tf-state-lock-runbook: 3, inc-terraform-deploy-failure: 3, tf-ci-pipeline: 2, tf-eks-nodegroup-timeout: 2, tf-vpc-module-doc: 1, tf-eks-module-doc: 1},
+     hard_negatives: [tf-import-existing]}
+  # ---- Kubernetes -----------------------------------------------------------------------------
+  - {id: container-keeps-dying, query: "my container keeps dying and coming back a few seconds later", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-crashloop-runbook: 3, k8s-restart-policy-doc: 2, k8s-oomkilled-doc: 1}, hard_negatives: [k8s-imagepull-runbook]}
+  - {id: exit-code-137, query: "container terminated with exit code 137", category: kubernetes, type: identifier,
+     relevant: {k8s-oomkilled-doc: 3, k8s-crashloop-runbook: 2, inc-oomkilled-payments: 2}, hard_negatives: [k8s-evicted-diskpressure]}
+  - {id: oomkilled-identifier, query: "OOMKilled", category: kubernetes, type: identifier,
+     relevant: {k8s-oomkilled-doc: 3, inc-oomkilled-payments: 2, k8s-crashloop-runbook: 1, inc-prometheus-oom: 1}}
+  - {id: image-pull-unauthorized, query: "pod stuck with ErrImagePull unauthorized", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-imagepull-runbook: 3}, hard_negatives: [k8s-crashloop-runbook, aws-irsa-accessdenied]}
+  - {id: pods-not-scheduled, query: "new pods never start, scheduler says 0/3 nodes are available insufficient memory", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-pending-scheduling: 3, rb-scale-deployment: 1}, hard_negatives: [k8s-oomkilled-doc]}
+  - {id: volume-not-binding, query: "persistent volume claim will not bind", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-pvc-pending: 3, k8s-pending-scheduling: 1}}
+  - {id: service-name-not-resolving, query: "services cannot resolve each other's names, no such host", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-dns-coredns: 3, inc-coredns-outage: 2, k8s-networkpolicy-doc: 1}}
+  - {id: autoscaler-stuck, query: "autoscaler is not adding replicas even though CPU is high", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-hpa-not-scaling: 3, rb-scale-deployment: 1}}
+  - {id: liveness-vs-readiness, query: "difference between liveness and readiness probes", category: kubernetes, type: conceptual,
+     relevant: {k8s-probes-doc: 3, k8s-restart-policy-doc: 1, code-fastapi-health: 1, code-deployment-yaml: 1}}
+  - {id: node-not-ready, query: "worker node shows NotReady", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-node-notready: 3, rb-drain-node: 1}, hard_negatives: [k8s-hpa-not-scaling]}
+  - {id: pods-evicted, query: "lots of pods with status Evicted", category: kubernetes, type: troubleshooting,
+     relevant: {k8s-evicted-diskpressure: 3, rb-disk-full: 1, k8s-node-notready: 1}}
+  - {id: default-deny, query: "how do I block all traffic to a namespace except what I allow", category: kubernetes, type: how_to,
+     relevant: {k8s-networkpolicy-doc: 3}}
+  # ---- AWS -----------------------------------------------------------------------------------
+  - {id: assume-role-web-identity, query: "Not authorized to perform sts:AssumeRoleWithWebIdentity", category: aws, type: identifier,
+     relevant: {aws-irsa-accessdenied: 3}, hard_negatives: [aws-s3-403, aws-kms-accessdenied]}
+  - {id: pod-cannot-reach-aws-api, query: "pod gets access denied when calling AWS even though the role has the permission", category: aws, type: troubleshooting,
+     relevant: {aws-irsa-accessdenied: 3, aws-s3-403: 1, aws-kms-accessdenied: 1}}
+  - {id: pods-no-ip, query: "EKS pods stuck in ContainerCreating failed to assign an IP address", category: aws, type: troubleshooting,
+     relevant: {aws-vpc-cni-ip-exhaustion: 3, inc-eks-ip-exhaustion: 3}, hard_negatives: [k8s-pending-scheduling]}
+  - {id: rds-too-many-connections, query: "remaining connection slots are reserved for non-replication superuser connections", category: aws, type: identifier,
+     relevant: {aws-rds-max-connections: 3, inc-latency-db-pool: 1}}
+  - {id: database-connections-exhausted, query: "database refuses new connections after we scaled the deployment", category: aws, type: troubleshooting,
+     relevant: {aws-rds-max-connections: 3, rb-scale-deployment: 2, inc-latency-db-pool: 1}}
+  - {id: load-balancer-504, query: "load balancer returns 504 gateway timeout", category: aws, type: troubleshooting,
+     relevant: {aws-alb-504: 3, prom-error-rate-alert: 1}}
+  - {id: s3-encrypted-object-denied, query: "403 when reading an encrypted object from a bucket", category: aws, type: troubleshooting,
+     relevant: {aws-s3-403: 3, aws-kms-accessdenied: 2}}
+  - {id: nat-port-allocation, query: "ErrorPortAllocation", category: aws, type: identifier,
+     relevant: {aws-nat-gateway-ports: 3}}
+  - {id: outbound-timeouts-one-api, query: "connections to one external API time out from private subnets at peak", category: aws, type: troubleshooting,
+     relevant: {aws-nat-gateway-ports: 3}, hard_negatives: [aws-alb-504]}
+  - {id: nodegroup-upgrade-stuck, query: "managed node group upgrade fails with PodEvictionFailure", category: aws, type: troubleshooting,
+     relevant: {aws-eks-nodegroup-upgrade: 3, rb-drain-node: 2, tf-eks-nodegroup-timeout: 1}}
+  - {id: alarm-insufficient-data, query: "CloudWatch alarm stuck in INSUFFICIENT_DATA", category: aws, type: identifier,
+     relevant: {aws-cloudwatch-alarm-doc: 3}}
+  - {id: kms-decrypt-denied, query: "kms:Decrypt AccessDeniedException on an EBS volume", category: aws, type: identifier,
+     relevant: {aws-kms-accessdenied: 3, aws-s3-403: 1}}
+  # ---- Terraform -----------------------------------------------------------------------------
+  - {id: state-lock-error, query: "Error acquiring the state lock ConditionalCheckFailedException", category: terraform, type: identifier,
+     relevant: {tf-state-lock-runbook: 3, inc-terraform-deploy-failure: 2, tf-ci-pipeline: 1}}
+  - {id: someone-holds-lock, query: "can't apply infra changes because another run is still holding it", category: terraform, type: troubleshooting,
+     relevant: {tf-state-lock-runbook: 3, inc-terraform-deploy-failure: 2}}
+  - {id: vpc-module-inputs, query: "what inputs does the vpc module take", category: terraform, type: how_to,
+     relevant: {tf-vpc-module-doc: 3, code-terraform-vpc-usage: 2}}
+  - {id: plan-destroys-subnets, query: "plan wants to destroy and recreate subnets after I removed one from the list", category: terraform, type: troubleshooting,
+     relevant: {tf-for-each-count: 3, tf-vpc-module-doc: 2}, hard_negatives: [tf-drift]}
+  - {id: inconsistent-lock-file, query: "Inconsistent dependency lock file", category: terraform, type: identifier,
+     relevant: {tf-provider-lock: 3}, hard_negatives: [tf-state-lock-runbook]}
+  - {id: adopt-console-resource, query: "manage a resource someone created in the console with terraform", category: terraform, type: how_to,
+     relevant: {tf-import-existing: 3, tf-drift: 2}}
+  - {id: detect-drift, query: "find changes made outside terraform", category: terraform, type: how_to,
+     relevant: {tf-drift: 3, tf-import-existing: 1}}
+  - {id: node-group-create-failed, query: "terraform apply fails creating EKS node group NodeCreationFailure", category: terraform, type: troubleshooting,
+     relevant: {tf-eks-nodegroup-timeout: 3, tf-eks-module-doc: 2, aws-eks-nodegroup-upgrade: 1}}
+  - {id: how-infra-is-deployed, query: "how do infrastructure changes get to production", category: terraform, type: how_to,
+     relevant: {tf-ci-pipeline: 3, code-github-actions-terraform: 2}}
+  # ---- Prometheus and Grafana ----------------------------------------------------------------
+  - {id: users-say-slow, query: "users say the API is slow since this afternoon", category: prometheus, type: troubleshooting,
+     relevant: {prom-latency-runbook: 3, grafana-api-latency-dashboard: 2, inc-latency-db-pool: 2}}
+  - {id: p99-promql, query: "PromQL for p99 latency from a histogram", category: prometheus, type: how_to,
+     relevant: {prom-latency-runbook: 2, code-recording-rules: 3, prom-rate-vs-increase: 1}}
+  - {id: target-down, query: "target is down with context deadline exceeded", category: prometheus, type: troubleshooting,
+     relevant: {prom-target-down: 3}, hard_negatives: [loki-query-limits]}
+  - {id: servicemonitor-missing, query: "metrics from my service never appear in Prometheus", category: prometheus, type: troubleshooting,
+     relevant: {prom-target-down: 3, grafana-no-data: 1}}
+  - {id: prometheus-memory, query: "Prometheus memory keeps growing", category: prometheus, type: troubleshooting,
+     relevant: {prom-cardinality: 3, inc-prometheus-oom: 2}}
+  - {id: head-series-metric, query: "prometheus_tsdb_head_series jumped", category: prometheus, type: identifier,
+     relevant: {prom-cardinality: 3, inc-prometheus-oom: 3}}
+  - {id: remote-write-behind, query: "prometheus_remote_storage_samples_pending", category: prometheus, type: identifier,
+     relevant: {prom-remote-write: 3}}
+  - {id: rate-or-increase, query: "when should I use rate instead of increase", category: prometheus, type: conceptual,
+     relevant: {prom-rate-vs-increase: 3}}
+  - {id: panel-no-data, query: "dashboard panel is empty and says No data", category: prometheus, type: troubleshooting,
+     relevant: {grafana-no-data: 3, prom-target-down: 1}}
+  - {id: mute-alerts-maintenance, query: "stop alerts from paging during planned maintenance", category: prometheus, type: how_to,
+     relevant: {alertmanager-routing: 3}}
+  - {id: error-rate-uh, query: "503 errors with response flag UH", category: prometheus, type: identifier,
+     relevant: {prom-error-rate-alert: 3}, hard_negatives: [aws-alb-504]}
+  # ---- Loki ----------------------------------------------------------------------------------
+  - {id: logql-json-errors, query: "LogQL to count errors per level from JSON logs", category: loki, type: how_to,
+     relevant: {loki-logql-basics: 3}}
+  - {id: loki-429, query: "ingestion rate limit exceeded", category: loki, type: identifier,
+     relevant: {loki-ingestion-rate-limit: 3, inc-loki-ingestion-outage: 2}}
+  - {id: logs-missing, query: "logs disappeared from Grafana during an incident", category: loki, type: troubleshooting,
+     relevant: {inc-loki-ingestion-outage: 3, loki-ingestion-rate-limit: 2, alloy-pipeline: 1}}
+  - {id: out-of-order, query: "entry too far behind when shipping old logs", category: loki, type: troubleshooting,
+     relevant: {loki-out-of-order: 3}}
+  - {id: request-id-label, query: "should request_id be a Loki label", category: loki, type: conceptual,
+     relevant: {loki-cardinality-labels: 3, alloy-pipeline: 1}}
+  - {id: max-series-reached, query: "maximum of series (500) reached for a single query", category: loki, type: identifier,
+     relevant: {loki-query-limits: 3}}
+  - {id: log-to-trace, query: "jump from a log line to its trace", category: loki, type: how_to,
+     relevant: {loki-trace-correlation: 3, code-python-structured-logging: 2, alloy-pipeline: 1}}
+  # ---- OpenTelemetry -------------------------------------------------------------------------
+  - {id: collector-dropping, query: "collector says Dropping data because sending_queue is full", category: opentelemetry, type: identifier,
+     relevant: {otel-exporter-queue-full: 3, inc-otel-dropped-spans: 2}}
+  - {id: traces-missing, query: "half of my traces are missing", category: opentelemetry, type: troubleshooting,
+     relevant: {inc-otel-dropped-spans: 3, otel-exporter-queue-full: 2, otel-context-propagation: 2, otel-tail-sampling: 1}}
+  - {id: broken-traces, query: "traces stop at one service and a new trace starts", category: opentelemetry, type: troubleshooting,
+     relevant: {otel-context-propagation: 3}}
+  - {id: unknown-service, query: "spans show up as unknown_service", category: opentelemetry, type: identifier,
+     relevant: {otel-resource-attributes: 3}}
+  - {id: keep-error-traces, query: "keep every trace with an error but sample the rest", category: opentelemetry, type: how_to,
+     relevant: {otel-tail-sampling: 3}}
+  - {id: collector-config-order, query: "which order should collector processors run in", category: opentelemetry, type: how_to,
+     relevant: {otel-collector-pipeline: 3, code-otel-collector-config: 2}}
+  - {id: instrument-python, query: "add tracing to a FastAPI app without changing code", category: opentelemetry, type: how_to,
+     relevant: {otel-python-instrumentation: 3}}
+  - {id: red-metrics-from-traces, query: "request rate and duration metrics generated from traces", category: opentelemetry, type: conceptual,
+     relevant: {otel-spanmetrics: 3, grafana-api-latency-dashboard: 1}}
+  # ---- Incident history ----------------------------------------------------------------------
+  - {id: oom-before, query: "has payments been OOMKilled before and what fixed it", category: incidents, type: incident_history,
+     relevant: {inc-oomkilled-payments: 3, k8s-oomkilled-doc: 1}}
+  - {id: latency-incident-before, query: "previous incident where API latency spiked", category: incidents, type: incident_history,
+     relevant: {inc-latency-db-pool: 3, prom-latency-runbook: 1}}
+  - {id: deploy-failure-postmortem, query: "postmortem for the infrastructure deploy that was blocked", category: incidents, type: incident_history,
+     relevant: {inc-terraform-deploy-failure: 3, tf-state-lock-runbook: 1}}
+  - {id: dns-outage-history, query: "last time DNS broke inside the cluster", category: incidents, type: incident_history,
+     relevant: {inc-coredns-outage: 3, k8s-dns-coredns: 1}}
+  - {id: cert-expired-history, query: "x509: certificate has expired", category: incidents, type: identifier,
+     relevant: {inc-cert-expiry: 3, rb-certificate-renewal: 2}}
+  - {id: monitoring-blind, query: "when did we lose monitoring and alerts", category: incidents, type: incident_history,
+     relevant: {inc-prometheus-oom: 3}}
+  # ---- Runbooks ------------------------------------------------------------------------------
+  - {id: roll-back-release, query: "how do I roll back a bad release", category: runbooks, type: how_to,
+     relevant: {rb-rollback-deployment: 3, k8s-crashloop-runbook: 1}}
+  - {id: drain-hangs, query: "kubectl drain hangs forever", category: runbooks, type: troubleshooting,
+     relevant: {rb-drain-node: 3, aws-eks-nodegroup-upgrade: 2}}
+  - {id: disk-full, query: "no space left on device", category: runbooks, type: troubleshooting,
+     relevant: {rb-disk-full: 3, k8s-evicted-diskpressure: 2}}
+  - {id: renew-cert, query: "cert-manager certificate not renewing", category: runbooks, type: troubleshooting,
+     relevant: {rb-certificate-renewal: 3, inc-cert-expiry: 2}}
+  - {id: when-to-escalate, query: "when should I escalate to another team", category: runbooks, type: how_to,
+     relevant: {rb-oncall-escalation: 3}}
+  - {id: promote-replica, query: "promote the postgres replica", category: runbooks, type: how_to,
+     relevant: {rb-postgres-failover: 3}}
+  - {id: leaked-key, query: "an AWS access key was committed to GitHub", category: runbooks, type: how_to,
+     relevant: {rb-rotate-credentials: 3}}
+  # ---- Code ----------------------------------------------------------------------------------
+  - {id: backoff-code, query: "python function that retries with exponential backoff and jitter", category: code, type: code,
+     relevant: {code-python-retry: 3}}
+  - {id: boto3-pagination, query: "boto3 paginate describe_instances", category: code, type: code,
+     relevant: {code-boto3-paginator: 3}}
+  - {id: restart-count-script, query: "script to list pods with high restart counts", category: code, type: code,
+     relevant: {code-k8s-python-client: 3, k8s-crashloop-runbook: 1}}
+  - {id: startup-probe-yaml, query: "deployment manifest with a startup probe", category: code, type: code,
+     relevant: {code-deployment-yaml: 3, k8s-probes-doc: 2}}
+  - {id: s3-backend-config, query: "terraform s3 backend with dynamodb_table", category: code, type: code,
+     relevant: {code-terraform-vpc-usage: 3, tf-ci-pipeline: 1, tf-state-lock-runbook: 1}}
+  - {id: json-logs-trace-id, query: "python logging formatter that adds trace_id", category: code, type: code,
+     relevant: {code-python-structured-logging: 3, loki-trace-correlation: 1}}
+  - {id: alert-rule-yaml, query: "APIHighLatencyP99", category: code, type: identifier,
+     relevant: {code-recording-rules: 3, prom-latency-runbook: 3}}
+  - {id: oidc-terraform-workflow, query: "GitHub Actions workflow that assumes an AWS role with OIDC for terraform", category: code, type: code,
+     relevant: {code-github-actions-terraform: 3, tf-ci-pipeline: 2}}
+  - {id: non-root-image, query: "Dockerfile that runs as a non-root user", category: code, type: code,
+     relevant: {code-dockerfile: 3}}
+  - {id: readiness-endpoint-code, query: "readiness endpoint that returns 503 when the database is down", category: code, type: code,
+     relevant: {code-fastapi-health: 3, k8s-probes-doc: 1}}

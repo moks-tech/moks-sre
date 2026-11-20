@@ -166,7 +166,26 @@ async def _bedrock(cfg: LLMConfig) -> list[dict[str, Any]]:
         raise LLMError("unavailable", f"bedrock: {type(exc).__name__}") from None
 
 
-LISTERS = {"openai": _openai, "anthropic": _anthropic, "gemini": _gemini, "ollama": _ollama, "bedrock": _bedrock}
+async def _huggingface(cfg: LLMConfig) -> list[dict[str, Any]]:
+    """A Text Embeddings Inference server runs exactly one model; /info names it and its revision."""
+    from .providers import HuggingFaceProvider
+
+    info = await HuggingFaceProvider(cfg, _transport).info()
+    if not info.get("model_id"):
+        return []
+    sha = info.get("model_sha") or ""
+    return [{"id": info["model_id"], "label": f"{info['model_id']}" + (f" @ {sha[:12]}" if sha else ""), "purpose": "embedding", "revision": sha or None}]
+
+
+async def _sentence_transformers(cfg: LLMConfig) -> list[dict[str, Any]]:
+    """Nothing to ask: in-process models are whatever is installed. The measured profiles are the suggestions."""
+    from ..rag.embeddings import profiles
+
+    return [{"id": p["model"], "label": p["model"] + (" (measured)" if p.get("measured") else ""), "purpose": "embedding"} for p in profiles() if "/" in p["model"] and not p["model"].startswith("openai/")]
+
+
+LISTERS = {"openai": _openai, "anthropic": _anthropic, "gemini": _gemini, "ollama": _ollama, "bedrock": _bedrock, "huggingface": _huggingface,
+           "sentence_transformers": _sentence_transformers}
 NOTES = {"azure_openai": "Azure OpenAI is called by deployment name, which an API key cannot list. Type the deployment name from the Azure portal."}
 
 

@@ -50,7 +50,7 @@ class Spec:
     helm: str = ""           # the values.yaml path, when the chart exposes one
 
 
-GROUPS = {"investigations": "Investigations", "llm": "LLM spend", "ml": "Machine learning", "crewai": "CrewAI"}
+GROUPS = {"investigations": "Investigations", "llm": "LLM spend", "knowledge": "Knowledge search", "ml": "Machine learning", "crewai": "CrewAI"}
 
 SPECS: dict[str, Spec] = {s.key: s for s in (
     Spec("auto_investigations_per_hour", "investigations", "Automatic investigations per hour",
@@ -67,6 +67,12 @@ SPECS: dict[str, Spec] = {s.key: s for s in (
     Spec("llm_investigation_budget_usd", "llm", "LLM budget per investigation",
          "Model spend one investigation may cause, follow-up questions included. Empty: no per-investigation limit.",
          "float", 0.01, 10000, limit=True, optional=True, unit="USD"),
+    Spec("rag_query_expansion", "knowledge", "Expand questions with SRE synonyms",
+         "Adds related terms (restarting: CrashLoopBackOff, OOMKilled; slow: latency, p99) as one more keyword ranking. The question itself, its identifiers and its vector never change.",
+         "bool"),
+    Spec("rag_require_embedding_evaluation", "knowledge", "Evaluate a new embedding model before it replaces the current one",
+         "A rebuild with a different embedding model starts only after that model passed the embedding evaluation against the one serving search. Off: any model can replace it.",
+         "bool"),
     Spec("ml_anomaly_interval_minutes", "ml", "Anomaly scoring interval",
          "How often the worker scores each environment that has an active anomaly model. Nothing is scored while anomaly detection is disabled.",
          "int", 5, 240, unit="minutes", helm="ml.anomaly.intervalMinutes"),

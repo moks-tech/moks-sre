@@ -26,6 +26,13 @@ class ModelError(Exception):
 
 
 @dataclasses.dataclass(frozen=True)
+class Embedded:
+    vectors: list[list[float]]
+    truncated: int             # inputs longer than max_length tokens, embedded from their beginning only
+    max_length: int
+
+
+@dataclasses.dataclass(frozen=True)
 class Scored:
     scores: list[float]
     truncated: list[str]       # ids whose pair did not fit max_length, so only part of the text was scored
@@ -126,3 +133,61 @@ class Model:
             out = self._encoder.predict([(query, text) for _, text in batch], batch_size=self.batch_size, show_progress_bar=False, activation_fn=self._identity, convert_to_numpy=True)
             scores += [float(s) for s in out]
         return Scored(scores, truncated, query_tokens, self.max_length)
+
+
+def lock_of(path: str | Path) -> dict:
+    found = Path(path) / "model.lock.json"
+    return json.loads(found.read_text()) if found.exists() else {}
+
+
+class EmbeddingModel:
+    """One loaded embedding model (a Sentence Transformers bi-encoder). Weights come from local files only, and
+    remote code is never allowed. The lock file says which model and revision, and the image build verified them."""
+
+    kind = "embedding"
+
+    def __init__(self, path: str, threads: int, batch_size: int):
+        self.path = Path(path)
+        self.batch_size = batch_size
+        self.lock = lock_of(self.path)
+        self.id, self.revision = self.lock.get("model_id", ""), self.lock.get("revision", "")
+        self.max_length = int(self.lock.get("max_length", 512))
+        self.dimensions = 0
+        self._threads = threads
+        self._encoder: Any = None
+        self._tokenizer: Any = None
+
+    def load(self) -> None:
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        if not self.id or not self.revision:
+            raise ModelError("the model directory has no model.lock.json")
+        torch.set_num_threads(self._threads)
+        try:
+            torch.set_num_interop_threads(1)
+        except RuntimeError:  # already fixed in this process
+            pass
+        self._encoder = SentenceTransformer(str(self.path), device="cpu", local_files_only=True, trust_remote_code=False, model_kwargs={"use_safetensors": True})
+        self._encoder.max_seq_length = self.max_length
+        self._encoder.eval()
+        self._tokenizer = self._encoder.tokenizer
+        self.dimensions = int(self._encoder.get_sentence_embedding_dimension())
+
+    def warm_up(self) -> None:
+        self.embed(["warm up passage " * 40] * min(self.batch_size, 4), deadline=time.monotonic() + 600)
+
+    def too_long(self, text: str) -> bool:
+        return len(self._tokenizer(text, add_special_tokens=True, truncation=False, verbose=False)["input_ids"]) > self.max_length
+
+    def embed(self, texts: list[str], deadline: float, normalize: bool = True) -> Embedded:
+        """In batches, checking the deadline between them, because a running batch cannot be stopped."""
+        truncated = sum(1 for t in texts if self.too_long(t))
+        vectors: list[list[float]] = []
+        for start in range(0, len(texts), self.batch_size):
+            if time.monotonic() > deadline:
+                raise Expired()
+            out = self._encoder.encode(texts[start:start + self.batch_size], batch_size=self.batch_size, normalize_embeddings=normalize,
+                                       convert_to_numpy=True, show_progress_bar=False)
+            vectors += out.tolist()
+        return Embedded(vectors, truncated, self.max_length)

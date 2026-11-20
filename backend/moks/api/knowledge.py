@@ -559,7 +559,48 @@ async def retry_outbox(body: RetryIn | None = None, ctx: AuthContext = Depends(n
     return {"requeued": n}
 
 
+class ReindexIn(BaseModel):
+    llm_config_id: uuid.UUID | None = None  # build with this embedding model while the current one keeps serving; the active one if empty
+
+
+async def _rebuild_model(db: AsyncSession, llm_config_id: uuid.UUID | None):
+    from ..models import LLMConfig
+
+    if llm_config_id is None:
+        return await service.embedding_config(db)
+    cfg = await db.get(LLMConfig, llm_config_id)
+    if cfg is None or cfg.purpose != "embedding":
+        raise HTTPException(404, "Unknown embedding model configuration")
+    return cfg
+
+
+@router.get("/reindex/check")
+async def reindex_check(llm_config_id: uuid.UUID | None = None, ctx: AuthContext = Depends(needs(P.KNOWLEDGE_INDEX)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    """Whether a rebuild with this model may start: a model replacing one with vectors needs a passed embedding evaluation."""
+    return await service.replacement_check(db, await _rebuild_model(db, llm_config_id))
+
+
 @router.post("/reindex")
-async def reindex(ctx: AuthContext = Depends(needs(P.KNOWLEDGE_INDEX)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
-    jid = await jobs.enqueue("knowledge_reindex", {}, dedupe_key="knowledge_reindex", created_by=ctx.user.id)
-    return {"queued": bool(jid)}
+async def reindex(body: ReindexIn | None = None, ctx: AuthContext = Depends(needs(P.KNOWLEDGE_INDEX)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    body = body or ReindexIn()
+    cfg = await _rebuild_model(db, body.llm_config_id)
+    check = await service.replacement_check(db, cfg)
+    if not check["allowed"]:
+        raise HTTPException(409, check["reason"])
+    jid = await jobs.enqueue("knowledge_reindex", {"llm_config_id": str(cfg.id)} if body.llm_config_id and cfg else {}, dedupe_key="knowledge_reindex", created_by=ctx.user.id)
+    await audit.record(db, action="knowledge.reindex", actor_id=ctx.user.id, actor_email=ctx.user.email, decision="allow",
+                       details={"model": check["model"], "serving": check["serving"], "replacement": check["replacement"], "evaluation": check.get("evaluation"), "queued": bool(jid)})
+    return {"queued": bool(jid), "model": check["model"], "replacement": check["replacement"]}
+
+
+@router.post("/generations/{index_name}/activate")
+async def activate_generation(index_name: str, ctx: AuthContext = Depends(needs(P.KNOWLEDGE_INDEX)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    """Roll back to a retained generation. Its embedding model becomes the active one again in the same transaction;
+    documents changed since it was retired are brought up to date by the next outbox drain and backfill."""
+    try:
+        result = await service.activate_generation(db, index_name)
+    except ConnectorError as exc:
+        raise HTTPException(409, exc.message) from None
+    await audit.record(db, action="knowledge.generation_activate", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="embedding_index", resource_id=index_name,
+                       decision="allow", details={k: result.get(k) for k in ("replaced", "model", "model_restored", "activation", "incomplete_documents")})
+    return result

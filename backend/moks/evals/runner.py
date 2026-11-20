@@ -24,7 +24,7 @@ from ..db import session_scope
 from ..models import AUTOMATION_USER_ID, Environment, EvalRun, Evidence, Investigation, RoleBinding
 from ..orchestrator.engine import Investigator
 from ..rag import access
-from . import gates, rerank_eval
+from . import embedding_eval, gates, rerank_eval
 from .fixture import FixtureKubernetes
 
 DATASETS = Path(__file__).parent / "datasets"
@@ -92,10 +92,12 @@ def score_case(case: dict, inv: Investigation, evidence_refs: set[str], tools: l
             "tool_calls": inv.tool_calls, "tokens": inv.tokens_in + inv.tokens_out}
 
 
-async def start(dataset: str, mode: str, created_by=None) -> uuid.UUID:
+async def start(dataset: str, mode: str, created_by=None, llm_config_id: uuid.UUID | None = None) -> uuid.UUID:
+    """`llm_config_id` names the embedding model an embedding dataset evaluates; without it, the active one."""
     data = load(dataset)
     async with session_scope() as db:
-        run = EvalRun(dataset=dataset, mode=mode, created_by=created_by, kind=data.get("kind", "investigation"))
+        run = EvalRun(dataset=dataset, mode=mode, created_by=created_by, kind=data.get("kind", "investigation"),
+                      versions={"candidate_config_id": str(llm_config_id)} if llm_config_id and data.get("kind") == "embedding" else {})
         db.add(run)
         await db.flush()
         return run.id
@@ -134,17 +136,19 @@ async def execute(run_id: uuid.UUID) -> dict[str, Any]:
         run = await db.get(EvalRun, run_id)
         dataset, mode = run.dataset, run.mode
     data = load(dataset)
-    if data.get("kind") in ("rag", "skills", "rerank", "similar"):
+    if data.get("kind") in ("rag", "skills", "rerank", "similar", "embedding"):
         async def skills_run() -> dict:
             return await gates.run_skills(data, await _execute_skills(data, run_id))
 
         from ..ml import evaluation as ml_eval
 
-        out = await {"rag": lambda: gates.run_rag(data, run_id), "skills": skills_run, "rerank": lambda: rerank_eval.run(data, run_id), "similar": lambda: ml_eval.run_similar(data, run_id)}[data["kind"]]()
+        out = await {"rag": lambda: gates.run_rag(data, run_id), "skills": skills_run, "rerank": lambda: rerank_eval.run(data, run_id), "similar": lambda: ml_eval.run_similar(data, run_id),
+                     "embedding": lambda: embedding_eval.run(data, run_id)}[data["kind"]]()
         async with session_scope() as db:
             run = await db.get(EvalRun, run_id)
-            run.results, run.score, run.status, run.finished_at = out["results"], Decimal(str(out["score"])), "completed", datetime.now(timezone.utc)
-            run.gates, run.versions = out["gates"], {**gates.versions(data), "model": out["metrics"].get("model"), "metrics": out["metrics"]}
+            run.results, run.score, run.status, run.finished_at = out["results"], Decimal(str(round(out["score"], 4))), "completed", datetime.now(timezone.utc)
+            run.gates, run.versions = out["gates"], {**(run.versions or {}), **gates.versions(data), "model": out["metrics"].get("model"), "metrics": out["metrics"],
+                                                     **({"candidate": out["candidate"]} if out.get("candidate") else {})}
         return {"score": out["score"], "gates_passed": gates.gates_ok(out["gates"])}
     env_id = await _eval_env(f"eval-{dataset}")
     results = []

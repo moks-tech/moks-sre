@@ -23,6 +23,7 @@ router = APIRouter(prefix="/evals", tags=["evals"])
 class RunIn(BaseModel):
     dataset: str = "lab"
     mode: Literal["rules", "llm"] = "rules"
+    llm_config_id: uuid.UUID | None = None  # the embedding model an embedding dataset evaluates; the active one if empty
 
 
 @router.get("/datasets")
@@ -33,7 +34,7 @@ async def datasets(ctx: AuthContext = Depends(needs(P.ADMIN_POLICIES))) -> list[
 @router.post("/runs", status_code=201)
 async def start(body: RunIn, ctx: AuthContext = Depends(needs(P.ADMIN_POLICIES))) -> dict:
     try:
-        rid = await runner.start(body.dataset, body.mode, ctx.user.id)
+        rid = await runner.start(body.dataset, body.mode, ctx.user.id, body.llm_config_id)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from None
     await jobs.enqueue("eval_run", {"run_id": str(rid)}, created_by=ctx.user.id)

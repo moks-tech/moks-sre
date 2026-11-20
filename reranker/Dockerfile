@@ -1,13 +1,16 @@
 # syntax=docker/dockerfile:1.7
-# Internal reranking service. Build context: reranker/. The model is baked in at a pinned revision and
+# Internal model service. Build context: reranker/. The model is baked in at a pinned revision and
 # verified file by file, so a pod needs no network and two builds of one commit run the same weights.
+# MODEL_LOCK picks the model and with it the service's job: model.lock.json is the reranker (moks-reranker),
+# embedder.lock.json the embedding model (moks-embedder). One image never holds both.
 FROM python:3.12-slim AS build
+ARG MODEL_LOCK=model.lock.json
 ENV PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 WORKDIR /src
-COPY requirements.txt fetch_model.py model.lock.json ./
+COPY requirements.txt fetch_model.py model.lock.json embedder.lock.json ./
 RUN pip install --prefix=/install -r requirements.txt
-RUN PYTHONPATH="$(python -c 'import site,sys;print("/install/lib/python%d.%d/site-packages" % sys.version_info[:2])')" python fetch_model.py model.lock.json /opt/model \
- && rm -rf /opt/model/.cache && cp model.lock.json /opt/model/
+RUN PYTHONPATH="$(python -c 'import site,sys;print("/install/lib/python%d.%d/site-packages" % sys.version_info[:2])')" python fetch_model.py "$MODEL_LOCK" /opt/model \
+ && rm -rf /opt/model/.cache && cp "$MODEL_LOCK" /opt/model/model.lock.json
 
 FROM python:3.12-slim
 ARG GIT_COMMIT=dev

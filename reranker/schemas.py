@@ -80,3 +80,32 @@ class RerankResponse(BaseModel):
     duration_ms: float
     queue_ms: float
     truncation: Truncation
+
+
+# ---- embedding mode (a Text Embeddings Inference compatible subset) ------------------------------------------------
+
+MAX_INPUTS = 64
+MAX_INPUT_CHARS = 16_000
+
+
+class EmbedRequest(BaseModel):
+    """POST /embed as Text Embeddings Inference accepts it, so MOKS's huggingface provider speaks to either."""
+    model_config = ConfigDict(extra="forbid")
+    inputs: list[StrictStr] | StrictStr
+    normalize: bool = True
+    truncate: bool = True
+
+    @model_validator(mode="after")
+    def _bounded(self) -> "EmbedRequest":
+        texts = [self.inputs] if isinstance(self.inputs, str) else self.inputs
+        if not texts:
+            raise ValueError("at least one input")
+        if len(texts) > limit("EMBEDDER_MAX_INPUTS", MAX_INPUTS):
+            raise ValueError("too many inputs")
+        longest = limit("EMBEDDER_MAX_INPUT_CHARS", MAX_INPUT_CHARS)
+        if any(not t or len(t) > longest for t in texts):
+            raise ValueError("an input is empty or too long")
+        return self
+
+    def texts(self) -> list[str]:
+        return [self.inputs] if isinstance(self.inputs, str) else list(self.inputs)

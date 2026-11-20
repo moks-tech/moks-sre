@@ -116,6 +116,9 @@ class Settings(BaseSettings):
     rag_rerank_max_passage_chars: int = 2000
     rag_decompose: bool = False  # off: the rag dataset measured no gain from it. Turn on only with a dataset that shows one.
     rag_activation: str = "strict"  # strict: a reindex with any incomplete document fails. degraded: it activates and says so.
+    rag_query_expansion: bool = False  # SRE synonyms as one more keyword ranking (rag/query.py); the query and its identifiers never change
+    rag_require_embedding_evaluation: bool = True  # replacing a model whose index has vectors needs a passed embedding evaluation of the new one
+    rag_embedding_eval_tolerance: float = 0.02  # how far below the serving model a candidate may score (nDCG@10, Recall@5) and still pass
     evidence_max_age_seconds: int = 900  # older evidence cannot back a claim about the current state without saying so
     # Opt-in CrewAI workload investigation (docs/crewai-investigation.md). Off unless MOKS_CREWAI_ENABLED is true and the
     # image was built with the crewai extra. The global ceilings (max_tool_calls, max_duration_seconds) still apply.

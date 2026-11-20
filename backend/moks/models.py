@@ -113,7 +113,7 @@ class LLMConfig(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(100), unique=True)
     purpose: Mapped[str] = mapped_column(String(20))  # chat | embedding
-    provider: Mapped[str] = mapped_column(String(20))  # anthropic | openai | azure_openai | gemini | bedrock | ollama
+    provider: Mapped[str] = mapped_column(String(30))  # anthropic | openai | azure_openai | gemini | bedrock | ollama | huggingface | sentence_transformers
     model: Mapped[str] = mapped_column(String(200))
     endpoint: Mapped[str | None] = mapped_column(Text, nullable=True)
     region: Mapped[str | None] = mapped_column(String(40), nullable=True)
@@ -125,6 +125,7 @@ class LLMConfig(Base):
     input_price_per_mtok: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0"))
     output_price_per_mtok: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0"))
     embedding_dimensions: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    embedding_options: Mapped[dict] = mapped_column(JSONB, default=dict)  # query/document prefixes, truncation, revision (moks/rag/embeddings.py)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -134,7 +135,7 @@ class LLMUsage(Base):
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     llm_config_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("llm_configs.id", ondelete="SET NULL"))
     investigation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
-    provider: Mapped[str] = mapped_column(String(20))
+    provider: Mapped[str] = mapped_column(String(30))
     model: Mapped[str] = mapped_column(String(200))
     tokens_in: Mapped[int] = mapped_column(Integer, default=0)
     tokens_out: Mapped[int] = mapped_column(Integer, default=0)
@@ -539,6 +540,8 @@ class EmbeddingIndex(Base):
     activation: Mapped[str | None] = mapped_column(String(20), nullable=True)  # complete | degraded, decided from recorded coverage
     mapping_version: Mapped[int] = mapped_column(Integer, default=1)  # which fields this generation's documents carry
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # starts the retention window, nothing else does
+    spec: Mapped[dict] = mapped_column(JSONB, default=dict)  # what produced its vectors: provider, model, revision, prefixes, fingerprint
+    reused_vectors: Mapped[int] = mapped_column(Integer, default=0)  # vectors copied from a generation with the same model key
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
