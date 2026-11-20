@@ -774,17 +774,51 @@ export function FinOps() {
 
 // ---- Evaluations --------------------------------------------------------------------------------
 
+function RunEvaluation({ datasets, onClose, onQueued }: { datasets: any[]; onClose: () => void; onQueued: (dataset: string, mode: string) => void }) {
+  const [dataset, setDataset] = useState(datasets[0]?.name ?? "");
+  const [mode, setMode] = useState("rules");
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  async function run(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try { await api("/evals/runs", { method: "POST", body: { dataset, mode } }); onQueued(dataset, mode); } catch (err) { setError(err); setBusy(false); }
+  }
+  return (
+    <FormDrawer title="Run an evaluation" submit="Run" busyLabel="Queuing…" busy={busy} blocked={!dataset} error={error} onSubmit={run} onClose={onClose}>
+      <FormSection title="Dataset">
+        <div className="choice-cards" role="radiogroup" aria-label="Dataset">
+          {datasets.map((d) => <label key={d.name} className={`choice-card${dataset === d.name ? " selected" : ""}`}>
+            <input type="radio" name="eval-dataset" value={d.name} checked={dataset === d.name} onChange={() => setDataset(d.name)} />
+            <strong>{d.name}</strong><span className="small muted">{d.cases} case{d.cases === 1 ? "" : "s"}</span>
+          </label>)}
+        </div>
+      </FormSection>
+      <FormSection title="Mode">
+        <label className="inline"><input type="radio" name="eval-mode" checked={mode === "rules"} onChange={() => setMode("rules")} /> Rules only</label>
+        <label className="inline"><input type="radio" name="eval-mode" checked={mode === "llm"} onChange={() => setMode("llm")} /> With the active LLM</label>
+        {mode === "llm" && <div className="small muted">Uses the active chat model, and counts against its budget.</div>}
+      </FormSection>
+    </FormDrawer>
+  );
+}
+
 export function Evals() {
+  const { toast } = useFeedback();
   const ds = useLoad(() => api<any[]>("/evals/datasets"), []);
   const runs = useLoad(() => api<any[]>("/evals/runs"), []);
-  const [mode, setMode] = useState("rules");
+  const [running, setRunning] = useState(false);
   return (
     <>
       <PageHead title="Evaluation" sub="Replay recorded incidents through the real orchestrator and score the reports">
-        <select aria-label="Evaluation mode" value={mode} onChange={(e) => setMode(e.target.value)}><option value="rules">rules only</option><option value="llm">with the active LLM</option></select>
-        {ds.data?.map((d) => <button key={d.name} onClick={() => api("/evals/runs", { method: "POST", body: { dataset: d.name, mode } }).then(() => setTimeout(runs.reload, 2000))}>Run {d.name} ({d.cases})</button>)}
         <button className="ghost" onClick={runs.reload}>Refresh</button>
+        <button disabled={!ds.data?.length} onClick={() => setRunning(true)}>Run evaluation</button>
       </PageHead>
+      {running && ds.data && <RunEvaluation datasets={ds.data} onClose={() => setRunning(false)}
+        onQueued={(d, m) => { setRunning(false); toast(`Evaluation of ${d} queued (${m === "llm" ? "with the active LLM" : "rules only"}).`); setTimeout(runs.reload, 2000); }} />}
+      <Loading load={runs} rows={3} />
+      {runs.data && !runs.data.length && <div className="card"><Empty title="No evaluation runs yet.">Use Run evaluation to replay recorded incidents and score the reports.</Empty></div>}
       {runs.data?.map((r) => (
         <div key={r.id} className="card" style={{ marginBottom: 12 }}>
           <div className="row between"><h2>{r.dataset} · {r.mode}</h2><span>{r.score != null ? <Badge kind={r.score >= 0.9 ? "ok" : r.score >= 0.7 ? "warn" : "bad"}>score {r.score.toFixed(3)}</Badge> : <Badge>{r.status}</Badge>} <Time iso={r.created_at} /></span></div>
