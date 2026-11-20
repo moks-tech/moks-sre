@@ -13,10 +13,13 @@ import { WORKLOAD_KINDS } from "../targets";
 type Config = { agents: Record<string, Record<string, any>>; tasks: Record<string, Record<string, string>>; limits: Record<string, number>; defaults: Record<string, any> };
 interface Issue { field: string; message: string }
 
-const AGENTS = ["workload", "change", "review"] as const;
+// The workload crew's shape, for a backend that does not send one; the incident crew (docs/crewai-sre-engine.md) sends its own.
+const AGENTS = ["workload", "change", "review"];
 const AGENT_LABEL: Record<string, string> = { workload: "Workload agent", change: "Change agent", review: "Reviewer" };
 const LIMIT_LABEL: Record<string, string> = { timeout_seconds: "Time limit (s)", max_tool_calls: "Tool calls", max_iterations: "Iterations per agent", step_tokens: "Output tokens per step",
-  report_tokens: "Output tokens for the report" };
+  report_tokens: "Output tokens for the report", task_timeout_seconds: "Time limit per step (s)", max_tool_calls_per_agent: "Tool calls per agent",
+  token_budget: "Token budget", review_rounds: "Review rounds", followup_calls: "Evidence requests per round", model_retries: "Model retries", output_retries: "Answer retries" };
+const CHANGE_WINDOWS = ["15m", "1h", "6h", "24h"];
 const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x));
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -130,7 +133,7 @@ export function CrewEditor({ crew, reload }: { crew: any; reload: () => void }) 
     {crew.active?.upstream_changed && <div className="alert warn small">The code's default prompts changed since version {crew.active.version} was saved. Fields it edits keep its text; compare them with Diff.</div>}
     <div className="split-3-2 grid">
       <div className="stack">
-        {AGENTS.map((k) => <Section key={k} title={<>{AGENT_LABEL[k]} <span className="muted small">· {draft.agents[k].role}</span></>}>
+        {(crew.agent_keys ?? AGENTS).map((k: string) => <Section key={k} title={<>{(crew.agent_labels ?? AGENT_LABEL)[k]} <span className="muted small">· {draft.agents[k].role}</span></>}>
           <Field label="Role" path={`agents.${k}.role`} value={draft.agents[k].role} base={defaults.agents[k].role} issues={issues} max={crew.text_limits.role} readOnly={!canEdit}
             onChange={(v) => set("agents", k, "role", v)} hint="Also the step's name in the log." />
           <Field label="Goal" path={`agents.${k}.goal`} value={draft.agents[k].goal} base={defaults.agents[k].goal} issues={issues} multiline max={crew.text_limits.goal} readOnly={!canEdit}
@@ -146,10 +149,13 @@ export function CrewEditor({ crew, reload }: { crew: any; reload: () => void }) 
             </label>)}
             {issues.filter((i) => i.field === `agents.${k}.tools`).map((m, i) => <div key={i} className="small warn-text">{m.message}</div>)}
           </fieldset>}
-          <Field label="Task" path={`tasks.${k}.description`} value={draft.tasks[k].description} base={defaults.tasks[k].description} issues={issues} multiline max={crew.text_limits.description}
-            readOnly={!canEdit} onChange={(v) => set("tasks", k, "description", v)} hint={<span>Placeholders: {crew.placeholders.map((p: string) => <code key={p}>{p} </code>)}{k === "review" ? " · MOKS adds the JSON output contract after it." : ""}</span>} />
-          <Field label="Expected output" path={`tasks.${k}.expected_output`} value={draft.tasks[k].expected_output} base={defaults.tasks[k].expected_output} issues={issues} multiline
-            max={crew.text_limits.expected_output} readOnly={!canEdit} onChange={(v) => set("tasks", k, "expected_output", v)} />
+          {(crew.task_keys ? crew.task_keys.filter((t: string) => crew.task_agent[t] === k) : [k]).map((t: string) => <div key={t} className="stack">
+            <Field label={crew.task_labels?.[t] ? `Task: ${crew.task_labels[t]}` : "Task"} path={`tasks.${t}.description`} value={draft.tasks[t].description} base={defaults.tasks[t].description} issues={issues}
+              multiline max={crew.text_limits.description} readOnly={!canEdit} onChange={(v) => set("tasks", t, "description", v)}
+              hint={<span>Placeholders: {crew.placeholders.map((p: string) => <code key={p}>{p} </code>)}{(crew.code_owned.contracts ? crew.code_owned.contracts[t] : t === "review") ? " · MOKS adds the JSON output contract after it." : ""}</span>} />
+            <Field label="Expected output" path={`tasks.${t}.expected_output`} value={draft.tasks[t].expected_output} base={defaults.tasks[t].expected_output} issues={issues} multiline
+              max={crew.text_limits.expected_output} readOnly={!canEdit} onChange={(v) => set("tasks", t, "expected_output", v)} />
+          </div>)}
         </Section>)}
         <Section title="Limits and defaults">
           <div className="cw-inputs">
@@ -160,6 +166,8 @@ export function CrewEditor({ crew, reload }: { crew: any; reload: () => void }) 
               {WORKLOAD_KINDS.map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Default window (min)<input type="number" min={5} max={10080} placeholder="deployment default" value={draft.defaults.minutes ?? ""} readOnly={!canEdit}
               onChange={(e) => setTop("defaults", "minutes", e.target.value === "" ? null : Number(e.target.value))} /></label>
+            {"change_window" in defaults.defaults && <label>Default change window<select value={draft.defaults.change_window} disabled={!canEdit}
+              onChange={(e) => setTop("defaults", "change_window", e.target.value)}>{CHANGE_WINDOWS.map((x) => <option key={x}>{x}</option>)}</select></label>}
           </div>
           {issues.filter((i) => i.field.startsWith("limits") || i.field.startsWith("defaults") || i.field === "agents" || i.field === "tasks").map((m, i) =>
             <div key={i} className={`small ${errors.includes(m) ? "danger-text" : "warn-text"}`}><code>{m.field}</code>: {m.message}</div>)}
@@ -209,7 +217,8 @@ export function CrewEditor({ crew, reload }: { crew: any; reload: () => void }) 
         <Section title="Stays in code">
           <div className="small">{crew.code_owned.structure}</div>
           <details><summary className="small">Untrusted-data rule (appended to every backstory)</summary><pre className="cw-data mono">{crew.code_owned.rules}</pre></details>
-          <details><summary className="small">Reviewer's output contract</summary><pre className="cw-data mono">{crew.code_owned.output_contract}</pre></details>
+          <details><summary className="small">{crew.code_owned.contracts && Object.keys(crew.code_owned.contracts).length > 1 ? "Output contracts (one per task)" : "Reviewer's output contract"}</summary>
+            <pre className="cw-data mono">{crew.code_owned.output_contract}</pre></details>
         </Section>
         {crew.runs_to_test?.length > 0 && <Section title="Recent runs">
           <ul className="cw-mini">{crew.runs_to_test.slice(0, 5).map((r: RunRow) => <li key={r.id}><StatusIcon status={r.status} crew_status={r.crew_status} />{" "}

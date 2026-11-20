@@ -11,6 +11,7 @@ import { proposalPlan } from "./Conversations";
 import { PlanForm } from "./Ops";
 import { Judge, SimilarIncidents, SkillRecommendations } from "./MLParts";
 import { CrewAIForm, CrewAIPanel, type CrewCapability } from "./CrewAI";
+import { CrewProgress } from "../crewai/IncidentReport";
 
 const SUGGESTIONS = [
   "Why is checkout returning 502 errors?",
@@ -32,7 +33,7 @@ export function NewInvestigation() {
   const [everywhere, setEverywhere] = useState(false);
   const config = useLoad(() => api<{ llm: { provider: string; model: string } | null; skills: string[]; environments?: string[]; crewai?: CrewCapability }>("/investigate/config"), []);
   const [flow, setFlow] = useState<"standard" | "crewai">("standard");
-  const crewai = config.data?.crewai?.available ? config.data.crewai : null;
+  const crewai = config.data?.crewai?.available || config.data?.crewai?.available_any ? config.data.crewai : null;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -240,6 +241,7 @@ export function InvestigationView() {
               {report && <Relationships data={report.relationships} primary={report.primary_resource} />}
               <div className="card">
                 <h2>Progress</h2>
+                <CrewProgress events={events} />
                 <Timeline events={events} />
               </div>
               <div className="card">

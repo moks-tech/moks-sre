@@ -291,6 +291,9 @@ class IncidentRun(Run):
         self.answers[self.step] = text[:ANSWER_CHARS]
         await self.bridge.flush()
         await self.history.finish(self.step, "failed" if tr.status == "failed" else "succeeded", tr.ended_by if tr.status != "done" else None)
+        await self.inv._emit("note", {"message": f"CrewAI: {label}: {tr.status.replace('_', ' ')}" + (f" ({tr.ended_by})" if tr.ended_by else ""),
+                                      "crewai": {"task": task, "agent": agent, "round": round_, "status": tr.status, "seconds": tr.seconds,
+                                                 "model_calls": tr.model_calls, "tool_calls": tr.tool_calls}})
         return tr, text
 
     # ---- checkpoints -------------------------------------------------------------------------------
