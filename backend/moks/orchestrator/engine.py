@@ -360,7 +360,8 @@ class Investigator:
         report = state.get("report")
         return {
             "version": CHECKPOINT_VERSION, "completed": self.completed_nodes, "ref": self.ref, "tool_calls": self.tool_calls, "evidence_refs": [e["ref"] for e in self.evidence],
-            "graph": {k: (report.model_dump() if k == "report" and report is not None else state.get(k)) for k in ("namespace", "round", "calls", "use_rules", "finished", "mode", "report", "workflow")},
+            "graph": {k: (report.model_dump() if k == "report" and report is not None else state.get(k)) for k in ("namespace", "round", "calls", "use_rules", "finished", "mode", "report", "workflow",
+                                                                                                                 "crewai")},
             "request": self.request.model_dump() if self.request else None, "trace": self.trace, "gaps": self.gaps, "retrieval_notes": self.retrieval_notes, "knowledge": knowledge.for_checkpoint(self.knowledge),
             "similar": self.similar, "skill_recommendations": self.skill_recommendations, "skill_eligible": self.skill_eligible, "sources": [{k: v for k, v in x.items() if k != "text"} for x in self.sources], "shared_findings": self.shared_findings, "excluded": self.excluded,
             "notes": self.notes, "findings": self.findings, "calls_seen": sorted(self.calls_seen), "rejected": self.rejected[-20:], "focus_namespace": self.focus_namespace,
@@ -530,10 +531,19 @@ class Investigator:
             executor = ToolExecutor(db, ctx, next_ref=self._next_ref, timeout_seconds=min(45, self.settings.max_duration_seconds))
             if resumed:
                 await self._recollect(executor, resumed.get("namespace") or namespace)
-            if crew_request:  # the opt-in CrewAI flow (moks/crew); the graph stays the default
+            if crew_request:  # the opt-in CrewAI flows (moks/crew); the graph stays the default
                 from ..crew import runner as crew_runner
+                from ..crew.incident import CrewFallback
 
-                final = await crew_runner.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request)
+                try:
+                    final = await crew_runner.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, crew_request, resumed)
+                except CrewFallback as exc:  # the incident flow could not start: the standard investigation answers instead
+                    self.notes.append(f"{exc}. MOKS ran its standard investigation instead.")
+                    await self._emit("note", {"message": self.notes[-1]})
+                    final = await graph.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, (LLMError, BudgetExceeded), None)
+                    final["crewai"] = {"version": None, "flow": crew_request.get("flow"), "status": "fallback", "fallback": "langgraph", "stopped": str(exc),
+                                       "agents": [], "tool_calls": 0, "gaps": [], "validation": {}, "evidence": [], "registry": [],
+                                       "errors": [{"code": "fallback", "task": None, "message": str(exc)}]}
             else:
                 final = await graph.run(self, executor, ctx, question, namespace, scope_info, provider, llm_cfg, (LLMError, BudgetExceeded), resumed)
             await db.commit()

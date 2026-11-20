@@ -120,6 +120,12 @@ class Bridge:
             await asyncio.gather(*self.posted, return_exceptions=True)
             self.posted.clear()
 
+    def cancel_inflight(self) -> None:
+        """Ends the call in flight without closing the Bridge: one step ended, the run goes on (crew/incident.py)."""
+        with self._guard:
+            for fut in list(self._inflight):
+                fut.cancel()
+
     def close(self, reason: str) -> None:
         if not self.closed.is_set():
             self.reason = reason
@@ -138,7 +144,7 @@ class Run:
         self.inv, self.ctx, self.provider, self.cfg, self.target, self.question = inv, ctx, provider, cfg, target, question
         self.crew = crew or crew_config.merge(None)  # the configuration this run uses (moks/crew/config.py)
         self.limits = self.crew["limits"]
-        self.labels = {k: self.crew["agents"][k]["role"] for k in AGENTS}
+        self.labels = {k: a["role"] for k, a in self.crew["agents"].items()}
         self.history = history or History(inv.id)
         self.executor = ToolExecutor(executor.db, ctx, next_ref=inv._next_ref, timeout_seconds=self.s.crewai_tool_timeout_seconds)
         self.bridge = Bridge(loop)
@@ -157,6 +163,7 @@ class Run:
         self.members: Members | None = None
         self.members_at = 0.0
         self.resolution: dict[str, dict[str, Any]] = {}  # evidence read to resolve the target, by call key
+        self.views: dict[str, Any] = {}  # each registered evidence id's result as the crew sees it: narrowed to the target when namespace-wide
 
     # ---- progress and tracing (called from the crew's thread) --------------------------------
 
@@ -215,6 +222,7 @@ class Run:
         if inv.guard is not None:
             await inv.guard.check()  # nothing more goes to the provider for someone who lost access
         h, model, n, started = self.history, f"{self.cfg.provider}/{self.cfg.model}", self.llm_calls.get(agent, 0), time.monotonic()
+        step = self._step_for(agent)
         try:
             with span("crewai llm", context=self.task_context, **{"moks.crewai.agent": agent, "moks.llm.provider": self.cfg.provider}) as s:
                 room = inv._capacity(self.cfg, len(system) + sum(len(t["content"]) for t in turns), wanted, MIN_TOKENS)
@@ -224,20 +232,20 @@ class Run:
         except Exception as exc:
             ms = int((time.monotonic() - started) * 1000)
             why = getattr(exc, "message", None) or type(exc).__name__
-            call_id = await h.call(agent, provider=self.cfg.provider, model=self.cfg.model, system=system, turns=turns, response="", tokens_in=0, tokens_out=0, cost=0,
+            call_id = await h.call(step, provider=self.cfg.provider, model=self.cfg.model, system=system, turns=turns, response="", tokens_in=0, tokens_out=0, cost=0,
                                    duration_ms=ms, outcome="cancelled" if isinstance(exc, asyncio.CancelledError) else "error", error=str(why))
-            h.line(f"Model call {n} failed after {ms / 1000:.1f}s: {why}", "error", {"agent": agent, "model": model, "seconds": round(ms / 1000, 2)}, step=agent, call_id=call_id)
+            h.line(f"Model call {n} failed after {ms / 1000:.1f}s: {why}", "error", {"agent": agent, "model": model, "seconds": round(ms / 1000, 2)}, step=step, call_id=call_id)
             raise
         ms = int((time.monotonic() - started) * 1000)
         inv.tokens_in += resp.tokens_in
         inv.tokens_out += resp.tokens_out
         inv.cost += Decimal(str(resp.cost_usd))
-        h.count(agent, model=True, tokens_in=resp.tokens_in, tokens_out=resp.tokens_out, cost=resp.cost_usd)
-        call_id = await h.call(agent, provider=self.cfg.provider, model=self.cfg.model, system=system, turns=turns, response=resp.text, tokens_in=resp.tokens_in,
+        h.count(step, model=True, tokens_in=resp.tokens_in, tokens_out=resp.tokens_out, cost=resp.cost_usd)
+        call_id = await h.call(step, provider=self.cfg.provider, model=self.cfg.model, system=system, turns=turns, response=resp.text, tokens_in=resp.tokens_in,
                                tokens_out=resp.tokens_out, cost=resp.cost_usd, duration_ms=ms)
         h.line(f"Model call {n}: {resp.tokens_in} in, {resp.tokens_out} out, ${Decimal(str(resp.cost_usd)):.4f}, {ms / 1000:.1f}s",
                data={"event": "llm_call", "agent": agent, "model": model, "tokens_in": resp.tokens_in, "tokens_out": resp.tokens_out, "cost_usd": str(resp.cost_usd),
-                     "seconds": round(ms / 1000, 2), "max_tokens": room}, step=agent, call_id=call_id)
+                     "seconds": round(ms / 1000, 2), "max_tokens": room}, step=step, call_id=call_id)
         await inv._emit("llm_usage", {"tokens_in": inv.tokens_in, "tokens_out": inv.tokens_out, "cost_usd": str(inv.cost)})
         return resp.text
 
@@ -258,8 +266,9 @@ class Run:
             pods = await self._read("k8s_list_pods", {"namespace": t.namespace})
             if pods is None or not pods.ok:
                 return Members(frozenset(), frozenset(), f"the pods could not be read ({(pods.error if pods else None) or 'not run'})")
-            found = any(p.get("name") == t.workload for p in pods.data or [])
-            return Members(frozenset({t.workload}) if found else frozenset(), frozenset(), "" if found else f"there is no pod {t.workload} in {t.namespace}")
+            found = next((p for p in pods.data or [] if p.get("name") == t.workload), None)
+            return Members(frozenset({t.workload}) if found else frozenset(), frozenset(), "" if found else f"there is no pod {t.workload} in {t.namespace}",
+                           frozenset({found["node"]}) if found and found.get("node") else frozenset())
         if t.kind == "Deployment":
             out = await self._read("k8s_rollout_history", {"namespace": t.namespace, "deployment": t.workload})
             if out is None or not out.ok:
@@ -278,7 +287,8 @@ class Run:
         if pods is None or not pods.ok:
             return Members(frozenset(), owners, f"the pods could not be read ({(pods.error if pods else None) or 'not run'})")
         names = frozenset(p["name"] for p in pods.data or [] if owned_by(p, owners))
-        return Members(names, owners, "" if names else "no pod's owner references point at it")
+        nodes = frozenset(p["node"] for p in pods.data or [] if p.get("name") in names and p.get("node"))
+        return Members(names, owners, "" if names else "no pod's owner references point at it", nodes)
 
     async def _read(self, tool: str, args: dict[str, Any]) -> Any:
         """A read for resolving the target, counted against the crew's tool limit like any other. The first one is
@@ -310,10 +320,22 @@ class Run:
             self.members, self.members_at = await self.resolve_members(), time.monotonic()
         return self.members
 
-    async def _call_tool(self, tool: CrewTool, raw: dict[str, Any]) -> str:
+    def _step_for(self, agent: str) -> str:
+        """The console step a call is counted under: the agent in the workload crew, the task in the incident crew."""
+        return agent
+
+    def _register(self, record: dict[str, Any], agent: str, members: Members) -> dict[str, Any]:
+        view = focus(self.target, record["tool"], record.get("data"), members) if record.get("ok") else None
+        entry = self.registry.add(record, agent=agent, focus=view)
+        self.views[entry["id"]] = view if view is not None else (record.get("data") if record.get("ok") else None)
+        return entry
+
+    async def _call_tool(self, tool: CrewTool, raw: dict[str, Any], agent: str | None = None) -> str:
         h = self.history
+        agent = agent or tool.agent
+        step = self._step_for(agent)
         shown = {k: v for k, v in (raw if isinstance(raw, dict) else {}).items() if isinstance(v, (str, int, bool)) and v not in ("", None)}
-        with span(f"crewai tool {tool.name}", context=self.task_context, **{"moks.crewai.agent": tool.agent, "moks.tool": tool.tool}) as s:
+        with span(f"crewai tool {tool.name}", context=self.task_context, **{"moks.crewai.agent": agent, "moks.tool": tool.tool}) as s:
             members = await self._members_for(tool, raw)
             try:
                 args = bind(tool, self.target, raw if isinstance(raw, dict) else {}, log_lines=self.s.crewai_log_lines, members=members)
@@ -339,8 +361,7 @@ class Run:
                 return f"Not available: no {tool.needs} source is configured here. Record this as missing evidence; do not guess."
             key = tool.tool + json.dumps(args, sort_keys=True)
             if key in self.resolution and key not in self.seen:
-                record = self.resolution[key]
-                self.seen[key] = self.registry.add(record, agent=tool.agent, focus=focus(self.target, tool.tool, record.get("data"), members) if record.get("ok") else None)["id"]
+                self.seen[key] = self._register(self.resolution[key], agent, members)["id"]
             if key in self.seen:
                 entry = self.registry.records[self.seen[key]]
                 h.line(f"{tool.name}: already collected as {entry['id']}", "debug", {"tool": tool.name, "evidence": entry["id"]})
@@ -350,16 +371,16 @@ class Run:
                 h.line(f"{tool.name}: not run, the crew's limit of {self.tool_limit} tool calls was reached", "warning", {"tool": tool.name})
                 return "Tool-call limit reached. Finish with the evidence already collected."
             self.tool_calls += 1
-            h.count(tool.agent, tool=True)
+            h.count(step, tool=True)
             started = time.monotonic()
-            out = await self.inv._call(self.executor, tool.tool, args, f"crewai {self.labels[tool.agent].lower()}")
+            out = await self.inv._call(self.executor, tool.tool, args, f"crewai {self.labels[agent].lower()}")
             ms = int((time.monotonic() - started) * 1000)
             if out is None or not out.evidence_ref:
                 self.registry.gap(tool.tool, "not run: " + (self.inv.notes[-1] if self.inv.notes else "the investigation's tool budget is spent"))
                 h.line(f"{tool.name}: not run, the investigation's tool budget is spent", "warning", {"tool": tool.name})
                 return "Not run: the investigation's tool budget is spent. Finish with the evidence already collected."
             record = next(e for e in reversed(self.inv.evidence) if e["ref"] == out.evidence_ref)
-            entry = self.registry.add(record, agent=tool.agent, focus=focus(self.target, tool.tool, out.data, members) if out.ok else None)
+            entry = self._register(record, agent, members)
             self.seen[key] = entry["id"]
             s.set_attribute("moks.evidence", entry["id"])
             h.line(f"{tool.name} ({tool.tool}) → {entry['id']} {'ok' if out.ok else 'FAILED: ' + str(out.error_kind or out.error or 'error')}"
@@ -402,9 +423,16 @@ def _target_text(t: Target, scope_info: dict) -> str:
             f"window {scope_info.get('from')} to {scope_info.get('to')} UTC")
 
 
-async def run(inv: Any, executor: ToolExecutor, ctx: Any, question: str, namespace: str, scope_info: dict, provider: Any, cfg: Any, request: dict[str, Any]) -> dict[str, Any]:
-    """Returns graph-shaped state ({"namespace", "report", "mode", "crewai"}) for Investigator._investigate."""
+async def run(inv: Any, executor: ToolExecutor, ctx: Any, question: str, namespace: str, scope_info: dict, provider: Any, cfg: Any, request: dict[str, Any],
+              resumed: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Returns graph-shaped state ({"namespace", "report", "mode", "crewai"}) for Investigator._investigate. The incident flow has its own
+    workflow (crew/incident.py); `resumed` is a checkpoint's state, which only that flow writes."""
     from . import capability, console, prepare_environment
+
+    if request.get("flow") == crew_config.INCIDENT_FLOW:
+        from . import incident
+
+        return await incident.run(inv, executor, ctx, question, namespace, scope_info, provider, cfg, request, resumed)
 
     s = get_settings()
     history = await History(inv.id).open()
