@@ -57,6 +57,7 @@ class P(StrEnum):
     ADMIN_CONNECTORS = "admin.connectors"
     ADMIN_LLM = "admin.llm"
     ADMIN_POLICIES = "admin.policies"
+    ADMIN_SETTINGS = "admin.settings"        # Settings: change the curated runtime values, read the deployment's non-secret configuration
     CREWAI_ADMIN = "crewai.admin"            # CrewAI console: crew versions, schedules, flows on or off, run history settings, import
 
 
@@ -109,12 +110,12 @@ ROLE_DESCRIPTIONS = {
     "secrets_viewer": "See Kubernetes and AWS secret names, owners and sync status, and compare key names and masked differences in the bound namespaces. Never values.",
     "secrets_operator": "Manage secret mappings and propose and run reviewed sync, rollback and deletion plans in the bound namespaces. Not part of operator.",
     "secrets_approver": "Approve or reject secret plans and sync schedules in the bound namespaces (never their own), and view secret values there (audited). Not part of approver.",
-    "admin": "Manage users, connectors, LLM providers and policies, the CrewAI console's crews, schedules and flows, and end anyone's terminal session. Their own action plans need no second approval.",
+    "admin": "Manage users, connectors, LLM providers, policies and runtime settings, the CrewAI console's crews, schedules and flows, and end anyone's terminal session. Their own action plans need no second approval.",
 }
 
 # Permissions that only make sense globally: a binding grants them only when both its
 # environment and namespace are '*'.
-GLOBAL_PERMISSIONS = {P.ADMIN_USERS, P.ADMIN_CONNECTORS, P.ADMIN_LLM, P.ADMIN_POLICIES, P.CREWAI_ADMIN, P.AUDIT_READ, P.TERMINAL_REVOKE,
+GLOBAL_PERMISSIONS = {P.ADMIN_USERS, P.ADMIN_CONNECTORS, P.ADMIN_LLM, P.ADMIN_POLICIES, P.ADMIN_SETTINGS, P.CREWAI_ADMIN, P.AUDIT_READ, P.TERMINAL_REVOKE,
                       P.KNOWLEDGE_SOURCE_ADMIN, P.KNOWLEDGE_INDEX, P.SKILL_REVIEW, P.SKILL_PUBLISH, P.LEARNING_EXPORT, P.ML_ADMIN}
 
 # Raw PromQL cannot be reliably restricted to a namespace, so it requires a binding whose

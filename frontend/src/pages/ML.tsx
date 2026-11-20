@@ -1,4 +1,5 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent, type ReactNode } from "react";
+import { Link } from "react-router-dom";
 import { api, API, qs } from "../api";
 import { useAuth } from "../auth";
 import { Badge, DataTable, EnvNsFilter, ErrorBox, FormDrawer, FormSection, Loading, PageHead, ScopePicker, Time, useLoad, useScopes, type Col } from "../components";
@@ -76,6 +77,7 @@ function ObservationDrawer({ o, onClose, onSaved }: { o: any; onClose: () => voi
 
 /** Shadow-mode observations and the state of each ML capability, for on-call engineers. */
 export function MLInsights() {
+  const { can } = useAuth();
   const scopes = useScopes();
   const [env, setEnv] = useState("all");
   const [ns, setNs] = useState("all");
@@ -102,7 +104,7 @@ export function MLInsights() {
     <h2>Anomaly observations</h2>
     {obs.data ? <DataTable label="Anomaly observations" rows={obs.data.observations} cols={cols} rowKey={(o) => o.id} onRow={setOpen}
       empty={<Empty title={caps?.anomaly_detection?.mode === "disabled" ? "Anomaly detection is off." : "No observations in the last 24 hours."}>
-        {caps?.anomaly_detection?.mode === "disabled" ? "An ML administrator can switch it to shadow mode after training and promoting a model."
+        {caps?.anomaly_detection?.mode === "disabled" ? <>An ML administrator can switch it to shadow mode in {can("ml.admin") ? <Link to="/settings/features">Settings → Features</Link> : "Settings → Features"}, after training and promoting a model.</>
           : "Workloads appear here once a champion model exists for them. Insufficient history and missing telemetry are listed, not hidden."}</Empty>} />
       : <Loading load={obs} />}
     <div className="small muted">{obs.data?.note}</div>
@@ -111,7 +113,8 @@ export function MLInsights() {
   </div>;
 }
 
-function Capability({ name, c, onSaved }: { name: string; c: any; onSaved: () => void }) {
+/** One capability and its mode switch. Settings → Features and Machine learning both use it. */
+export function Capability({ name, c, onSaved, children }: { name: string; c: any; onSaved: () => void; children?: ReactNode }) {
   const [changing, setChanging] = useState(false);
   const title = name.replace(/_/g, " ");
   return <section className="card tight stack" aria-label={`${title} mode`}>
@@ -119,6 +122,7 @@ function Capability({ name, c, onSaved }: { name: string; c: any; onSaved: () =>
       <button className="ghost small" disabled={c.forced_off} onClick={() => setChanging(true)}>Change mode</button></div>
     <div className="small muted">{c.describe}</div>
     {c.forced_off && <div className="small muted">MOKS_ML_DISABLED is set for this deployment: every capability is off whatever is saved here.</div>}
+    {children}
     {changing && <ChangeMode name={name} c={c} onClose={() => setChanging(false)} onSaved={() => { setChanging(false); onSaved(); }} />}
   </section>;
 }
@@ -188,7 +192,7 @@ function Models() {
   </section>;
 }
 
-function Train({ onClose }: { onClose: () => void }) {
+export function Train({ onClose }: { onClose: () => void }) {
   const { toast } = useFeedback();
   const [environment, setEnv] = useState("");
   const [namespace, setNs] = useState("");

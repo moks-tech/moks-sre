@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth";
-import { navFor } from "./nav";
+import { navFor, settingsFor } from "./nav";
 import { scopeSearch } from "./scope";
 import { Icon, useModal } from "./ui";
 
@@ -38,6 +38,9 @@ export function CommandPalette({ onClose, commands = [] }: { onClose: () => void
   const all = useMemo<Command[]>(() => [
     ...navFor(can).flatMap((g) => g.items.map((i) => ({ id: `page:${i.to}`, label: i.label, group: g.label, icon: i.icon, keywords: i.keywords,
       run: () => navigate({ pathname: i.to, search: i.scoped ? carry : "" }) }))),
+    // every Settings page by name, so "users" or "anomaly" finds it without opening Settings first
+    ...settingsFor(can).flatMap((g) => g.items.filter((i) => i.to !== "/settings").map((i) => ({ id: `page:${i.to}`, label: i.label, group: "Settings", icon: i.icon,
+      keywords: `${g.label} ${i.keywords ?? ""}`, run: () => navigate(i.to) }))),
     ...commands,
   ], [can, carry, commands, navigate]);
   const results = useMemo(() => all.map((c, n) => ({ c, score: rank(q, c), n })).filter((r) => r.score > 0)

@@ -62,7 +62,7 @@ export function NewInvestigation() {
       {!can("investigation.run") && <div className="alert info">You can read investigations but not start them (needs the Investigator role).</div>}
       {config.data && !config.data.llm && (
         <div className="alert warn small" style={{ marginBottom: 12 }}>
-          No active chat model: reports are rule-based. {can("admin.llm") && <Link to="/admin/llm">Activate an LLM provider →</Link>}
+          No active chat model: reports are rule-based. {can("admin.llm") && <Link to="/settings/llm">Activate an LLM provider →</Link>}
         </div>
       )}
       <form className="card stack" onSubmit={submit}>

@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { navFor, titleFor } from "./nav";
+import { MOVED, navFor, SETTINGS, settingsFor, titleFor } from "./nav";
 
 const auth = vi.hoisted(() => ({ perms: [] as string[] }));
 vi.mock("./auth", () => ({ useAuth: () => ({ me: { display_name: "Sam", email: "s@x", roles: [] }, logout: vi.fn(), can: (p: string) => auth.perms.includes(p) }) }));
@@ -24,12 +24,9 @@ describe("navigation drawer", () => {
     open();
     const d = screen.getByRole("dialog", { name: "Navigation" });
     const links = () => within(d).getAllByRole("link").map((a) => a.textContent);
-    for (const l of ["Overview", "Metrics", "Investigations", "Incidents"]) expect(links()).toContain(l);
-    const admin = within(d).getByRole("button", { name: "Admin" });  // closed until opened, so it never pushes the rest down
-    expect(admin.getAttribute("aria-expanded")).toBe("false");
-    expect(links()).not.toContain("Users & roles");
-    fireEvent.click(admin);
-    expect(links()).toContain("Users & roles");
+    for (const l of ["Overview", "Metrics", "Investigations", "Incidents", "Settings"]) expect(links()).toContain(l);
+    expect(within(d).queryByRole("button", { name: "Settings" })).toBeNull();  // one link, not a group to open
+    expect(links()).not.toContain("Users & roles");  // that is in the Settings submenu
     expect(d.contains(document.activeElement)).toBe(true);
     expect(document.body.classList.contains("scroll-locked")).toBe(true);
   });
@@ -92,7 +89,8 @@ describe("RBAC visibility", () => {
 
   it("names deep links for the header", () => {
     expect(titleFor("/conversations/abc").label).toBe("Investigations");
-    expect(titleFor("/admin/users").group).toBe("Admin");
+    expect(titleFor("/settings/users")).toEqual({ group: "Settings", label: "Users & roles" });
+    expect(titleFor("/settings")).toEqual({ group: "Settings", label: "Overview" });
   });
 });
 
@@ -126,12 +124,27 @@ describe("sidebar groups", () => {
     expect(side().getByRole("link", { name: "Metrics" })).toBeTruthy();
   });
 
-  it("keep Admin at the foot of the sidebar, and open it on an Admin page", () => {
-    app("/admin/users");
+  it("keep Settings at the foot of the sidebar as one link, current on every Settings page", () => {
+    app("/settings/users");
     const bottom = document.querySelector(".side .nav-bottom") as HTMLElement;
-    expect(within(bottom).getByRole("button", { name: "Admin" }).getAttribute("aria-expanded")).toBe("true");
-    expect(within(bottom).getByRole("link", { name: "Users & roles" })).toBeTruthy();
-    expect(document.querySelector(".side .nav-main")!.textContent).not.toContain("Users & roles");
+    const link = within(bottom).getByRole("link", { name: "Settings" });
+    expect(link.getAttribute("aria-current")).toBe("page");
+    expect(within(bottom).queryByRole("button")).toBeNull();
+    expect(document.querySelector(".side .nav-main")!.textContent).not.toContain("Settings");
+    expect(document.querySelector(".crumbs")!.textContent).toBe("SettingsUsers & roles");
+  });
+
+  it("leave Settings out for someone who may open none of its pages", () => {
+    auth.perms = ["investigation.read", "ml.read"];
+    app();
+    expect(within(document.querySelector(".side") as HTMLElement).queryByRole("link", { name: "Settings" })).toBeNull();
+    expect(settingsFor((p) => p === "audit.read").flatMap((g) => g.items.map((i) => i.label))).toEqual(["Overview", "Audit log"]);
+  });
+
+  it("send every old admin address to a Settings page that exists", () => {
+    const pages = SETTINGS.flatMap((g) => g.items.map((i) => i.to));
+    for (const to of Object.values(MOVED)) expect(pages).toContain(to);
+    expect(Object.keys(MOVED)).toEqual(expect.arrayContaining(["/admin/users", "/admin/ml", "/audit", "/evals"]));
   });
 });
 
@@ -173,6 +186,22 @@ describe("command palette", () => {
     fireEvent.keyDown(document, { key: "Escape" });
     expect(palette()).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("finds Settings pages by name or by what they hold, without opening Settings first", async () => {
+    auth.perms = ["investigation.read", "ml.admin", "admin.users"];
+    app();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const input = screen.getByRole("combobox");
+    fireEvent.change(input, { target: { value: "anomaly" } });
+    const first = within(palette()!).getAllByRole("option")[0];
+    expect(first.textContent).toContain("Features");
+    expect(first.textContent).toContain("Settings");
+    fireEvent.change(input, { target: { value: "budgets" } });
+    expect(options()).not.toContain("Limits & schedules");  // needs admin.settings
+    fireEvent.change(input, { target: { value: "users" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(document.querySelector(".crumbs")!.textContent).toBe("SettingsUsers & roles"));
   });
 
   it("runs commands, such as switching theme", () => {

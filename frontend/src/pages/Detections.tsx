@@ -46,7 +46,7 @@ export function Detections() {
       <Loading load={rules} rows={6} />
       <ErrorBox error={error} />
       {envs.length > 0 && !envs.some((e) => e.detection_enabled) && <div className="alert info small" style={{ marginBottom: 12 }}>
-        Detection is off in every environment. {admin ? <>Turn it on per environment under <Link to="/admin/environments">Environments</Link>.</> : "An administrator can turn it on."}</div>}
+        Detection is off in every environment. {admin ? <>Turn it on per environment under <Link to="/settings/environments">Environments</Link>.</> : "An administrator can turn it on."}</div>}
       <FilterPanel chips={chips} onClear={clearF} search={<input type="search" className="grow" aria-label="Search rules" value={text} onChange={(e) => setF({ q: e.target.value })} placeholder="Search rules" />}>
         <label>Severity<select value={severity} onChange={(e) => setF({ severity: e.target.value })}><option value="">All</option>{Object.keys(SEV).map((k) => <option key={k}>{k}</option>)}</select></label>
         <label>Test in<select value={target} onChange={(e) => setEnv(e.target.value)}>{envs.map((e) => <option key={e.name}>{e.name}</option>)}</select></label>

@@ -423,7 +423,8 @@ function Transfer() {
   </Section>;
 }
 
-function Settings() {
+/** Run history, this deployment's CrewAI limits, import and export. Also under Settings → CrewAI. */
+export function Settings() {
   const load = useLoad(() => api("/crewai/settings"), []);
   const [v, setV] = useState<any>();
   const [error, setError] = useState<unknown>();

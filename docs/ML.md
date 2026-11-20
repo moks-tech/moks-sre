@@ -36,7 +36,7 @@ next investigation or tick, with no restart.
 | `anomaly_detection` | disabled, shadow | disabled | observations shown on ML insights and judged | not offered |
 | `skill_recommendations` | disabled, shadow, enabled | disabled | ranking recorded beside the rules' choice | may fill skill places the rules left empty; never removes or reorders |
 
-- **Switch:** Admin > Machine learning, or `PUT /ml/capabilities/{name}` with `{mode, reason}`. Needs `ml.admin`. The
+- **Switch:** Settings > Features (or Settings > Machine learning), or `PUT /ml/capabilities/{name}` with `{mode, reason}`. Needs `ml.admin`. The
   change is audited (`ml.capability`).
 - **Kill everything:** set `ml.disabled: true` in Helm values (`MOKS_ML_DISABLED`). Every capability then reads as
   disabled, whatever the database says. Use this when the database itself is suspect.
@@ -76,7 +76,7 @@ The rules:
   postmortem is approved.
 - An executed skill is not a successful one. `skills.executed[].outcome` says only whether its steps ran
   (`steps_ran`, `steps_failed`, `not_run`, `stopped`). Whether it helped is a judgment someone records.
-- Labels come from a reviewer (Admin > Machine learning > Confirm outcomes) or an approved postmortem. Nothing is
+- Labels come from a reviewer (Settings > Machine learning > Confirm outcomes) or an approved postmortem. Nothing is
   labeled automatically.
 - Judgments are one per person per target and context. A changed verdict goes back to `open`, and nothing uses a
   judgment until a reviewer marks it `reviewed`.
@@ -167,7 +167,7 @@ chunk with traffic and no 5xx series, because `errors_rate` is declared `absent_
 `http_request_duration_seconds_bucket`; restarts use kube-state-metrics, which mk4 does not run, so expect that
 feature to be absent there.
 
-**Training** is offline: the CronJob, `moks ml train`, or Admin > Train. It covers `ml.anomaly.trainingDays` (14) of
+**Training** is offline: the CronJob, `moks ml train`, or Train models in Settings > Features or Settings > Machine learning. It covers `ml.anomaly.trainingDays` (14) of
 history for each workload in the given namespaces.
 
 1. Cohorts with less than `minHistoryDays` (7) of usable history are refused as `insufficient_history`. Usable means
@@ -211,7 +211,7 @@ say why, and the score is not a probability.
   - `champion`: one per workload, enforced by a unique index
   - `retired`
   - `rejected`
-- **Promotion** is explicit (Admin > Machine learning > Models, `POST /ml/models/{id}/promote`) and audited. A
+- **Promotion** is explicit (Settings > Machine learning > Models, `POST /ml/models/{id}/promote`) and audited. A
   champion needs passed gates and the capability not disabled. Promoting a new champion retires the old one.
 - **Rollback:** `POST /ml/rollback {capability, cohort}`. The champion steps down and the most recently promoted
   retired model returns. If there is none, the cohort has no champion and shows nothing.
@@ -265,7 +265,7 @@ This is yours to run. It writes to mk4, and Argo CD reads `origin/master`.
 4. **Train, without changing anything live:**
    `kubectl --context mk4 -n moks exec deploy/moks-worker -- moks ml train --environment mk4 --namespace <ns>`.
    Read the output for each cohort: `insufficient_history`, or two candidates with gates.
-5. **Turn on shadow mode:** Admin > Machine learning > anomaly detection > shadow, with a reason. Then pick a champion
+5. **Turn on shadow mode:** Settings > Features > anomaly detection > Change mode > shadow, with a reason. Then pick a champion
    per workload under Models. Observations appear on ML insights within `intervalMinutes`.
 6. **Optionally schedule training:** set `ml.training.enabled: true` and
    `ml.anomaly.namespaces: "mk4:<ns>,mk4:<ns2>"`, then push and sync the worker app. The CronJob requests 100m CPU and
@@ -292,7 +292,7 @@ This is yours to run. It writes to mk4, and Argo CD reads `origin/master`.
 |---|---|
 | One capability | set its mode to `disabled` |
 | All of ML | `ml.disabled: true`, push, sync, restart API and worker |
-| One model | Admin > Models > Roll back this cohort, or `POST /ml/rollback` |
+| One model | Settings > Machine learning > Models > Roll back this cohort, or `POST /ml/rollback` |
 | The release | as in [RELEASES.md](RELEASES.md). Migration 0032 is additive, so the previous image runs on the new schema; its tables are simply unused |
 
 ## Limitations

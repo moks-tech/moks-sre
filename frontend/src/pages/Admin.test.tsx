@@ -85,6 +85,12 @@ describe("Connectors page", () => {
     await waitFor(() => expect(state.calls.some((c) => c.path === "/admin/connectors/c2/test" && c.method === "POST")).toBe(true));
     expect(await screen.findByText("prom-2: reachable")).toBeTruthy();
   });
+  it("tests every untested connector from one button and sums up", async () => {
+    render(<FeedbackProvider><Connectors /></FeedbackProvider>);
+    fireEvent.click(await screen.findByRole("button", { name: "Test all (1 untested)" }));
+    await waitFor(() => expect(state.calls.some((c) => c.path === "/admin/connectors/c1/test" && c.method === "POST")).toBe(true));
+    expect(await screen.findByText("The connector passed.")).toBeTruthy();
+  });
   it("asks for the missing data sources", async () => {
     render(<FeedbackProvider><Connectors /></FeedbackProvider>);
     expect(await screen.findByRole("button", { name: "Add Cluster cost model to demo" })).toBeTruthy();
