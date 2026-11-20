@@ -56,7 +56,11 @@ VERDICTS = {
     "skill_recommendation": ("helpful", "not_helpful", "unsure"),
     "anomaly_observation": ("true_positive", "false_positive", "expected", "unsure"),
 }
-PURPOSES = ("incident_similarity", "skill_ranking", "retrieval", "anomaly")
+# Which approved records each dataset purpose reads. Incident similarity learns from incidents whose postmortem was
+# approved (kind "incident"); the other purposes read any approved record, including outcomes confirmed by a reviewer.
+PURPOSE_KINDS: dict[str, tuple[str, ...] | None] = {"incident_similarity": ("incident",), "skill_ranking": None, "retrieval": None, "anomaly": None}
+PURPOSES = tuple(PURPOSE_KINDS)
+REALMS = ("operational", "evaluation")
 
 _VOLATILE = [
     (re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b"), " <uuid> "),
@@ -323,17 +327,60 @@ def check_leakage(items: Iterable[tuple[str, str, str]]) -> list[str]:
 
 def eligible_for(purpose: str):
     """Which records may enter a dataset for this purpose. Supervised purposes need an approved label."""
+    if purpose not in PURPOSE_KINDS:
+        raise ValueError(f"purpose must be one of {', '.join(PURPOSES)}")
+    kinds = PURPOSE_KINDS[purpose]
+    return lambda r: r.label_state == "approved" and (kinds is None or r.kind in kinds)
+
+
+async def readiness(db: AsyncSession, environment: str | None = None) -> dict[str, Any]:
+    """What a build would find, per realm: approved records per purpose, and how many records still wait for review.
+    Counts what build_dataset reads, so a purpose at 0 here is one a build refuses."""
+    q = select(LearningRecord.realm, LearningRecord.kind, LearningRecord.label_state, func.count()).group_by(LearningRecord.realm, LearningRecord.kind, LearningRecord.label_state)
+    if environment:
+        q = q.where(LearningRecord.environment == environment)
+    rows = (await db.execute(q)).all()
+    out: dict[str, Any] = {}
+    for realm in REALMS:
+        approved: dict[str, int] = {}
+        unreviewed = 0
+        for rl, kind, state, n in rows:
+            if rl != realm:
+                continue
+            if state == "approved":
+                approved[kind] = approved.get(kind, 0) + n
+            elif state == "unreviewed":
+                unreviewed += n
+        out[realm] = {"purposes": {p: sum(n for k, n in approved.items() if kinds is None or k in kinds) for p, kinds in PURPOSE_KINDS.items()},
+                      "approved": approved, "unreviewed": unreviewed}
+    return out
+
+
+def nothing_to_build(purpose: str, realm: str, ready: dict[str, Any]) -> str:
+    """Why a build found nothing, and what would give it records."""
+    here = ready[realm]
+    where = "evaluation-run" if realm == "evaluation" else "operational"
     if purpose == "incident_similarity":
-        return lambda r: r.label_state == "approved" and r.kind == "incident"
-    if purpose in ("skill_ranking", "retrieval", "anomaly"):
-        return lambda r: r.label_state == "approved"
-    raise ValueError(f"purpose must be one of {', '.join(PURPOSES)}")
+        msg = (f"no approved records match: incident_similarity reads {where} incidents whose postmortem was approved, and there are none yet. "
+               "Approve a postmortem on its incident page")
+        other = here["purposes"]["skill_ranking"]
+        msg += f", or build skill_ranking, retrieval or anomaly from the {other} confirmed outcome(s)." if other else "."
+    else:
+        msg = f"no approved records match: {purpose} reads approved {where} records, and there are none yet."
+        if here["unreviewed"]:
+            msg += f" {here['unreviewed']} record(s) wait under Settings > Machine learning > Confirm outcomes: approve one with its confirmed cause."
+        else:
+            msg += " A record is written when an investigation finishes; confirm its outcome under Settings > Machine learning > Confirm outcomes."
+    other_realm = REALMS[1 - REALMS.index(realm)]
+    if ready[other_realm]["purposes"][purpose]:
+        msg += f" {ready[other_realm]['purposes'][purpose]} approved {other_realm} record(s) would match: build from {other_realm} records instead."
+    return msg + " A dataset is built from reviewed outcomes only."
 
 
 async def build_dataset(db: AsyncSession, *, name: str, purpose: str, created_by: uuid.UUID | None, realm: str = "operational", environment: str | None = None,
                         method: str = "grouped", eval_fraction: float = 0.2, seed: int = 7, retention_days: int | None = 180) -> LearningDataset:
     """A frozen, versioned selection with its split. Refuses to save one that leaks."""
-    if realm not in ("operational", "evaluation"):
+    if realm not in REALMS:
         raise ValueError("realm must be operational or evaluation")
     ok = eligible_for(purpose)
     q = select(LearningRecord).where(LearningRecord.realm == realm, LearningRecord.label_state == "approved")
@@ -341,7 +388,7 @@ async def build_dataset(db: AsyncSession, *, name: str, purpose: str, created_by
         q = q.where(LearningRecord.environment == environment)
     records = [r for r in (await db.execute(q.order_by(LearningRecord.created_at).limit(20000))).scalars().all() if ok(r)]
     if not records:
-        raise ValueError("no approved records match; a dataset is built from reviewed outcomes only")
+        raise ValueError(nothing_to_build(purpose, realm, await readiness(db, environment)))
     sides, info = split(records, method=method, eval_fraction=eval_fraction, seed=seed)
     by_id = {r.id: r for r in records}
     rows = [(sides[i], group_key(by_id[i]), by_id[i].content_hash) for i in sides]
