@@ -5,7 +5,11 @@ an incident summary in which every finding cites recorded evidence. The LangGrap
 default for everything else. CrewAI runs only when `MOKS_CREWAI_ENABLED=true` **and** the image was built
 with the crewai extra.
 
-The **unified investigation** ([UNIFIED_INVESTIGATION.md](UNIFIED_INVESTIGATION.md)) is a second CrewAI console flow on the same worker: fifteen
+A second, larger flow, the seven-agent **incident investigation** with graded findings and hypotheses, a bounded
+evidence review and an RCA, is described in [crewai-sre-engine.md](crewai-sre-engine.md). Everything below about the
+target, safety, the worker and the image applies to it too.
+
+The **unified investigation** ([UNIFIED_INVESTIGATION.md](UNIFIED_INVESTIGATION.md)) is a third CrewAI console flow on the same worker: fifteen
 stages over every source, an analyst and a reviewer agent, and transparently scored root-cause hypotheses.
 
 Runs, logs, schedules and the crew's prompts are managed in the **CrewAI console** at `/moks/crewai`
@@ -93,10 +97,15 @@ telemetry switches and the task-output store are unchanged. What changed and tou
 
 1. **Workload investigator** has these tools: `namespace_health` (`k8s_triage`), `workload_status` (`k8s_workloads`),
    `workload_pods` (`k8s_list_pods`), `describe_pod`, `recent_events`, `pod_logs`, `search_logs` (`loki_search`),
-   `pod_metrics` (`prom_pod_resources`) and `firing_alerts` (`prom_alerts`).
+   `pod_metrics` (`prom_pod_resources`), `firing_alerts` (`prom_alerts`) and `ml_signals` (`ml_anomalies`: the target's
+   shadow-mode anomalies and correlation group, evidence kind `model_output`, see [ML.md](ML.md#in-investigations-and-the-crewai-crew)).
 2. **Change investigator** has `rollout_history`, `config_audit`, `recent_commits` (`git_recent_commits`),
-   `deployed_commit` (`git_compare_deployment`) and `search_runbooks` (`kb_search`). When a source is not configured
-   or no single repository is set up, the tool returns "not available" and records a gap.
+   `deployed_commit` (`git_compare_deployment`), `search_runbooks` (`kb_search`) and `incident_history` (recurring
+   failures, runbooks and what worked, from reviewed incidents). When a source is not configured or no single
+   repository is set up, the tool returns "not available" and records a gap.
+
+ML signals and history are leads. A finding that cites only `ml_signals` becomes a low-confidence likely cause, a
+likely cause resting only on it stays low, and every backstory says so whatever the console's version says.
 3. **Incident reviewer** has only `evidence_list`, which reads the registry and records nothing. It returns JSON:
    `summary`, `findings[{statement, evidence}]`, `likely_causes[{cause, confidence, evidence, reasoning}]`,
    `missing_evidence` and `next_steps`.

@@ -207,6 +207,46 @@ async def k8s_nodes(ctx: ToolContext, a: NoArgs) -> ToolResult:
     return ToolResult(f"{len(nodes)} nodes; not ready/pressured/cordoned: {', '.join(bad) or 'none'}", nodes, {"api": "GET /api/v1/nodes"})
 
 
+async def k8s_autoscaling(ctx: ToolContext, a: NamespaceArgs) -> ToolResult:
+    """HPAs and, where KEDA is installed, ScaledObjects in a namespace: what scales what, its bounds and why it is stuck."""
+    k = ctx.connector("kubernetes")
+    hpas = await k.hpas(a.namespace)
+    try:
+        scaled = await k.scaled_objects(a.namespace)
+    except ConnectorError as exc:
+        scaled, keda_error = None, exc.message
+    else:
+        keda_error = None
+    problems = [f"HPA {h['name']} at its maximum of {h['maxReplicas']}" for h in hpas if h["atMax"]]
+    problems += [f"HPA {h['name']}: {c['type']}={c['status']} ({c['reason']})" for h in hpas for c in h["conditions"]
+                 if (c["type"] in ("AbleToScale", "ScalingActive") and c["status"] == "False") or (c["type"] == "ScalingLimited" and c["status"] == "True")]
+    problems += [f"ScaledObject {o['name']}: {c['type']}={c['status']} ({c['reason']})" for o in scaled or [] for c in o["conditions"]
+                 if (c["type"] == "Ready" and c["status"] != "True") or (c["type"] == "Fallback" and c["status"] == "True")]
+    data = {"hpas": hpas, "scaledObjects": scaled, "keda": "not installed" if scaled is None and keda_error is None else keda_error or "installed", "problems": problems}
+    return ToolResult(f"{len(hpas)} HPAs" + (f", {len(scaled)} KEDA ScaledObjects" if scaled is not None else ", KEDA not installed") + f" in {a.namespace}"
+                      + (f"; {len(problems)} problem(s)" if problems else ""), data, {"api": f"GET autoscaling/v2 horizontalpodautoscalers, keda.sh scaledobjects in {a.namespace}"})
+
+
+async def k8s_storage(ctx: ToolContext, a: NamespaceArgs) -> ToolResult:
+    """PersistentVolumeClaims in a namespace, the pods that mount them, and the claims that are not bound or are resizing."""
+    k = ctx.connector("kubernetes")
+    claims = await k.pvcs(a.namespace)
+    mounted: dict[str, list[str]] = {}
+    for p in await k.raw_pods(a.namespace):
+        for v in (p.get("spec") or {}).get("volumes") or []:
+            claim = (v.get("persistentVolumeClaim") or {}).get("claimName")
+            if claim:
+                mounted.setdefault(claim, []).append(p["metadata"]["name"])
+    for c in claims:
+        c["mountedBy"] = sorted(mounted.get(c["name"], []))
+    missing = sorted(set(mounted) - {c["name"] for c in claims})
+    problems = [f"PVC {c['name']} is {c['phase']}" for c in claims if c.get("phase") != "Bound"]
+    problems += [f"PVC {c['name']}: {x['type']}" for c in claims for x in c.get("conditions") or [] if x.get("status") == "True"]
+    problems += [f"pods mount PVC {m}, which does not exist" for m in missing]
+    return ToolResult(f"{len(claims)} PVCs in {a.namespace}" + (f"; {len(problems)} problem(s)" if problems else ""),
+                      {"claims": claims, "missingClaims": missing, "problems": problems}, {"api": f"GET persistentvolumeclaims, pods in {a.namespace}"})
+
+
 async def k8s_dns_health(ctx: ToolContext, a: NoArgs) -> ToolResult:
     ctx.scope.require("kube-system")  # CoreDNS lives there; an environment deny list wins
     d = await ctx.connector("kubernetes").dns_health()
@@ -289,6 +329,61 @@ async def prom_alerts(ctx: ToolContext, a: AlertsArgs) -> ToolResult:
         visible.append({**r, "active": active})
     firing = sum(1 for r in visible for x in r["active"] if x["state"] == "firing")
     return ToolResult(f"{len(visible)} alert rules shown; {firing} firing alert instances", visible, {"api": "GET /api/v1/rules?type=alert"})
+
+
+class ServiceSignalsArgs(ToolArgs):
+    namespace: str = Namespace
+    workload: str = Field(pattern=K8S_NAME, max_length=253, description="the workload whose requests to measure")
+    pod_regex: str | None = Field(default=None, max_length=2000, pattern=r"^[A-Za-z0-9_.*+?|()\[\]^$-]+$", description="its pods, for the OpenTelemetry fallback")
+    minutes: int | None = Field(default=None, ge=5, le=10080)
+
+
+# Request metrics per family, in the order tried. Istio's sidecars report every request a workload serves; the OpenTelemetry HTTP
+# server metric is what instrumented services export without a mesh. Every selector is built here and pins the namespace.
+SIGNAL_FAMILIES = {
+    "istio": {"requests": "istio_requests_total", "buckets": "istio_request_duration_milliseconds_bucket", "unit": "ms", "status": "response_code",
+              "selector": lambda a: f'reporter="destination", destination_workload_namespace="{a.namespace}", destination_workload="{a.workload}"'},
+    "otel": {"requests": "http_server_request_duration_seconds_count", "buckets": "http_server_request_duration_seconds_bucket", "unit": "s", "status": "http_response_status_code",
+             "selector": lambda a: f'namespace="{a.namespace}", pod=~"{a.pod_regex or ".+"}"'},
+}
+
+
+def _stats(result: dict) -> dict:
+    values = [v for s in result.get("series") or [] for _, v in s.get("values") or [] if isinstance(v, (int, float)) and v == v]
+    last = [s["values"][-1][1] for s in result.get("series") or [] if s.get("values")]
+    return {"latest": round(sum(x for x in last if isinstance(x, (int, float))), 6) if last else None,
+            "max": round(max(values), 6) if values else None, "min": round(min(values), 6) if values else None}
+
+
+async def prom_service_signals(ctx: ToolContext, a: ServiceSignalsArgs) -> ToolResult:
+    """Golden signals of one workload from templated, namespace-pinned queries: throughput, 5xx error ratio and latency p50/p95/p99."""
+    prom = ctx.connector("prometheus")
+    start, end = ctx.window(a.minutes)
+    step = auto_step(start, end)
+    tried = []
+    for family, f in SIGNAL_FAMILIES.items():
+        sel = f["selector"](a)
+        total = f"sum(rate({f['requests']}{{{sel}}}[5m]))"
+        queries = {"throughput_rps": total,
+                   "error_ratio": f"sum(rate({f['requests']}{{{sel}, {f['status']}=~\"5..\"}}[5m])) / clamp_min({total}, 1e-9)",
+                   **{f"latency_p{q}_{f['unit']}": f"histogram_quantile(0.{q}, sum by (le) (rate({f['buckets']}{{{sel}}}[5m])))" for q in ("50", "95", "99")}}
+        results = {}
+        for key, q in queries.items():
+            try:
+                results[key] = await prom.range(q, start, end, step)
+            except ConnectorError as exc:
+                results[key] = {"error": exc.message, "series": []}
+        tried.append(family)
+        if any(r.get("series") for r in results.values()):
+            stats = {k: _stats(r) for k, r in results.items()}
+            def fmt(k: str) -> str:
+                v = stats[k]["latest"]
+                return "n/a" if v is None else f"{v * 100:.2f}%" if k == "error_ratio" else f"{v:.3g}"
+            text = ", ".join(f"{k} {fmt(k)}" for k in stats)
+            return ToolResult(f"{a.workload} in {a.namespace} ({family} metrics): {text}", {"source": family, "stats": stats, "queries": queries, "results": results, "step": step},
+                              {"queries": list(queries.values())})
+    return ToolResult(f"no request metrics for {a.workload} in {a.namespace} (tried {', '.join(tried)}): throughput, errors and latency are not measured here",
+                      {"source": None, "stats": {}, "tried": tried, "queries": {}, "results": {}}, {"queries": []})
 
 
 async def prom_targets(ctx: ToolContext, a: NoArgs) -> ToolResult:
@@ -617,12 +712,18 @@ TOOLS: list[ToolSpec] = [
              cluster_scoped=True, namespace_arg=None),
     ToolSpec("k8s_dns_health", "CoreDNS deployment, service endpoints and pods (cluster DNS triage).", "kubernetes", NoArgs, k8s_dns_health,
              cluster_scoped=True, namespace_arg=None),
+    ToolSpec("k8s_autoscaling", "HPAs and KEDA ScaledObjects in a namespace: targets, bounds, current and desired replicas, metrics, conditions (stuck at max, unable to scale).",
+             "kubernetes", NamespaceArgs, k8s_autoscaling),
+    ToolSpec("k8s_storage", "PersistentVolumeClaims in a namespace: phase, capacity, storage class, conditions, the pods that mount them, and claims that are missing.",
+             "kubernetes", NamespaceArgs, k8s_storage),
     ToolSpec("prom_query", "Run a bounded PromQL query (instant or range). Show the exact query to the user.", "prometheus", PromQueryArgs, prom_query,
              extra_permission=P.METRICS_RAW_QUERY, namespace_arg=None),
     ToolSpec("prom_pod_resources", "CPU, memory, memory limit and CPU throttling for pods in a namespace (cAdvisor).", "prometheus",
              PodResourcesArgs, prom_pod_resources),
     ToolSpec("prom_alerts", "Prometheus alert rules and their active/firing instances within your scope.", "prometheus", AlertsArgs, prom_alerts,
              namespace_arg=None),
+    ToolSpec("prom_service_signals", "Golden signals of one workload (throughput, 5xx error ratio, latency p50/p95/p99) from Istio or OpenTelemetry request metrics; "
+             "queries built safely and pinned to the namespace.", "prometheus", ServiceSignalsArgs, prom_service_signals),
     ToolSpec("prom_targets", "Scrape targets that are down (cluster-scoped).", "prometheus", NoArgs, prom_targets, cluster_scoped=True, namespace_arg=None),
     ToolSpec("loki_search", "Search logs by namespace/pod/container, text, trace ID or request ID (builds LogQL).", "loki", LokiSearchArgs, loki_search),
     ToolSpec("loki_logs", "Recent logs across every permitted namespace (or one) with pod/container/level/text/trace/request filters.",

@@ -42,7 +42,7 @@ const unified = {
   remediation: [{ action: "Roll back to the previous revision", hypothesis: "H1", action_kind: "rollback_deployment", risk: "low", rollback: "roll forward", requires_approval: true, executable: false }],
   evidence_items: [
     { id: "E7", source_type: "metrics", status: "ok", stage: "telemetry", observation: "golden signals for payments", resource: { uri: "k8s://prod/shop/Deployment/payments" },
-      source_ref: { tool: "prom_service_signals", connector_type: "prometheus", query: ["histogram_quantile(0.95, …)"] }, service: "payments", timestamp: "2026-11-20T08:00:00Z",
+      source_ref: { tool: "prom_golden_signals", connector_type: "prometheus", query: ["histogram_quantile(0.95, …)"] }, service: "payments", timestamp: "2026-11-20T08:00:00Z",
       time_range: { start: "2026-11-20T07:00:00Z", end: "2026-11-20T08:00:00Z" }, confidence: { level: "high", score: 0.85, basis: ["source metrics: 0.85"] },
       access: { decision: "allow", scope: "namespace:shop", permission: "investigation.run", realm: "production", redacted: true, untrusted_content: false },
       signals: ["metric.latency_increase"], raw_ref: { api: "/investigations/i/evidence/E7" } },

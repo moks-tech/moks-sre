@@ -36,10 +36,10 @@ flowchart LR
 | 1 | Incident detection | Firing alerts in scope and the namespace's health findings; the trigger (person, schedule, alert) and the reported symptom. | `prom_alerts`, `k8s_triage` |
 | 2 | Incident classification | Categories (latency, errors, availability, saturation, deployment, data store, network, capacity) and an estimated severity, by stated rules. | nothing |
 | 3 | Resource and service identification | The workload (requested, or the worst one in the triage findings, or the one the question names), its pods by owner reference, its Service. | `k8s_rollout_history` or `k8s_workloads`, `k8s_list_pods`, `k8s_services` |
-| 4 | Metrics and logs | Golden signals, pod CPU/memory/throttling, error logs, the crashed container's last words, warning events. Dependencies from the hosts its logs could not reach. | `prom_service_signals`, `prom_pod_resources`, `loki_search`, `k8s_pod_logs`, `k8s_events` |
+| 4 | Metrics and logs | Golden signals, pod CPU/memory/throttling, error logs, the crashed container's last words, warning events. Dependencies from the hosts its logs could not reach. | `prom_golden_signals`, `prom_pod_resources`, `loki_search`, `k8s_pod_logs`, `k8s_events` |
 | 5 | Distributed traces | A trace backend when a `trace_search*` tool is registered; otherwise the trace ids on the error lines, followed across the namespace's services through Loki. | `trace_search*` or `loki_search(trace_id)` |
 | 6 | Deployment and Git changes | Rollouts in the window, configuration and missing references, commits, the running commit. | `k8s_rollout_history`, `k8s_config_audit`, `git_recent_commits`, `git_compare_deployment` |
-| 7 | ML anomaly correlation | The anomaly model's observations for the target, set against the onset. | `ml_anomalies` |
+| 7 | ML anomaly correlation | The anomaly model's observations for the target, set against the onset. | `ml_observations` |
 | 8 | Historical incidents (RAG) | Approved past incidents with similar symptoms, and postmortems about them. | `similar_incidents`, `kb_search` |
 | 9 | Semantic search | Runbooks about these symptoms, by meaning (hybrid BM25 + vectors when an embedding index answers). | `kb_search` |
 | 10 | Hypotheses | Failure patterns the evidence matches, then what the analyst agent proposes. | nothing new |
@@ -206,8 +206,8 @@ costs its contribution, not the report.
 - **RBAC and source-level authorization.** Every read goes through `Investigator._call` and the ToolExecutor, which
   recheck the person's permissions and the environment's scope at execution time and audit each call. The two new tools
   follow the same rules:
-  - `ml_anomalies` needs `ml.read` in the namespace;
-  - `prom_service_signals` runs templated, namespace-pinned queries, never raw PromQL.
+  - `ml_observations` needs `ml.read` in the namespace;
+  - `prom_golden_signals` runs templated, namespace-pinned queries, never raw PromQL.
 
   A cluster-scoped probe (nodes, DNS) is not attempted for a namespace-scoped person; the report records a gap instead.
 - **No cross-tenant leakage.**
@@ -327,7 +327,7 @@ known answers, written alongside the engine. They show behaviour, not accuracy o
   tool calls already produce the contract through the Evidence rows. Its agents can show `EvidenceItem.brief()` lines.
 - **A trace backend.** Any registered tool named `trace_search*` whose connector is configured replaces the log
   correlation in stage 5; its spans are read by `signals._traces`.
-- **ML improvements.** Stage 7 reads `ml_observations` through `ml_anomalies`. More features or models show up as more
+- **ML improvements.** Stage 7 reads the `ml_observations` table through the `ml_observations` tool (every scored window; `ml_anomalies` returns only the unusual ones, with correlation groups). More features or models show up as more
   `ml.anomaly:<feature>` signals, and patterns can name them.
 - **RAG and embeddings.** Stages 8 and 9 call `kb_search` and `similar_incidents`. A better index or reranker improves them
   with no change here, and stage 9 reports when no embedding index answered.

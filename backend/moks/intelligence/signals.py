@@ -332,7 +332,7 @@ def _resources(ref: str, st: str, data: dict) -> list[Signal]:
 
 
 def _service_signals(ref: str, st: str, data: dict) -> list[Signal]:
-    """prom_service_signals: one series per signal (tools/intelligence.py)."""
+    """prom_golden_signals: one series per signal (tools/intelligence.py)."""
     out: list[Signal] = []
     sig = data.get("signals") or {}
 
@@ -533,7 +533,7 @@ def extract(record: dict[str, Any], target: Any = None, window: tuple[datetime, 
             return _audit(ref, st, data, target)
         if tool == "prom_pod_resources" and isinstance(data, dict):
             return _resources(ref, st, data)
-        if tool == "prom_service_signals" and isinstance(data, dict):
+        if tool == "prom_golden_signals" and isinstance(data, dict):
             return _service_signals(ref, st, data)
         if tool == "loki_search" and args.get("trace_id"):
             return _trace_correlation(ref, st, data, args, target)
@@ -541,7 +541,7 @@ def extract(record: dict[str, Any], target: Any = None, window: tuple[datetime, 
             return _logs(ref, st, data, args, target)
         if tool.startswith("trace_"):
             return _traces(ref, st, data)
-        if tool == "ml_anomalies" and isinstance(data, list):
+        if tool == "ml_observations" and isinstance(data, list):
             return _anomalies(ref, st, data, target)
         if tool == "kb_search" and isinstance(data, list):
             return _knowledge(ref, st, data)

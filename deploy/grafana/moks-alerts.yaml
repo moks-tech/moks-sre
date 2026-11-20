@@ -99,3 +99,27 @@ groups:
         for: 15m
         labels: {severity: warning}
         annotations: {summary: Searches are being answered with less than was asked for}
+  # About MOKS's own ML, never about the workloads it watches: anomalies are shadow output and page no one.
+  - name: moks-ml
+    rules:
+      - alert: MoksMLModelInvalid
+        expr: increase(moks_ml_fallbacks_total{capability="anomaly_detection", reason="model_invalid"}[1h]) > 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: An anomaly model failed its artifact checks and is not scoring
+          description: Checksum, format, schema or structure. Roll the cohort back or retrain it (docs/ML.md, Roll back).
+      - alert: MoksMLChampionNeedsReview
+        expr: max by (algorithm, reason) (moks_ml_model_degraded) == 1
+        for: 2h
+        labels: {severity: info}
+        annotations:
+          summary: An anomaly champion's health check recommends a review
+          description: Flag rate above its gate, input drift, judged precision below 0.7, or a stale schema. Settings > Machine learning > Models shows which and why.
+      - alert: MoksMLContextUnreadable
+        expr: sum by (source) (increase(moks_ml_context_gaps_total[1h])) > 10
+        for: 1h
+        labels: {severity: info}
+        annotations:
+          summary: Correlation keeps failing to read context from one source
+          description: Groups still form, with fewer links. Check the connector and the automation principal's bindings.

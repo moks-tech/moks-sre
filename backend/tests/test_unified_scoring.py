@@ -53,7 +53,7 @@ def test_failed_refused_and_truncated_reads_say_so():
 def test_knowledge_and_shadow_models_are_weak_evidence():
     kb = contract.from_record(rec("E5", "kb_search", [], {"query": "pool", "k": 4}), SCOPE, now=NOW)
     assert kb.source_type == "knowledge" and kb.resource.uri.startswith("knowledge://prod") and kb.confidence.score == 0.3
-    ml = contract.from_record(rec("E6", "ml_anomalies", [{"mode": "shadow", "status": "scored"}], {"namespace": "shop", "service": "payments"}), SCOPE, now=NOW)
+    ml = contract.from_record(rec("E6", "ml_observations", [{"mode": "shadow", "status": "scored"}], {"namespace": "shop", "service": "payments"}), SCOPE, now=NOW)
     assert ml.source_type == "ml_anomaly" and ml.confidence.score == 0.35 and ml.resource.uri == "ml://prod/shop/payments"
     trace = contract.from_record(rec("E7", "loki_search", {"lines": []}, {"namespace": "shop", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"}), SCOPE, now=NOW)
     assert trace.source_type == "traces"
@@ -83,10 +83,10 @@ def test_metrics_show_presence_and_absence():
                         "request_rate": {"series": [{"metric": {"workload": "payments"}, "values": series([40.0] * 50)}]},
                         "db_connections": {"series": [{"metric": {"workload": "payments"}, "values": series([4.0] * 30 + [10.0] * 20)}]},
                         "db_connections_max": {"series": [{"metric": {"workload": "payments"}, "values": series([10.0] * 50)}]}}}
-    sig = {(s.key, s.present) for s in extract(rec("E7", "prom_service_signals", data), TARGET)}
+    sig = {(s.key, s.present) for s in extract(rec("E7", "prom_golden_signals", data), TARGET)}
     assert {("metric.latency_increase", True), ("metric.db_connections_saturated", True), ("metric.db_connections_increase", True)} <= sig
     assert ("metric.error_rate_increase", False) in sig and ("metric.traffic_surge", False) in sig
-    onset = next(s for s in extract(rec("E7", "prom_service_signals", data), TARGET) if s.key == "metric.latency_increase").at
+    onset = next(s for s in extract(rec("E7", "prom_golden_signals", data), TARGET) if s.key == "metric.latency_increase").at
     assert onset == datetime.fromtimestamp(series([0] * 31)[30][0], timezone.utc)
 
 
@@ -128,7 +128,7 @@ def pool_world(contradict: bool = False) -> tuple[list[Signal], dict]:
            Signal("history.cause:connection_pool", "E15", "historical_incident", value=0.6)]
     if contradict:
         sig.append(Signal("log.dns_failure", "E9", "logs", at=at))
-    items = {"E7": item("E7", "prom_service_signals", {"namespace": "shop", "workload": "payments"}), "E8": item("E8", "loki_search", {"namespace": "shop", "pod": "payments-7f9c8d5b6-abcde"}),
+    items = {"E7": item("E7", "prom_golden_signals", {"namespace": "shop", "workload": "payments"}), "E8": item("E8", "loki_search", {"namespace": "shop", "pod": "payments-7f9c8d5b6-abcde"}),
              "E3": item("E3", "k8s_rollout_history", {"namespace": "shop", "deployment": "payments"}), "E15": item("E15", "similar_incidents", {"k": 5}),
              "E9": item("E9", "loki_search", {"namespace": "shop", "pod": "payments-7f9c8d5b6-abcde", "contains": "dns"})}
     return sig, items
@@ -171,10 +171,10 @@ def test_a_cause_after_its_effect_scores_low_on_timing():
 
 def test_missing_evidence_says_whether_it_was_read():
     sig = [Signal("metric.latency_increase", "E7", "metrics", at=NOW)]
-    items = {"E7": item("E7", "prom_service_signals", {"namespace": "shop"})}
+    items = {"E7": item("E7", "prom_golden_signals", {"namespace": "shop"})}
     [h] = [x for x in hy.generate(sig, "payments") if x.pattern == "connection_pool_exhaustion"]
     unread = scoring.score(h, sig, scoring.Context(items=items, probe_tools={k: (p.tool,) for k, p in PROBES.items()}), None)
-    read = scoring.score(h, sig, scoring.Context(items=items, read_tools={"prom_service_signals"}, probe_tools={k: (p.tool,) for k, p in PROBES.items()}), None)
+    read = scoring.score(h, sig, scoring.Context(items=items, read_tools={"prom_golden_signals"}, probe_tools={k: (p.tool,) for k, p in PROBES.items()}), None)
     miss = lambda s: next(p for p in s["penalties"] if p["name"] == "missing_evidence")  # noqa: E731
     assert miss(unread)["value"] == scoring.MISSING_UNREAD and "not collected" in miss(unread)["explanation"]
     assert miss(read)["value"] == scoring.MISSING_INCONCLUSIVE and "inconclusive" in miss(read)["explanation"]
@@ -197,7 +197,7 @@ def test_a_symptom_is_explained_by_the_cause_and_a_cause_is_not_explained_by_its
     at = NOW - timedelta(minutes=20)
     sig = [Signal("metric.traffic_surge", "E1", "metrics", at=at), Signal("metric.latency_increase", "E1", "metrics", at=at), Signal("metric.cpu_throttling", "E2", "metrics", at=at),
            Signal("k8s.probe_failed", "E3", "kubernetes", at=at)]
-    items = {r: item(r, t, {"namespace": "shop", "pod": "payments-7f9c8d5b6-abcde"}) for r, t in (("E1", "prom_service_signals"), ("E2", "prom_pod_resources"), ("E3", "k8s_events"))}
+    items = {r: item(r, t, {"namespace": "shop", "pod": "payments-7f9c8d5b6-abcde"}) for r, t in (("E1", "prom_golden_signals"), ("E2", "prom_pod_resources"), ("E3", "k8s_events"))}
     ranked = scored(sig, items)
     scoring.explain_away(ranked)
     by = {h.pattern: h for h in ranked}

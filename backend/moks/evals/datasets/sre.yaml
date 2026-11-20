@@ -1,0 +1,479 @@
+name: sre
+kind: rag
+version: 1
+description: >-
+  SRE retrieval over a realistic, synthetic operations corpus (runbooks, postmortems, alert rules, manifests, Helm values,
+  Terraform, Grafana dashboards, an OpenAPI description, a README, a log). Compares search as it was (format-only
+  splitting, no query signals, rank-order context) with search as configured now, on the same questions.
+compare: true
+min_recall: 0.8
+sources:
+  redis: {service: redis, applies_to: {dependency_of: [payments, cart]}}
+  payments: {service: payments}
+  cart: {service: cart}
+  orders: {service: orders}
+  rabbitmq: {service: rabbitmq, applies_to: {dependency_of: [orders]}}
+documents:
+  - id: rb-payments-5xx
+    source: payments
+    age_days: 40
+    path: runbooks/payments-5xx.md
+    text: |
+      # Payments returning 5xx
+
+      ## Symptoms
+      PaymentsHighErrorRate fires and checkout shows "payment failed". The payments pods are Ready but requests fail.
+
+      ## Diagnosis
+      1. Check the ledger latency panel on the Payments dashboard. Ledger calls above 2 s exhaust the connection pool.
+      2. Look for "HikariPool-1 - Connection is not available" in the payments logs.
+      3. Compare DB_POOL_SIZE in the deployment with the database max_connections share for payments.
+
+      ## Mitigation
+      1. If a release went out in the last hour, roll it back with the deploy pipeline.
+      2. Otherwise raise DB_POOL_SIZE back to 20 and restart the payments deployment.
+      3. Watch the error rate for 15 minutes before closing the incident.
+  - id: rb-oom
+    age_days: 120
+    path: runbooks/oomkilled.md
+    text: |
+      # OOMKilled containers
+
+      A container killed for memory exits with code 137 and reason OOMKilled.
+
+      ## Diagnosis
+      1. Run kubectl describe pod and read Last State: Terminated, Reason: OOMKilled.
+      2. Compare the container working set with its memory limit over the last day.
+      3. Check whether memory grows steadily after a release, which points at a leak rather than a spike.
+
+      ## Mitigation
+      1. For a leak, roll back the release and open a bug with a heap profile.
+      2. For a real need, raise the memory limit and the request together.
+  - id: rb-rabbitmq-backlog
+    source: rabbitmq
+    age_days: 60
+    path: runbooks/rabbitmq-queue-backlog.md
+    text: |
+      # RabbitMQ queue backlog
+
+      ## Symptoms
+      RabbitMQQueueBacklog fires when messages ready stay above the threshold. Orders are accepted but not processed.
+
+      ## Diagnosis
+      1. Open the RabbitMQ dashboard and compare queue depth with the number of consumers.
+      2. If consumers are zero, the consumer deployment is crash-looping; check its pods first.
+      3. If consumers are connected, check the prefetch count and the unacked messages panel.
+
+      ## Mitigation
+      1. Scale the consumer deployment out; each consumer takes the prefetch count of messages at a time.
+      2. Messages that fail three times go to the dead letter queue orders.dlq; inspect them before replaying.
+  - id: rb-eks-node-pressure
+    age_days: 90
+    path: runbooks/eks-node-pressure.md
+    text: |
+      # EKS node pressure
+
+      ## Symptoms
+      KubeNodeMemoryPressure or DiskPressure fires, and the kubelet starts evicting pods.
+
+      ## Diagnosis
+      1. Run kubectl describe node and read the Conditions for MemoryPressure and DiskPressure.
+      2. Find the pods with the largest working set on that node.
+      3. Check whether the cluster autoscaler could add a node to the managed node group.
+
+      ## Mitigation
+      1. Cordon the node and drain it so its pods reschedule.
+      2. If the node group is at max size, raise max_size in the Terraform node group and apply.
+  - id: rb-redis-failover
+    source: redis
+    age_days: 200
+    path: runbooks/redis-failover.md
+    text: |
+      # Redis failover
+
+      ## Mitigation
+      1. Check replication lag on the replica.
+      2. Promote the replica with REPLICAOF NO ONE.
+      3. Repoint the sentinel at the new primary and confirm clients reconnect.
+  - id: rb-rollback-old
+    age_days: 400
+    path: runbooks/rollback-legacy.md
+    text: |
+      ---
+      superseded_by: runbooks/rollback.md
+      ---
+      # Rolling back a deployment
+
+      Roll back the deployment with the legacy deploy.sh script and the previous image tag.
+  - id: rb-rollback
+    age_days: 3
+    path: runbooks/rollback.md
+    text: |
+      # Rolling back a deployment
+
+      Roll back the deployment with the deploy pipeline: choose the previous release and watch the rollout status.
+  - id: pm-cart-oom
+    source: cart
+    age_days: 37
+    path: postmortems/2026-10-14-cart-oomkilled.md
+    text: |
+      # Postmortem: cart pods OOMKilled
+
+      ## Summary
+      Cart pods were OOMKilled repeatedly for 45 minutes after the 2.3 release, and carts emptied for some users.
+
+      ## Timeline
+      - 09:12 KubeContainerOOMKilled fired for cart
+      - 09:20 on-call saw memory climbing on every cart pod
+      - 09:57 release 2.3 rolled back, memory flat again
+
+      ## Root cause
+      Release 2.3 kept every session in an in-process session cache with no eviction, so memory grew until the 512Mi limit.
+
+      ## Action items
+      - Bound the session cache and move it to Redis.
+  - id: pm-payments-outage
+    source: payments
+    age_days: 79
+    path: postmortems/2026-09-02-payments-outage.md
+    text: |
+      # Postmortem: payments outage
+
+      ## Summary
+      Payments returned 503 for 22 minutes; about 4% of checkouts failed.
+
+      ## Timeline
+      - 14:02 PaymentsHighErrorRate fired
+      - 14:10 logs showed HikariPool-1 - Connection is not available
+      - 14:24 DB_POOL_SIZE restored to 20
+
+      ## Root cause
+      A configuration change reduced the database pool size from 20 to 5 while ledger latency was high.
+  - id: pm-orders-backlog
+    source: orders
+    age_days: 91
+    path: postmortems/2026-08-21-orders-backlog.md
+    text: |
+      # Postmortem: orders queue backlog
+
+      ## Summary
+      Orders stayed in the orders.created queue for 70 minutes.
+
+      ## Root cause
+      The orders consumer crash-looped on a malformed message, so no consumer was connected; the message went to orders.dlq only after three tries.
+  - id: alerts-payments
+    source: payments
+    age_days: 50
+    path: monitoring/alerts/payments.yaml
+    text: |
+      groups:
+        - name: payments
+          rules:
+            - alert: PaymentsHighErrorRate
+              expr: sum(rate(http_requests_total{job="payments",code=~"5.."}[5m])) / sum(rate(http_requests_total{job="payments"}[5m])) > 0.05
+              for: 10m
+              labels:
+                severity: critical
+              annotations:
+                summary: Payments error rate above 5%
+                runbook_url: https://runbooks.example.com/payments-5xx
+            - alert: PaymentsLatencyHigh
+              expr: histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job="payments"}[5m]))) > 2
+              for: 15m
+              labels:
+                severity: warning
+  - id: alerts-k8s
+    age_days: 70
+    path: monitoring/alerts/kubernetes.yaml
+    text: |
+      apiVersion: monitoring.coreos.com/v1
+      kind: PrometheusRule
+      metadata:
+        name: kubernetes-apps
+        namespace: monitoring
+      spec:
+        groups:
+          - name: kubernetes-apps
+            rules:
+              - alert: KubePodCrashLooping
+                expr: max_over_time(kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"}[5m]) >= 1
+                for: 15m
+                labels:
+                  severity: warning
+              - alert: KubeContainerOOMKilled
+                expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+                for: 0m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: A container was killed for running out of memory
+          - name: kubernetes-nodes
+            rules:
+              - alert: KubeNodeMemoryPressure
+                expr: kube_node_status_condition{condition="MemoryPressure",status="true"} == 1
+                for: 5m
+                labels:
+                  severity: critical
+  - id: alerts-rabbitmq
+    source: rabbitmq
+    age_days: 65
+    path: monitoring/alerts/rabbitmq.yaml
+    text: |
+      groups:
+        - name: rabbitmq
+          rules:
+            - alert: RabbitMQQueueBacklog
+              expr: sum by (queue) (rabbitmq_queue_messages_ready) > 10000
+              for: 10m
+              labels:
+                severity: warning
+              annotations:
+                summary: Queue {{ $labels.queue }} has more than 10000 ready messages
+  - id: k8s-payments
+    source: payments
+    age_days: 0
+    path: deploy/payments/deployment.yaml
+    text: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: payments
+        namespace: shop
+      spec:
+        replicas: 3
+        template:
+          spec:
+            containers:
+              - name: payments
+                image: registry.example.com/payments:4.1.0
+                env:
+                  - name: REDIS_HOST
+                    value: redis-master.shop.svc
+                  - name: DB_POOL_SIZE
+                    value: "12"
+                resources:
+                  limits:
+                    memory: 1Gi
+      ---
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: payments
+        namespace: shop
+      spec:
+        ports:
+          - port: 80
+            targetPort: 8080
+  - id: k8s-cart
+    source: cart
+    age_days: 30
+    path: deploy/cart/deployment.yaml
+    text: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: cart
+        namespace: shop
+      spec:
+        replicas: 2
+        template:
+          spec:
+            containers:
+              - name: cart
+                image: registry.example.com/cart:2.4.1
+                env:
+                  - name: REDIS_HOST
+                    value: redis-master.shop.svc
+                resources:
+                  requests:
+                    memory: 256Mi
+                  limits:
+                    memory: 512Mi
+  - id: k8s-orders
+    source: orders
+    age_days: 45
+    path: deploy/orders/deployment.yaml
+    text: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: orders-consumer
+        namespace: shop
+      spec:
+        replicas: 4
+        template:
+          spec:
+            containers:
+              - name: consumer
+                image: registry.example.com/orders:7.0.2
+                env:
+                  - name: RABBITMQ_URL
+                    value: amqp://rabbitmq.messaging.svc:5672
+                  - name: QUEUE_NAME
+                    value: orders.created
+                  - name: PREFETCH_COUNT
+                    value: "50"
+  - id: helm-redis
+    source: redis
+    age_days: 150
+    path: charts/redis/values.yaml
+    text: |
+      architecture: replication
+      auth:
+        enabled: true
+      master:
+        persistence:
+          enabled: true
+          size: 8Gi
+      replica:
+        replicaCount: 2
+      sentinel:
+        enabled: true
+        quorum: 2
+  - id: tf-eks
+    age_days: 100
+    path: infra/eks/main.tf
+    text: |
+      resource "aws_eks_node_group" "general" {
+        cluster_name    = aws_eks_cluster.main.name
+        node_group_name = "general"
+        instance_types  = ["m6g.large"]
+        scaling_config {
+          desired_size = 3
+          min_size     = 3
+          max_size     = 6
+        }
+      }
+
+      resource "aws_eks_addon" "vpc_cni" {
+        cluster_name = aws_eks_cluster.main.name
+        addon_name   = "vpc-cni"
+      }
+  - id: dash-rabbitmq
+    source: rabbitmq
+    age_days: 80
+    path: grafana/rabbitmq.json
+    text: |
+      {"title": "RabbitMQ", "uid": "rabbitmq", "tags": ["messaging"], "schemaVersion": 39, "panels": [
+        {"type": "row", "title": "Queues", "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}, "panels": [
+          {"type": "timeseries", "title": "Queue depth", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1}, "targets": [{"refId": "A", "expr": "sum by (queue) (rabbitmq_queue_messages_ready)", "legendFormat": "{{queue}}"}],
+           "fieldConfig": {"defaults": {"unit": "short", "color": {"mode": "palette-classic"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 10000}]}}}},
+          {"type": "timeseries", "title": "Unacked messages", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1}, "targets": [{"refId": "A", "expr": "sum by (queue) (rabbitmq_queue_messages_unacked)"}]}]},
+        {"type": "stat", "title": "Consumers", "gridPos": {"h": 4, "w": 6, "x": 0, "y": 9}, "targets": [{"refId": "A", "expr": "sum by (queue) (rabbitmq_queue_consumers)"}]}]}
+  - id: dash-payments
+    source: payments
+    age_days: 85
+    path: grafana/payments.json
+    text: |
+      {"title": "Payments", "uid": "payments", "schemaVersion": 39, "panels": [
+        {"type": "timeseries", "title": "Error rate", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "targets": [{"refId": "A", "expr": "sum(rate(http_requests_total{job=\"payments\",code=~\"5..\"}[5m]))"}]},
+        {"type": "timeseries", "title": "p99 latency", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "targets": [{"refId": "A", "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"payments\"}[5m])))"}], "fieldConfig": {"defaults": {"unit": "s"}}},
+        {"type": "timeseries", "title": "Ledger latency", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(ledger_call_duration_seconds_bucket[5m])))"}]}]}
+  - id: api-payments
+    source: payments
+    age_days: 110
+    path: api/payments-openapi.yaml
+    text: |
+      openapi: 3.0.3
+      info:
+        title: Payments API
+        version: 4.1.0
+      paths:
+        /payments:
+          post:
+            operationId: createPayment
+            summary: Charge a card
+            responses:
+              "201":
+                description: payment created
+              "409":
+                description: a payment with this Idempotency-Key already exists; retrying with the same key is safe
+        /payments/{id}:
+          get:
+            operationId: getPayment
+            responses:
+              "404":
+                description: no payment with this id
+      components:
+        schemas:
+          Payment:
+            type: object
+            properties:
+              amount: {type: integer}
+  - id: readme-orders
+    source: orders
+    age_days: 130
+    path: services/orders/README.md
+    text: |
+      # Orders service
+
+      The orders consumer reads the orders.created queue on RabbitMQ and writes each order to PostgreSQL.
+      It acknowledges a message only after the database commit, so a crash redelivers the message.
+  - id: arch-deps
+    age_days: 140
+    path: docs/architecture/dependencies.md
+    text: |
+      # Service dependencies
+
+      | Service | Depends on |
+      | payments | Redis (idempotency keys), PostgreSQL, ledger |
+      | cart | Redis (sessions) |
+      | orders | RabbitMQ (orders.created), PostgreSQL |
+
+      Redis is shared by payments and cart; a Redis failover affects both.
+  - id: log-payments
+    source: payments
+    age_days: 0
+    path: logs/payments-2026-11-20.log
+    text: |
+      2026-11-20T09:58:01Z INFO payments request id=8812 POST /payments
+      2026-11-20T09:58:03Z ERROR payments charge failed id=8812
+      java.sql.SQLTransientConnectionException: HikariPool-1 - Connection is not available, request timed out after 30000ms.
+          at com.zaxxer.hikari.pool.HikariPool.createTimeoutException(HikariPool.java:696)
+          at com.example.payments.Ledger.charge(Ledger.java:88)
+      2026-11-20T09:58:04Z WARN payments retrying charge id=8812
+  - id: billing-secret
+    environment: prod
+    namespace: billing
+    age_days: 20
+    path: runbooks/ledger-keys.md
+    text: |
+      # Ledger signing key rotation
+      Rotate the ledger signing key for billing with the vault procedure.
+bindings: {reader: [["investigator", "prod", "shop"], ["investigator", "prod", "messaging"], ["investigator", "prod", "monitoring"]], everything: [["investigator", "*", "*"]]}
+defaults: {environment: prod, namespace: shop}
+not_applicable:
+  vector_retrieval: The evaluation realm has no embedding model, by design, so vector ranking is not measured. Search reports this as mode keyword.
+  injection_with_a_model: These runs call no model, so how a real model behaves on reading injected text is not measured.
+  injection: Injection through retrieved text is gated by the rag dataset; this one measures retrieval quality on operations documents.
+  conflicts: Conflicting documents are gated by the rag dataset; this corpus has none on purpose, so rankings are not confounded by them.
+cases:
+  - {id: why-payments-failing, query: "Why is payment-service failing with 5xx errors?", as: reader, relevant: [rb-payments-5xx, alerts-payments, pm-payments-outage], facts: ["HikariPool", "DB_POOL_SIZE"]}
+  - {id: what-changed-last-hour, query: "What changed for payments in the last hour?", as: reader, relevant: [k8s-payments, log-payments], facts: ["DB_POOL_SIZE"]}
+  - {id: similar-oomkilled-incidents, query: "Find similar OOMKilled incidents", as: everything, relevant: [pm-cart-oom], facts: ["session cache"]}
+  - {id: rabbitmq-backlog, query: "How do I troubleshoot RabbitMQ backlog?", as: everything, relevant: [rb-rabbitmq-backlog, alerts-rabbitmq, dash-rabbitmq], facts: ["prefetch", "consumers"]}
+  - {id: who-depends-on-redis, query: "Which services depend on Redis?", as: everything, relevant: [arch-deps, k8s-payments, k8s-cart], facts: ["Redis is shared by payments and cart"], dependents: {redis: [cart, payments]}}
+  - {id: eks-node-pressure-runbook, query: "Find the runbook for EKS node pressure", as: everything, relevant: [rb-eks-node-pressure], first: rb-eks-node-pressure, facts: ["Cordon the node"]}
+  - {id: oomkilled-alert, query: "Which alert fires when a container is OOMKilled?", as: everything, relevant: [alerts-k8s], facts: ["KubeContainerOOMKilled"]}
+  - {id: rabbitmq-alert-threshold, query: "What threshold does the RabbitMQ backlog alert use?", as: everything, relevant: [alerts-rabbitmq], facts: ["10000"]}
+  - {id: queue-depth-panel, query: "Which Grafana panel shows RabbitMQ queue depth?", as: everything, relevant: [dash-rabbitmq], facts: ["rabbitmq_queue_messages_ready"]}
+  - {id: payments-409, query: "What does a 409 from POST /payments mean?", as: reader, relevant: [api-payments], facts: ["Idempotency-Key"]}
+  - {id: hikari-exact, query: "HikariPool-1 - Connection is not available", as: reader, relevant: [log-payments, pm-payments-outage, rb-payments-5xx], exact: true}
+  - {id: orders-queue, query: "Which queue does the orders service consume from?", as: everything, relevant: [readme-orders, k8s-orders], facts: ["orders.created"]}
+  - {id: eks-instance-types, query: "What instance types does the EKS node group use?", as: everything, relevant: [tf-eks], facts: ["m6g.large"]}
+  - {id: redis-failover, query: "How do I fail over Redis?", as: reader, relevant: [rb-redis-failover], facts: ["REPLICAOF NO ONE"],
+     claims: [{text: "promote the replica with REPLICAOF NO ONE", supported: true}, {text: "ERR_CART_7001 means flush the Redis cache", supported: false}]}
+  - {id: cart-memory-limit, query: "What is the memory limit of the cart deployment?", as: reader, relevant: [k8s-cart], facts: ["512Mi"]}
+  - {id: rollback-current-first, query: "How do I roll back a deployment?", as: everything, relevant: [rb-rollback], first: rb-rollback, flagged: {rb-rollback-old: superseded}, gate: freshness}
+  - {id: oom-what-to-check, query: "payments pod OOMKilled exit code 137, what should I check?", as: everything, relevant: [rb-oom], facts: ["working set"]}
+  - {id: node-memory-pressure-firing, query: "KubeNodeMemoryPressure is firing on prod nodes", as: everything, relevant: [alerts-k8s, rb-eks-node-pressure], facts: ["kubectl describe node"]}
+  - {id: payments-outage-root-cause, query: "What was the root cause of the payments outage?", as: reader, relevant: [pm-payments-outage], facts: ["pool size from 20 to 5"]}
+  - {id: dead-letter, query: "orders messages ending up in the dead letter queue", as: everything, relevant: [pm-orders-backlog, rb-rabbitmq-backlog], facts: ["orders.dlq"]}
+  - {id: p99-latency-panel, query: "p99 latency panel for payments", as: reader, relevant: [dash-payments], facts: ["histogram_quantile(0.99"]}
+  - {id: alert-to-runbook, query: "PaymentsHighErrorRate runbook", as: reader, relevant: [alerts-payments, rb-payments-5xx], facts: ["runbook_url"]}
+  - {id: redis-persistence, query: "Is Redis persistence enabled in the Helm values?", as: reader, relevant: [helm-redis], facts: ["persistence"]}
+  - {id: cart-oom-before, query: "Has the cart service been OOMKilled before?", as: reader, relevant: [pm-cart-oom], facts: ["512Mi limit"]}
+  - {id: only-runbooks, query: "rabbitmq consumers", as: everything, filters: {doc_types: [runbook]}, relevant: [rb-rabbitmq-backlog], gate: filters}
+  - {id: only-recent, query: "payments", as: reader, filters: {changed_since_days: 1}, relevant: [k8s-payments, log-payments], gate: filters}
+  - {id: billing-stays-out, query: "ledger signing key rotation", as: reader, forbidden: [billing-secret], gate: isolation}
+  - {id: unrelated-abstains, query: "quarterly marketing budget forecast", as: reader, answer: [none, weak], gate: abstention}

@@ -98,6 +98,11 @@ crewai:
   maxConcurrent: 2          # crews per worker pod
   excerptChars: 2000
   logLines: 100
+  # The CrewAI worker's run time limit (its MOKS_MAX_DURATION_SECONDS, and what the api checks the crews' time limits
+  # against). The incident flow (docs/crewai-sre-engine.md) runs eight steps and defaults to 600 s; config.maxDurationSeconds
+  # stays the limit of every other worker.
+  maxDurationSeconds: 600
+  fallback: langgraph       # when the incident flow cannot start: run the standard investigation (langgraph) or fail (none)
 
 # Machine learning (docs/ML.md). Capability modes (disabled, shadow, enabled) are switched in Settings > Features
 # and stored in PostgreSQL; these bound the work. ml.disabled is the deploy-time kill switch for all of it.
@@ -115,7 +120,21 @@ ml:
     maxCohorts: 40
     concurrency: 2
     intervalMinutes: 15
-    maxFlagsPerDay: 3
+    maxFlagsPerDay: 3       # promotion gate: alarms (runs of consecutive flagged ticks) per day on the validation period
+    rateWindowSeconds: 300  # rate() window for every counter feature; never below stepSeconds
+    lookbackHours: 24       # history read before the window, only for online detectors (rolling, EWMA, decomposition)
+    persistPoints: 2        # a feature is flagged only when it stays past its threshold this many points in a row
+    minSyntheticRecall: 0.5 # promotion gate: share of faults injected into the validation data that are found
+    maxDetectionDelayMinutes: 45  # promotion gate: median delay on those faults
+    requestMetric: http_requests_total                     # the application's counter; Istio's istio_requests_total is the fallback
+    durationMetric: http_request_duration_seconds_bucket
+    queueDepthMetric: ""    # a gauge with namespace and pod labels; empty leaves queue_depth absent
+    dbConnectionsMetric: "" # a gauge with namespace and pod labels; empty leaves db_connections absent
+  correlation:
+    windowMinutes: 30       # anomalies first flagged further apart than this are never grouped
+    lookbackMinutes: 120    # how far back each tick regroups
+    closeAfterMinutes: 60   # a group with no new anomaly for this long is closed
+    maxNamespaces: 5        # context (calls, pods, rollouts, events, logs) is read for at most this many namespaces per tick
   artifactStore: postgres   # or s3, through the backup client: set artifactBucket (and endpoint/region for R2)
   artifactBucket: ""
   artifactEndpoint: ""

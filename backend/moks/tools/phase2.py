@@ -186,16 +186,21 @@ async def git_compare_deployment(ctx: ToolContext, a: CompareDeployArgs) -> Tool
 # ---- Knowledge (RAG) -------------------------------------------------------------------------
 
 
+KB_TYPES = Literal["runbook", "postmortem", "investigation", "documentation", "readme", "k8s_manifest", "helm_values", "helm_template", "terraform", "alert_rules",
+                   "dashboard", "openapi", "ci_pipeline", "dockerfile", "code", "config", "log"]
+
+
 class KbArgs(ToolArgs):
     query: str = Field(min_length=2, max_length=500, description="What to look for in runbooks, docs, manifests and postmortems")
     k: int = Field(default=6, ge=1, le=12)
+    doc_types: list[KB_TYPES] = Field(default_factory=list, max_length=6, description="only these kinds of document, e.g. runbook, alert_rules, postmortem")
 
 
 async def kb_search(ctx: ToolContext, a: KbArgs) -> ToolResult:
     from ..rag import service
 
     async with session_scope() as db:
-        r = await service.search(db, ctx.principal, a.query, a.k, environment=ctx.environment.name, namespace=ctx.focus_namespace, neighbors=True)
+        r = await service.search(db, ctx.principal, a.query, a.k, environment=ctx.environment.name, namespace=ctx.focus_namespace, neighbors=True, doc_types=list(a.doc_types) or None)
     hits = r["results"]
     ranking = {h["chunk_id"]: h.pop("ranking") for h in hits if "ranking" in h}  # for the evidence view, not for the model
     summary = f"{len(hits)} knowledge passages ({r.get('mode')}) for {a.query!r}. Documented knowledge only: current state needs live evidence."
@@ -229,6 +234,52 @@ async def similar_incidents(ctx: ToolContext, a: SimilarArgs) -> ToolResult:
     summary = (f"{len(hits)} similar approved incident(s) of {r.get('considered', 0)} considered. " if hits else f"No similar approved incident ({r.get('reason', 'none matched')}). ") + similar.NOTE
     return ToolResult(summary, hits, {"mode": r["mode"], "considered": r.get("considered"), "text": r.get("text"), "method": r.get("method"), "note": similar.NOTE,
                                       "scope": {"environment": ctx.environment.name, "namespace": ctx.focus_namespace or None}})
+
+
+class MLSignalArgs(ToolArgs):
+    namespace: str = Field(pattern=K8S_NAME, max_length=63)
+    workload: str | None = Field(default=None, pattern=K8S_NAME, max_length=253, description="one workload; empty for the whole namespace")
+    minutes: int = Field(default=120, ge=15, le=1440, description="look back this many minutes from the end of the investigation window")
+
+
+async def ml_anomalies(ctx: ToolContext, a: MLSignalArgs) -> ToolResult:
+    """Shadow-mode anomalies and correlation groups for the target, under the person's ml.read. Read-only."""
+    from ..ml import signals
+
+    async with session_scope() as db:
+        r = await signals.for_target(db, ctx.principal, ctx.environment.name, a.namespace, a.workload, ctx.time_to, a.minutes)
+    if r["status"] == "disabled":
+        raise ConnectorError("config", "ML anomaly detection is disabled (ML capability anomaly_detection)")
+    what = f"{a.namespace}/{a.workload}" if a.workload else a.namespace
+    if r["status"] == "no_models":
+        summary = f"No anomaly model covers {what} yet (none trained and promoted). "
+    elif r["status"] == "nothing_unusual":
+        summary = f"No ML anomaly for {what} in the last {a.minutes} minutes. "
+    else:
+        summary = f"{len(r['anomalies'])} ML anomaly(ies) and {len(r['groups'])} correlation group(s) for {what}. "
+    return ToolResult(summary + signals.NOTE, {"anomalies": r["anomalies"], "groups": r["groups"], "models": r.get("models", [])},
+                      {"mode": r.get("mode"), "status": r["status"], "window": r.get("window"), "note": signals.NOTE,
+                       "scope": {"environment": ctx.environment.name, "namespace": a.namespace, "workload": a.workload}})
+
+
+class HistoryArgs(ToolArgs):
+    namespace: str = Field(pattern=K8S_NAME, max_length=63)
+    service: str | None = Field(default=None, pattern=K8S_NAME, max_length=253, description="one workload or service; empty for the namespace")
+    days: int = Field(default=180, ge=7, le=730)
+
+
+async def incident_history(ctx: ToolContext, a: HistoryArgs) -> ToolResult:
+    """Recurring failures, repeated infrastructure problems, frequently affected services, runbooks and resolutions that
+    worked, from reviewed incidents the person may read. Read-only."""
+    from ..ml import history
+
+    async with session_scope() as db:
+        r = await history.summarize(db, ctx.principal, environment=ctx.environment.name, namespace=a.namespace, service=a.service, days=a.days)
+    what = f"{a.namespace}/{a.service}" if a.service else a.namespace
+    summary = (f"{r['records']} reviewed incident(s) for {what} in {a.days} days: {len(r.get('recurring') or [])} recurring pattern(s), "
+               f"{len(r.get('what_worked') or [])} verified resolution(s), {len(r.get('runbooks') or [])} runbook lead(s). ") + history.NOTE
+    return ToolResult(summary, {k: r.get(k) for k in ("recurring", "infrastructure", "services", "runbooks", "what_worked")},
+                      {"scope": r["scope"], "sources": r.get("sources"), "note": history.NOTE, "reason": r.get("reason")})
 
 
 # ---- FinOps -----------------------------------------------------------------------------------
@@ -491,6 +542,11 @@ TOOLS: list[ToolSpec] = [
     ToolSpec("kb_search", "Search runbooks, docs, manifests and approved postmortems you may read (cited passages).", "knowledge", KbArgs, kb_search, namespace_arg=None),
     ToolSpec("similar_incidents", "Approved past incidents with similar symptoms, signatures and services, with what differs and how they were resolved. "
              "Historical leads only: never evidence of the current cause.", "knowledge", SimilarArgs, similar_incidents, namespace_arg=None),  # ml.read is checked per incident in ml.similar
+    ToolSpec("ml_anomalies", "Shadow-mode ML anomalies for a namespace or workload (type, resource, detection time, baseline, observed value, deviation, model "
+             "version, confidence, validation status) and the correlation groups it belongs to. Statistical leads, never observations or causes.",
+             "ml", MLSignalArgs, ml_anomalies),  # ml.read is checked per row in ml.signals
+    ToolSpec("incident_history", "Recurring failures, repeated infrastructure problems, frequently affected services, runbooks and resolutions that worked, "
+             "from reviewed incidents you may read. History, not evidence of the current state.", "knowledge", HistoryArgs, incident_history),
     ToolSpec("finops_aws_costs", "AWS cost by service/account/region/usage type/tag (Cost Explorer, cached).", "aws_cost", CostArgs, finops_aws_costs,
              cluster_scoped=True, namespace_arg=None, extra_permission=P.FINOPS_READ),
     ToolSpec("finops_aws_forecast", "AWS cost forecast.", "aws_cost", DaysArgs, finops_aws_forecast, cluster_scoped=True, namespace_arg=None, extra_permission=P.FINOPS_READ),

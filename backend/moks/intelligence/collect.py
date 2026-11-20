@@ -86,7 +86,7 @@ def _deps(c: "Collector") -> str:
 
 
 PROBES: dict[str, Probe] = {p.key: p for p in (
-    Probe("service_signals", "prom_service_signals", "golden signals (latency, errors, traffic, database connections)",
+    Probe("service_signals", "prom_golden_signals", "golden signals (latency, errors, traffic, database connections)",
           lambda c: {"namespace": c.target.namespace, **({"workload": c.target.workload} if c.target.workload else {}), "minutes": c.target.minutes}),
     Probe("pod_metrics", "prom_pod_resources", "CPU, memory and throttling of the target's pods",
           lambda c: {"namespace": c.target.namespace, "pod_regex": _pods_or(c), "minutes": max(5, c.target.minutes)}),
@@ -110,7 +110,7 @@ PROBES: dict[str, Probe] = {p.key: p for p in (
           lambda c: {"namespace": c.target.namespace, "pod": _deps(c), "errors_only": True, "limit": LOG_LINES, "minutes": c.target.minutes}),
     Probe("nodes", "k8s_nodes", "node conditions (needs cluster-wide access)", lambda c: {}),
     Probe("dns", "k8s_dns_health", "CoreDNS health (needs cluster-wide access)", lambda c: {}),
-    Probe("anomalies", "ml_anomalies", "anomaly-model observations",
+    Probe("anomalies", "ml_observations", "anomaly-model observations",
           lambda c: {"namespace": c.target.namespace, **({"service": c.target.workload} if c.target.workload else {}), "minutes": max(15, c.target.minutes)}),
 )}
 PROBE_TOOLS = {k: (p.tool,) for k, p in PROBES.items()}
@@ -365,7 +365,7 @@ async def telemetry(c: Collector, st: StageState) -> None:
     if c.ctx.available("prometheus"):
         if rx:
             await c.call(st, "prom_pod_resources", {"namespace": t.namespace, "pod_regex": rx, "minutes": max(5, t.minutes)}, "CPU, memory and throttling of the target's pods")
-        await c.call(st, "prom_service_signals", {"namespace": t.namespace, **({"workload": t.workload} if t.workload else {}), "minutes": t.minutes}, "golden signals")
+        await c.call(st, "prom_golden_signals", {"namespace": t.namespace, **({"workload": t.workload} if t.workload else {}), "minutes": t.minutes}, "golden signals")
     if c.ctx.available("loki") and (rx or not t.workload):
         await c.call(st, "loki_search", {"namespace": t.namespace, **({"pod": rx} if rx else {}), "errors_only": True, "limit": LOG_LINES, "minutes": t.minutes}, "error logs of the target")
     restarted = sorted((p for p in c.member_pods() if (p.get("restarts") or 0) > 0), key=lambda p: -(p.get("restarts") or 0))[:2]
@@ -427,7 +427,7 @@ async def changes(c: Collector, st: StageState) -> None:
 
 async def anomalies(c: Collector, st: StageState) -> None:
     t = c.target
-    await c.call(st, "ml_anomalies", {"namespace": t.namespace, **({"service": t.workload} if t.workload else {}), "minutes": max(15, t.minutes), "limit": 20},
+    await c.call(st, "ml_observations", {"namespace": t.namespace, **({"service": t.workload} if t.workload else {}), "minutes": max(15, t.minutes), "limit": 20},
                  "anomaly-model observations for the target")
     c.refresh()
 

@@ -1373,6 +1373,201 @@
           }
         }
       ]
+    },
+    {
+      "type": "row",
+      "title": "ML anomaly detection (shadow: shown and judged, never acted on)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 104
+      },
+      "panels": []
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Observations by status",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 105
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(moks_ml_observations_total[1h]))",
+          "legendFormat": "{{status}}",
+          "refId": "A"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Flagged windows by algorithm and role",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 105
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (algorithm, role) (increase(moks_ml_flags_total[1h]))",
+          "legendFormat": "{{algorithm}} ({{role}})",
+          "refId": "A"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Inference p95 per window, and fallbacks",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 105
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, algorithm) (rate(moks_ml_inference_seconds_bucket[1h])))",
+          "legendFormat": "p95 {{algorithm}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (reason) (increase(moks_ml_fallbacks_total[1h]))",
+          "legendFormat": "fallback {{reason}}",
+          "refId": "B"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Correlation groups and grouping time",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 112
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (event) (increase(moks_ml_correlation_groups_total[1h]))",
+          "legendFormat": "groups {{event}}",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(moks_ml_correlation_seconds_bucket[1h])))",
+          "legendFormat": "p95 seconds",
+          "refId": "B"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Correlation context that could not be read",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 112
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum by (source) (increase(moks_ml_context_gaps_total[1h]))",
+          "legendFormat": "{{source}}",
+          "refId": "A"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Input drift (PSI, top 10) and champions to review",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 112
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "topk(10, moks_ml_feature_drift_psi)",
+          "legendFormat": "{{cohort}} {{feature}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (algorithm, reason) (moks_ml_model_degraded)",
+          "legendFormat": "review: {{algorithm}} {{reason}}",
+          "refId": "B"
+        }
+      ],
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      }
     }
   ]
 }

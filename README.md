@@ -63,6 +63,7 @@ docs/             Architecture, security/RBAC, connectors, operator guide, testi
 - [Trustworthy reports and durable investigations](docs/INVESTIGATION_DURABILITY.md)
 - [Reranking](docs/RERANKING.md): optional internal PyTorch service, off by default
 - [Knowledge sources](docs/KNOWLEDGE.md) and [rolling out knowledge governance](docs/KNOWLEDGE_ROLLOUT.md)
+- [Retrieval evaluation](docs/RAG_EVALUATION.md): the SRE dataset, its metrics, and search before and after the knowledge engine
 - [OpenSearch](docs/OPENSEARCH.md): the secured knowledge cluster, migration, rollback and recovery
 - [Observability](docs/OBSERVABILITY.md): MOKS's own logs, metrics and traces, queries and troubleshooting
 - [Testing and results](docs/TESTING.md)

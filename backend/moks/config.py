@@ -97,6 +97,19 @@ class Settings(BaseSettings):
     ml_anomaly_interval_minutes: int = Field(default=15, ge=5, le=240)
     ml_anomaly_max_flags_per_day: float = Field(default=3.0, ge=0.1, le=100)   # promotion gate on the validation period
     ml_anomaly_namespaces: str = ""            # "env:namespace,env:namespace" the scheduled training covers; empty trains nothing
+    ml_anomaly_rate_window_seconds: int = Field(default=300, ge=60, le=3600)   # rate() window for every counter feature; never below the step
+    ml_anomaly_lookback_hours: int = Field(default=24, ge=1, le=72)            # history read before the window for online detectors (rolling, EWMA, decomposition)
+    ml_anomaly_persist_points: int = Field(default=2, ge=1, le=12)             # a feature is flagged only when it stays past its threshold this many points in a row
+    ml_anomaly_min_synthetic_recall: float = Field(default=0.5, ge=0, le=1)    # promotion gate: share of faults injected into the validation data that are found
+    ml_anomaly_max_detection_delay_minutes: int = Field(default=45, ge=5, le=360)  # promotion gate: median delay on the injected faults
+    ml_anomaly_request_metric: str = "http_requests_total"                    # the application's request counter (the mesh's istio_requests_total is the fallback)
+    ml_anomaly_duration_metric: str = "http_request_duration_seconds_bucket"
+    ml_anomaly_queue_depth_metric: str = ""    # a gauge with namespace and pod labels; empty leaves queue_depth absent
+    ml_anomaly_db_connections_metric: str = ""  # a gauge with namespace and pod labels; empty leaves db_connections absent
+    ml_correlation_window_minutes: int = Field(default=30, ge=5, le=240)       # anomalies first flagged further apart than this are never grouped
+    ml_correlation_lookback_minutes: int = Field(default=120, ge=15, le=1440)  # how far back each tick regroups
+    ml_correlation_close_after_minutes: int = Field(default=60, ge=15, le=1440)  # a group with no new anomaly for this long is closed
+    ml_correlation_max_namespaces: int = Field(default=5, ge=1, le=40)         # context is read for at most this many namespaces per tick
     ml_artifact_store: Literal["postgres", "s3"] = "postgres"
     ml_artifact_bucket: str = ""
     ml_artifact_prefix: str = "moks/ml-artifacts/"
@@ -114,8 +127,21 @@ class Settings(BaseSettings):
     rag_rerank_timeout_ms: int = 1500
     rag_rerank_max_query_chars: int = 1000
     rag_rerank_max_passage_chars: int = 2000
+    rag_rerank_min_score: float | None = None  # a reranked passage scoring below this is dropped (exact identifiers never are); empty: none
+    rag_rerank_interactive: bool = True  # false: the Knowledge search page skips the reranker; investigations still use it
     rag_decompose: bool = False  # off: the rag dataset measured no gain from it. Turn on only with a dataset that shows one.
     rag_activation: str = "strict"  # strict: a reindex with any incomplete document fails. degraded: it activates and says so.
+    # Fusion weights for reciprocal rank fusion. 1/1/2 is what search did before they were settings: an exact
+    # identifier counted twice. 0 leaves a ranker out. rag/service.py bounds each to 0..5.
+    rag_weight_keyword: float = 1.0
+    rag_weight_vector: float = 1.0
+    rag_weight_identifier: float = 2.0
+    rag_weight_entity: float = 0.5  # services a question names, resolved against what the asker can read, searched by name
+    rag_rrf_k: int = 60
+    rag_structured_chunking: bool = True  # alert rules per rule, manifests per resource, ...; false: split by format only
+    rag_query_signals: bool = True  # intent, services, environments and time a question names, as small ranking signals
+    rag_index_investigations: bool = False  # finished investigations become searchable history, scoped like the investigation
+    rag_history_days: int = 180  # how far back investigation history reaches
     evidence_max_age_seconds: int = 900  # older evidence cannot back a claim about the current state without saying so
     # Opt-in CrewAI workload investigation (docs/crewai-investigation.md). Off unless MOKS_CREWAI_ENABLED is true and the
     # image was built with the crewai extra. The global ceilings (max_tool_calls, max_duration_seconds) still apply.
@@ -128,6 +154,11 @@ class Settings(BaseSettings):
     crewai_slot_wait_seconds: int = Field(default=20, ge=0, le=300)
     crewai_excerpt_chars: int = Field(default=2000, ge=200, le=20000)  # what one tool result shows the model and the report
     crewai_log_lines: int = Field(default=100, ge=10, le=500)
+    # The CrewAI worker's run time limit (its MOKS_MAX_DURATION_SECONDS) as the api sees it, for the crews' timeout ceilings. 0: max_duration_seconds.
+    crewai_max_duration_seconds: int = Field(default=0, ge=0, le=3600)
+    # The incident flow (docs/crewai-sre-engine.md): when the crew cannot start (no slot, flow switched off, wrong crewai version), run the
+    # LangGraph investigation instead ("langgraph") or fail ("none"). Console test runs never fall back.
+    crewai_fallback: Literal["langgraph", "none"] = "langgraph"
     # Unified investigation pipeline (docs/UNIFIED_INVESTIGATION.md), the CrewAI console flow unified_investigation. Its budgets sit
     # under the global ceilings: tool calls never above max_tool_calls, time never above max_duration_seconds.
     unified_max_tool_calls: int = Field(default=24, ge=4, le=60)
@@ -135,7 +166,7 @@ class Settings(BaseSettings):
     unified_agent_timeout_seconds: int = Field(default=60, ge=10, le=600)  # each reasoning agent (analyst, reviewer)
     unified_max_hypotheses: int = Field(default=5, ge=1, le=10)
     unified_max_probes: int = Field(default=4, ge=0, le=12)  # additional evidence calls (stage 11), within the tool budget
-    # Metric names for golden signals (prom_service_signals). Defaults: Prometheus client conventions and OpenTelemetry's db.client.connections.*.
+    # Metric names for golden signals (prom_golden_signals, the unified investigation). Defaults: Prometheus client conventions and OpenTelemetry's db.client.connections.*.
     unified_request_metric: str = Field(default="http_requests_total", pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
     unified_duration_metric: str = Field(default="http_request_duration_seconds_bucket", pattern=r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
     unified_status_label: str = Field(default="code", pattern=r"^[a-zA-Z_][a-zA-Z0-9_]*$")

@@ -4,14 +4,14 @@ import { api, API, qs } from "../api";
 import { useAuth } from "../auth";
 import { Badge, DataTable, EnvNsFilter, ErrorBox, FormDrawer, FormSection, Loading, PageHead, ScopePicker, Time, useLoad, useScopes, type Col } from "../components";
 import { Drawer, Empty, useFeedback } from "../ui";
+import { CorrelatedProblems, ModelHealth, RecurringProblems, feature } from "./MLGroups";
 
 const MODE_TONE: Record<string, "ok" | "info" | "neutral"> = { enabled: "ok", shadow: "info", disabled: "neutral" };
 const STATUS: Record<string, [("ok" | "warn" | "bad" | "info" | "neutral"), string]> = {
   insufficient_history: ["neutral", "insufficient history"], no_telemetry: ["warn", "no telemetry"], maintenance: ["info", "maintenance"], model_invalid: ["bad", "model invalid"],
+  stale_schema: ["warn", "retrain needed"],
 };
-const FEATURE: Record<string, string> = {
-  request_rate: "request rate", error_ratio: "error ratio", latency_p95: "p95 latency", cpu_throttling: "CPU throttling", memory_utilization: "memory use of limit", restart_rate: "restarts per hour",
-};
+const CONFIDENCE: Record<string, "ok" | "info" | "neutral" | "warn"> = { high: "ok", medium: "info", low: "neutral" };
 
 export function observationLabel(o: any): [("ok" | "warn" | "bad" | "info" | "neutral"), string] {
   if (o.status === "scored") return o.unusual ? ["warn", "unusual"] : ["ok", "typical"];
@@ -33,13 +33,14 @@ function Quality({ q }: { q: any }) {
   const absent: string[] = q.absent ?? [];
   const low = Object.entries(q.coverage ?? {}).filter(([f, v]: any) => v < 0.5 && !absent.includes(f)).map(([f]) => f);
   return <ul className="small">
-    {absent.length > 0 && <li>No telemetry for {absent.map((f) => FEATURE[f] ?? f).join(", ")}. Absent data is not treated as healthy.</li>}
-    {low.length > 0 && <li>Under half coverage: {low.map((f) => FEATURE[f] ?? f).join(", ")}.</li>}
+    {absent.length > 0 && <li>No telemetry for {absent.map(feature).join(", ")}. Absent data is not treated as healthy.</li>}
+    {low.length > 0 && <li>Under half coverage: {low.map(feature).join(", ")}.</li>}
     {q.sparse_traffic_points > 0 && <li>{q.sparse_traffic_points} point(s) with too little traffic to judge an error ratio.</li>}
     {q.counter_resets > 0 && <li>{q.counter_resets} counter reset(s) handled.</li>}
     {q.incomplete_queries?.length > 0 && <li>Incomplete queries: {q.incomplete_queries.join(", ")}.</li>}
     {q.error && <li>Model not used: {q.error}</li>}
-    {q.drift_psi && Object.keys(q.drift_psi).length > 0 && <li>Distribution change against training (PSI): {Object.entries(q.drift_psi).map(([f, v]) => `${FEATURE[f] ?? f} ${v}`).join(", ")}.</li>}
+    {q.provenance?.features && <li>Sources: {[...new Set(Object.values(q.provenance.features).map((p: any) => p.source))].join(", ")}; rate window {q.provenance.rate_window_seconds}s; feature catalog {q.provenance.catalog}.</li>}
+    {q.drift_psi && Object.keys(q.drift_psi).length > 0 && <li>Distribution change against training (PSI): {Object.entries(q.drift_psi).map(([f, v]) => `${feature(f)} ${v}`).join(", ")}.</li>}
   </ul>;
 }
 
@@ -62,12 +63,16 @@ function ObservationDrawer({ o, onClose, onSaved }: { o: any; onClose: () => voi
     </div> : undefined}>
     <div className="stack">
       <div className="alert info small">{o.context?.note}</div>
-      <div className="small">Window <Time iso={o.window_from} /> to <Time iso={o.window_to} /> · {o.algorithm.replace("_", " ")} v{o.context?.model_version} ({o.context?.role}) · mode {o.mode}</div>
+      <div className="small">Window <Time iso={o.window_from} /> to <Time iso={o.window_to} /> · {o.algorithm.replace(/_/g, " ")} v{o.context?.model_version} ({o.context?.role}) · mode {o.mode}
+        {o.context?.anomaly_type && <> · {o.context.anomaly_type} anomaly</>}{o.context?.first_flagged_at && <> · first flagged <Time iso={o.context.first_flagged_at} /></>}</div>
       {o.score !== null && <div className="small">Score {o.score} against threshold {o.threshold}. A score ranks how unusual the window is; it is not a probability of a fault.</div>}
+      {o.unusual && o.context?.confidence && <div className="small" aria-label="Confidence">Confidence <Badge kind={CONFIDENCE[o.context.confidence.level] ?? "neutral"}>{o.context.confidence.level}</Badge>{" "}
+        {o.context.confidence.reasons?.join("; ")}. Model {String(o.context.validation?.status ?? "unvalidated").replace(/_/g, " ")}.</div>}
       {o.context?.maintenance && <div className="alert warn small">Maintenance window: {o.context.maintenance.reason}. Scored for the record, never flagged.</div>}
       {o.deviations?.length > 0 && <div className="table-wrap" role="region" aria-label="Feature deviations" tabIndex={0}><table>
-        <thead><tr><th scope="col">Feature</th><th scope="col">Observed</th><th scope="col">Typical here</th><th scope="col">Deviation</th></tr></thead>
-        <tbody>{o.deviations.map((d: any) => <tr key={d.feature}><td>{FEATURE[d.feature] ?? d.feature}</td><td className="mono">{d.observed}</td><td className="mono">{d.typical}</td><td>{d.z > 0 ? "+" : ""}{d.z} ({d.direction})</td></tr>)}</tbody>
+        <thead><tr><th scope="col">Feature</th><th scope="col">Observed</th><th scope="col">Typical here</th><th scope="col">Deviation</th><th scope="col">Flagged</th></tr></thead>
+        <tbody>{o.deviations.map((d: any) => <tr key={d.feature}><td>{feature(d.feature)}</td><td className="mono">{d.observed}</td><td className="mono">{d.typical}</td>
+          <td>{d.z > 0 ? "+" : ""}{d.z} ({d.direction}){d.threshold ? ` of ${d.threshold}` : ""}</td><td>{d.flagged ? `${d.pattern ?? "yes"}` : ""}</td></tr>)}</tbody>
       </table></div>}
       <div className="small muted">Deviations say which features moved and how far, against this workload's own history. They do not say why.</div>
       <Quality q={o.data_quality} />
@@ -89,8 +94,9 @@ export function MLInsights() {
   const cols: Col<any>[] = [
     { key: "cohort", head: "Workload", primary: true, cell: (o) => <span className="mono">{o.cohort}</span> },
     { key: "status", head: "Status", status: true, cell: (o) => { const [t, l] = observationLabel(o); return <Badge kind={t}>{l}</Badge>; } },
-    { key: "top", head: "Moved most", cell: (o) => o.deviations?.[0] ? `${FEATURE[o.deviations[0].feature] ?? o.deviations[0].feature} ${o.deviations[0].direction}` : "" },
-    { key: "model", head: "Model", cell: (o) => `${o.algorithm.replace("_", " ")} v${o.context?.model_version ?? "?"}${o.context?.role === "challenger" ? " (challenger)" : ""}` },
+    { key: "top", head: "Moved most", cell: (o) => o.deviations?.[0] ? `${feature(o.deviations[0].feature)} ${o.deviations[0].direction}` : "" },
+    { key: "conf", head: "Confidence", cell: (o) => o.unusual && o.context?.confidence ? <Badge kind={CONFIDENCE[o.context.confidence.level] ?? "neutral"}>{o.context.confidence.level}</Badge> : "" },
+    { key: "model", head: "Model", cell: (o) => `${o.algorithm.replace(/_/g, " ")} v${o.context?.model_version ?? "?"}${o.context?.role === "challenger" ? " (challenger)" : ""}` },
     { key: "when", head: "Window end", cell: (o) => <Time iso={o.window_to} /> },
     { key: "fb", head: "Feedback", cell: (o) => o.feedback?.verdict?.replace("_", " ") ?? "" },
   ];
@@ -101,6 +107,7 @@ export function MLInsights() {
       <EnvNsFilter scopes={scopes.data} env={env} ns={ns} onEnv={setEnv} onNs={setNs} />
       <label className="check"><input type="checkbox" checked={unusual} onChange={(e) => setUnusual(e.target.checked)} /> Unusual only</label>
     </div>
+    <CorrelatedProblems env={env} ns={ns} />
     <h2>Anomaly observations</h2>
     {obs.data ? <DataTable label="Anomaly observations" rows={obs.data.observations} cols={cols} rowKey={(o) => o.id} onRow={setOpen}
       empty={<Empty title={caps?.anomaly_detection?.mode === "disabled" ? "Anomaly detection is off." : "No observations in the last 24 hours."}>
@@ -108,6 +115,7 @@ export function MLInsights() {
           : "Workloads appear here once a champion model exists for them. Insufficient history and missing telemetry are listed, not hidden."}</Empty>} />
       : <Loading load={obs} />}
     <div className="small muted">{obs.data?.note}</div>
+    <RecurringProblems env={env} ns={ns} />
     <div className="small muted">Similar past incidents and skill recommendations appear inside each investigation, where they can be judged.</div>
     {open && <ObservationDrawer o={open} onClose={() => setOpen(null)} onSaved={(o) => { setOpen(o); obs.reload(); }} />}
   </div>;
@@ -170,23 +178,36 @@ function Models() {
   };
   const cols: Col<any>[] = [
     { key: "cohort", head: "Cohort", primary: true, cell: (m) => <span className="mono">{m.cohort}</span> },
-    { key: "alg", head: "Algorithm", cell: (m) => `${m.algorithm.replace("_", " ")} v${m.version}` },
+    { key: "alg", head: "Algorithm", cell: (m) => `${m.algorithm.replace(/_/g, " ")} v${m.version}` },
     { key: "status", head: "Status", status: true, cell: (m) => <Badge kind={m.status === "champion" ? "ok" : m.status === "shadow" ? "info" : m.status === "rejected" ? "bad" : "neutral"}>{m.status}</Badge> },
     { key: "gates", head: "Gates", cell: (m) => m.gates_passed ? <Badge kind="ok">passed</Badge> : <Badge kind="warn">{m.gates_failed.join(", ") || "none"}</Badge> },
-    { key: "flags", head: "Flags/day (validation)", cell: (m) => m.metrics?.validation?.flags_per_day ?? "" },
+    { key: "flags", head: "Alarms/day (validation)", cell: (m) => m.metrics?.validation?.flags_per_day ?? "" },
+    { key: "recall", head: "Recall (injected)", cell: (m) => m.metrics?.synthetic?.recall ?? "" },
     { key: "vs", head: "Champion flags/day", cell: (m) => m.metrics?.champion_comparison?.champion_flags_per_day ?? "" },
     { key: "sha", head: "Artifact", wide: true, cell: (m) => <span className="mono small">{m.artifact_sha256?.slice(0, 12)}</span> },
     { key: "at", head: "Trained", cell: (m) => <Time iso={m.created_at} /> },
   ];
   const [training, setTraining] = useState(false);
+  const [health, setHealth] = useState<string | null>(null);
+  const reproduce = async (m: any) => {
+    try {
+      const r = await api<any>(`/ml/models/${m.id}/reproduce`, { method: "POST", body: {} });
+      toast(r.reproducible ? "Reproduced: refitting the training snapshot gives the same state." : `Not reproducible: ${r.reason ?? "the refitted state differs"}`, r.reproducible ? "ok" : "bad");
+    } catch (e: any) {
+      toast(e?.message ?? "Refused", "bad");
+    }
+  };
   return <section className="card stack">
     <div className="row between"><h2>Models</h2><button className="small" onClick={() => setTraining(true)}>Train models</button></div>
     {training && <Train onClose={() => setTraining(false)} />}
+    {health && <ModelHealth id={health} onClose={() => setHealth(null)} />}
     {models.data ? <DataTable label="Models" rows={models.data} cols={cols} rowKey={(m) => m.id} empty={<Empty title="No models yet.">Use Train models on a namespace. Training registers candidates and promotes nothing.</Empty>}
       menu={(m) => ({ label: `Actions for ${m.cohort} v${m.version}`, items: [
         { label: "Run as challenger (shadow)", disabled: m.status === "shadow" || m.status === "champion", run: () => act(`/ml/models/${m.id}/promote`, { to: "shadow" }, "Running as challenger.") },
         { label: "Make champion", disabled: !m.gates_passed || m.status === "champion", run: () => act(`/ml/models/${m.id}/promote`, { to: "champion" }, "Champion changed. The previous one is kept for rollback.") },
         { label: "Roll back this cohort", disabled: m.status !== "champion", run: async () => { if (await confirm({ title: "Roll back", body: "The champion steps down and the previously promoted model returns. With none, this cohort shows no observations.", action: "Roll back" })) act("/ml/rollback", { capability: m.capability, cohort: m.cohort }, "Rolled back."); } },
+        { label: "Health", run: () => setHealth(m.id) },
+        { label: "Reproduce from snapshot", run: () => reproduce(m) },
         { label: "Reject", danger: true, disabled: m.status === "rejected", run: () => act(`/ml/models/${m.id}/reject`, { note: "rejected by an ML administrator" }, "Rejected.") },
       ] })} /> : <Loading load={models} />}
   </section>;
@@ -196,6 +217,7 @@ export function Train({ onClose }: { onClose: () => void }) {
   const { toast } = useFeedback();
   const [environment, setEnv] = useState("");
   const [namespace, setNs] = useState("");
+  const [level, setLevel] = useState<"workload" | "node">("workload");
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const onEnv = useCallback((e: string) => setEnv(e), []);
@@ -205,13 +227,17 @@ export function Train({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      const r = await api("/ml/train", { method: "POST", body: { environment, namespace } });
-      toast(r.queued ? "Training queued. Candidates appear under Models when it finishes." : "A training run for this namespace is already queued.");
+      const r = await api("/ml/train", { method: "POST", body: level === "node" ? { environment, level } : { environment, namespace, level } });
+      toast(r.queued ? "Training queued. Candidates appear under Models when it finishes." : "A training run for this target is already queued.");
       onClose();
     } catch (err) { setError(err); setBusy(false); }
   };
-  return <FormDrawer title="Train anomaly models" submit="Train" busyLabel="Queuing…" busy={busy} blocked={!environment || !namespace} error={error} onSubmit={submit} onClose={onClose}>
-    <FormSection title="Namespace" help="Fits on the earlier 80% of the history and evaluates on the rest. Needs at least 7 days of usable history by default. Training promotes nothing.">
+  return <FormDrawer title="Train anomaly models" submit="Train" busyLabel="Queuing…" busy={busy} blocked={!environment || (level === "workload" && !namespace)} error={error} onSubmit={submit} onClose={onClose}>
+    <FormSection title="What to model" help="Every algorithm is fitted on the earlier 80% of the history and judged on the rest, including faults injected into it. Needs at least 7 days of usable history by default. Training promotes nothing.">
+      <div className="row wrap" role="radiogroup" aria-label="Level">
+        <label className="check"><input type="radio" name="level" checked={level === "workload"} onChange={() => setLevel("workload")} /> Workloads in a namespace</label>
+        <label className="check"><input type="radio" name="level" checked={level === "node"} onChange={() => setLevel("node")} /> Nodes (the infrastructure level)</label>
+      </div>
       <ScopePicker env={environment} ns={namespace} onEnv={onEnv} onNs={onNs} />
     </FormSection>
   </FormDrawer>;

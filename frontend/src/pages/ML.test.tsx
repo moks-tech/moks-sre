@@ -173,3 +173,41 @@ describe("Build a dataset", () => {
     expect(buildHint("skill_ranking", "operational", none)).toMatch(/written when an investigation finishes/);
   });
 });
+
+describe("Correlated problems and history", () => {
+  const group = { id: "g-1", environment: "prod", namespaces: ["shop"], status: "open", first_seen: "2026-11-04T11:00:00Z", last_seen: "2026-11-04T12:00:00Z", feedback: {},
+    note: "Its candidate explanations are unvalidated leads for an investigation.", engine_version: "correlate/1", mode: "shadow",
+    members: [{ cohort: "prod/shop/postgres", namespace: "shop", workload: "postgres", first: "2026-11-04T11:00:00Z", features: ["latency_p95"], algorithm: "robust_zscore", model_version: 3 },
+      { cohort: "prod/shop/cart", namespace: "shop", workload: "cart", first: "2026-11-04T11:10:00Z", features: ["error_ratio"], algorithm: "robust_zscore", model_version: 2 }],
+    links: [{ a: ["prod/shop/postgres", 1], b: ["prod/shop/cart", 2], weight: 0.9, reasons: [{ type: "calls" }, { type: "time" }] }],
+    hypotheses: [{ rank: 1, kind: "dependency", statement: "postgres may be where this started: cart calls it, and its anomaly was flagged first.", status: "candidate", validated: false }],
+    context: { gaps: [{ source: "loki", reason: "no Loki connector" }], rollouts: {}, alerts: [], events: [], logs: {} } };
+  const history = { scope: { days: 180 }, records: 4, note: "History of reviewed incidents you may read.", recurring: [{ occurrences: 3, pattern: { symptoms: ["oomkilled"], signature: [] },
+    services: { payments: 3 }, causes: [{ cause: "heap above the limit", times: 3 }], examples: [{ incident: "i-9", url: "/moks/incidents/i-9" }] }],
+    services: [{ service: "payments", incidents: 3, median_hours_to_resolve: 2 }], what_worked: [{ resolution: "raised the memory limit", times: 3 }], runbooks: [], infrastructure: [] };
+
+  it("lists groups, opens one with its unvalidated explanations and gaps, and records a verdict", async () => {
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/ml/status")) return new Response(JSON.stringify({ capabilities: {} }), { status: 200 });
+      if (url.includes("/multi/scopes")) return new Response(JSON.stringify({ scopes: [] }), { status: 200 });
+      if (url.includes("/feedback")) return new Response(JSON.stringify({ ...group, feedback: { verdict: JSON.parse(String(init?.body)).verdict } }), { status: 200 });
+      if (url.includes("/ml/correlations/g-1")) return new Response(JSON.stringify({ ...group, similar_incidents: { status: "disabled", results: [] }, history: { what_worked: history.what_worked } }), { status: 200 });
+      if (url.includes("/ml/correlations")) return new Response(JSON.stringify({ groups: [group] }), { status: 200 });
+      if (url.includes("/ml/history")) return new Response(JSON.stringify(history), { status: 200 });
+      return new Response(JSON.stringify({ observations: [], note: "n" }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetch);
+    render(<MemoryRouter><FeedbackProvider><MLInsights /></FeedbackProvider></MemoryRouter>);
+    expect(await screen.findByText("Correlated problems")).toBeTruthy();
+    expect(await screen.findByText(/postgres may be where this started/)).toBeTruthy();
+    expect(screen.getByText(/3× oomkilled on payments/)).toBeTruthy();
+    expect(screen.getAllByText(/raised the memory limit/).length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: /shop\/postgres, shop\/cart/ }));
+    expect(await screen.findByLabelText("Candidate explanations")).toBeTruthy();
+    expect(screen.getAllByText("unvalidated").length).toBeGreaterThan(0);
+    expect(screen.getByText(/one calls the other/)).toBeTruthy();
+    expect(screen.getByText(/Not read: loki/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Wrong grouping" }));
+    await waitFor(() => expect(fetch.mock.calls.some(([u, i]) => String(u).includes("/ml/correlations/g-1/feedback") && JSON.parse(String((i as RequestInit).body)).verdict === "wrong_grouping")).toBe(true));
+  });
+});

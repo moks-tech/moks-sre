@@ -227,8 +227,8 @@ async def test_cancellation_keeps_what_was_collected(roomy):
 
 def test_every_read_the_pipeline_can_make_is_read_only():
     tools = {p.tool for p in PROBES.values()} | {"prom_alerts", "k8s_triage", "k8s_rollout_history", "k8s_workloads", "k8s_list_pods", "k8s_services", "prom_pod_resources",
-                                                 "prom_service_signals", "loki_search", "k8s_pod_logs", "k8s_events", "k8s_config_audit", "git_recent_commits",
-                                                 "git_compare_deployment", "ml_anomalies", "similar_incidents", "kb_search"}
+                                                 "prom_golden_signals", "loki_search", "k8s_pod_logs", "k8s_events", "k8s_config_audit", "git_recent_commits",
+                                                 "git_compare_deployment", "ml_observations", "similar_incidents", "kb_search"}
     for t in tools:
         spec = REGISTRY[t]
         assert spec.read_only and not spec.privileged, t

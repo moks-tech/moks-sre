@@ -1,12 +1,14 @@
 """Read-only tools the unified investigation pipeline adds (docs/UNIFIED_INVESTIGATION.md). Like every tool they run
 only through the ToolExecutor, so RBAC, scope, redaction, truncation, evidence and audit are the usual ones.
 
-- ml_anomalies: the anomaly model's stored observations for a namespace or service, as citable evidence. It reads
+- ml_observations: the anomaly model's stored observations for a namespace or service, every scored window and not only
+  the unusual ones (ml_anomalies, tools/phase2.py, returns those with their correlation groups), as citable evidence. It reads
   ml_observations and nothing else, needs ml.read in that namespace, and returns each observation's validation state
   (shadow or enabled) so nobody mistakes an unusual window for a cause.
-- prom_service_signals: a service's golden signals (request rate, error ratio, p95 latency, database connections)
-  in one call, from templated, namespace-pinned queries. These are the anomaly model's own feature queries
-  (ml/features.py), so the pipeline and the model read the same series. No raw PromQL reaches it.
+- prom_golden_signals: a service's golden signals (request rate, error ratio, p95 latency, database connections)
+  in one call, as series, from templated, namespace-pinned queries. These are the anomaly model's own feature queries
+  (ml/features.py), so the pipeline and the model read the same series. No raw PromQL reaches it. (prom_service_signals
+  in tools/builtin.py is the crews' summary of Istio or OpenTelemetry request metrics, a different shape.)
 """
 from __future__ import annotations
 
@@ -34,7 +36,7 @@ class AnomalyArgs(ToolArgs):
     limit: int = Field(default=20, ge=1, le=50)
 
 
-async def ml_anomalies(ctx: ToolContext, a: AnomalyArgs) -> ToolResult:
+async def ml_observations(ctx: ToolContext, a: AnomalyArgs) -> ToolResult:
     from ..ml import mode
     from ..models import MLModel, MLObservation
 
@@ -97,7 +99,7 @@ def _ratio(errors: list[dict], requests: list[dict]) -> list[dict]:
     return out
 
 
-async def prom_service_signals(ctx: ToolContext, a: ServiceSignalsArgs) -> ToolResult:
+async def prom_golden_signals(ctx: ToolContext, a: ServiceSignalsArgs) -> ToolResult:
     prom = ctx.connector("prometheus")
     start, end = ctx.window(a.minutes)
     step = auto_step(start, end)
@@ -121,9 +123,9 @@ async def prom_service_signals(ctx: ToolContext, a: ServiceSignalsArgs) -> ToolR
 
 
 TOOLS: list[ToolSpec] = [
-    ToolSpec("ml_anomalies", "Anomaly-model observations for a namespace or workload in the window: score, threshold, the features that deviated with observed and "
-             "baseline values, model version and whether the model is in shadow mode. Unusual is not a cause.", "knowledge", AnomalyArgs, ml_anomalies,
+    ToolSpec("ml_observations", "Anomaly-model observations for a namespace or workload in the window: score, threshold, the features that deviated with observed and "
+             "baseline values, model version and whether the model is in shadow mode. Unusual is not a cause.", "knowledge", AnomalyArgs, ml_observations,
              extra_permission=P.ML_READ),
-    ToolSpec("prom_service_signals", "A workload's golden signals in one read: request rate, error ratio, p95 latency and database connections against the pool limit "
-             "(namespace-pinned templates; the exact PromQL is returned).", "prometheus", ServiceSignalsArgs, prom_service_signals),
+    ToolSpec("prom_golden_signals", "A workload's golden signals in one read: request rate, error ratio, p95 latency and database connections against the pool limit "
+             "(namespace-pinned templates; the exact PromQL is returned).", "prometheus", ServiceSignalsArgs, prom_golden_signals),
 ]

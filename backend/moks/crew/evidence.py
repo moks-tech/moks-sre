@@ -76,9 +76,11 @@ def _cap_confidence(asked: str, refs: list[str], registry: Registry) -> tuple[st
     high needs live evidence from two different sources."""
     asked = asked if asked in CONFIDENCE else "low"
     live = [registry.records[r] for r in refs if registry.records[r]["ok"] and registry.records[r]["kind"] in ev.LIVE]
+    inferred = any(registry.records[r]["kind"] == ev.MODEL_OUTPUT for r in refs)
     ceiling = "low" if not live else "medium" if len({r["source"] for r in live}) < 2 else "high"
     if CONFIDENCE.index(asked) > CONFIDENCE.index(ceiling):
-        return ceiling, f"confidence lowered from {asked} to {ceiling}: " + ("no live evidence cited" if not live else "high needs live evidence from two sources")
+        why = ("no live evidence cited" + ("; ML signals are leads, not observations" if inferred else "")) if not live else "high needs live evidence from two sources"
+        return ceiling, f"confidence lowered from {asked} to {ceiling}: {why}"
     return asked, None
 
 
@@ -97,6 +99,7 @@ def validate(raw: dict[str, Any], registry: Registry, notes: list[str]) -> tuple
         return [r for r in refs if r in registry.records]
 
     facts: list[Fact] = []
+    demoted: list[dict[str, Any]] = []
     for f in raw.get("findings") if isinstance(raw.get("findings"), list) else []:
         if not isinstance(f, dict):
             continue
@@ -107,10 +110,14 @@ def validate(raw: dict[str, Any], registry: Registry, notes: list[str]) -> tuple
         if not refs:
             removed.append({"statement": statement[:200], "reason": "finding cites no recorded evidence"})
             continue
+        if all(registry.records[r]["kind"] == ev.MODEL_OUTPUT for r in refs):
+            # An ML signal is not something MOKS observed: it stays a lead, at low confidence, until live evidence backs it.
+            demoted.append({"cause": statement, "evidence": refs, "confidence": "low", "reasoning": "ML signal only: a statistical lead, not an observed fact"})
+            continue
         facts.append(Fact(statement=statement, evidence=refs))
 
     causes: list[Cause] = []
-    for c in raw.get("likely_causes") if isinstance(raw.get("likely_causes"), list) else []:
+    for c in [*(raw.get("likely_causes") if isinstance(raw.get("likely_causes"), list) else []), *demoted]:
         if not isinstance(c, dict):
             continue
         text = _text(c.get("cause"), 1000)
@@ -131,10 +138,13 @@ def validate(raw: dict[str, Any], registry: Registry, notes: list[str]) -> tuple
     summary = _text(raw.get("summary"), 2000)
     if removed or rejected:
         notes.append(f"CrewAI answer validated: {len(rejected)} invented citation(s) rejected, {len(removed)} uncited claim(s) removed.")
+    if demoted:
+        notes.append(f"{len(demoted)} finding(s) resting only on ML signals kept as low-confidence likely causes: an ML signal is a lead, not an observation.")
     report = Report(summary=summary, observed_facts=facts, suspected_causes=causes, missing_evidence=list(dict.fromkeys(missing)), next_steps=steps,
                     generated_by="llm", notes=list(notes))
     report.validation = {"valid_refs": sorted(registry.records, key=lambda r: int(r[1:]))}
-    decided = {"citations_rejected": rejected, "claims_removed": removed, "confidence_lowered": lowered}
+    decided = {"citations_rejected": rejected, "claims_removed": removed, "confidence_lowered": lowered,
+               "ml_only_findings_demoted": [{"statement": d["cause"][:200], "evidence": d["evidence"]} for d in demoted]}
     return report, decided
 
 

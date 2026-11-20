@@ -90,6 +90,29 @@ describe("the CrewAI console", () => {
     expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
   });
 
+  it("edits the incident crew: agents come from the crew, and the commander has two tasks", async () => {
+    const d = {
+      agents: { commander: { role: "Incident commander", goal: "Scope {target}.", backstory: "You run incidents.", tools: ["namespace_health"] },
+                reviewer: { role: "Evidence reviewer", goal: "Challenge.", backstory: "Sceptic." } },
+      tasks: { plan: { description: "Incident: {target}.\n{question}", expected_output: "Plan." }, hypotheses: { description: "Hypotheses.", expected_output: "JSON." },
+               review: { description: "Review.", expected_output: "JSON." } },
+      limits: { timeout_seconds: 600, review_rounds: 2 }, defaults: { kind: "Deployment", minutes: null, change_window: "24h" },
+    };
+    state.responses["/crewai/crews/sre"] = { ...crew(true), crew: "sre", label: "Incident investigation crew", defaults: d, effective: d, versions: [],
+      agent_keys: ["commander", "reviewer"], agent_labels: { commander: "Incident commander", reviewer: "Evidence reviewer" }, task_keys: ["plan", "hypotheses", "review"],
+      task_agent: { plan: "commander", hypotheses: "commander", review: "reviewer" }, task_labels: { plan: "Plan the investigation", hypotheses: "Root-cause hypotheses", review: "Independent evidence review" },
+      tools: { commander: [{ name: "namespace_health", description: "Health", moks_tool: "k8s_triage" }] },
+      ceilings: { timeout_seconds: [30, 600], review_rounds: [1, 3] },
+      code_owned: { rules: "rule", output_contract: "[plan] ...", contracts: { plan: "p", hypotheses: "h", review: "r" }, structure: "Seven agents, eight tasks." } };
+    page("/crewai/crews/sre");
+    expect(await screen.findByText("Task: Plan the investigation")).toBeTruthy();
+    expect(screen.getByText("Task: Root-cause hypotheses")).toBeTruthy();
+    expect(screen.getByText("Task: Independent evidence review")).toBeTruthy();
+    expect(screen.getByText("Review rounds")).toBeTruthy();
+    expect((screen.getByRole("combobox", { name: /Default change window/ }) as HTMLSelectElement).value).toBe("24h");
+    expect(screen.getByText("Output contracts (one per task)")).toBeTruthy();
+  });
+
   it("edits a crew: an edited field is marked, diffed and checked before it is saved", async () => {
     state.responses["/crewai/crews/workload/check"] = { errors: [{ field: "agents.workload.role", message: "must not be empty" }], warnings: [] };
     state.responses["/crewai/crews/workload"] = crew(true);

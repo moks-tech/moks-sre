@@ -79,10 +79,11 @@ async def active_config(db: AsyncSession, crew: str = crew_config.CREW) -> CrewC
 
 async def queue_block(db: AsyncSession, flow: str, draft: dict[str, Any] | None = None) -> dict[str, Any]:
     """What a queued run records about its configuration, so a version activated later does not change it."""
+    crew = crew_config.crew_of(flow)
     if draft is not None:
-        overlay = crew_config.overlay_of(crew_config.merge(draft))
+        overlay = crew_config.overlay_of(crew_config.merge(draft, crew), crew)
         return {"flow": flow, "config_version": None, "draft": overlay, "config_digest": crew_config.digest(overlay)}
-    row = await active_config(db, crew_config.FLOWS[flow]["crew"])
+    row = await active_config(db, crew)
     return {"flow": flow, "config_version": row.version if row else None, "config_digest": row.digest if row else ""}
 
 
@@ -92,27 +93,28 @@ async def run_config(request: dict[str, Any]) -> tuple[dict[str, Any], str]:
     from . import CrewUnavailable
 
     overlay: dict[str, Any] | None = None
+    crew = crew_config.crew_of(request.get("flow"))
     if isinstance(request.get("draft"), dict):
         overlay, used = request["draft"], "test draft (not saved)"
     elif request.get("config_version"):
         async with session_scope() as db:
-            row = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew_config.CREW, CrewConfig.version == int(request["config_version"])))).scalar_one_or_none()
+            row = (await db.execute(select(CrewConfig).where(CrewConfig.crew == crew, CrewConfig.version == int(request["config_version"])))).scalar_one_or_none()
         if row is None:
             raise CrewUnavailable(f"CrewAI investigation unavailable: crew configuration version {request['config_version']} no longer exists")
         overlay, used = row.config, f"version {row.version}"
     else:
         used = "the code's defaults"
-    errors, _ = crew_config.check(overlay or {})
+    errors, _ = crew_config.check(overlay or {}, crew)
     if errors:
         raise CrewUnavailable("CrewAI investigation unavailable: the crew configuration (" + used + ") does not pass its checks: "
                               + "; ".join(f"{e['field']}: {e['message']}" for e in errors[:3]))
-    return crew_config.merge(overlay), used
+    return crew_config.merge(overlay, crew), used
 
 
 async def save_version(db: AsyncSession, crew: str, overlay: dict[str, Any], note: str, user_id: uuid.UUID, activate: bool) -> CrewConfig:
     await db.execute(text("SELECT pg_advisory_xact_lock(hashtext('crew_configs:' || :c))"), {"c": crew})
     last = (await db.execute(text("SELECT COALESCE(max(version), 0) FROM crew_configs WHERE crew = :c"), {"c": crew})).scalar_one()
-    row = CrewConfig(crew=crew, version=int(last) + 1, config=overlay, digest=crew_config.digest(overlay), base_digest=crew_config.base_digest(),
+    row = CrewConfig(crew=crew, version=int(last) + 1, config=overlay, digest=crew_config.digest(overlay), base_digest=crew_config.base_digest(crew),
                      note=note[:2000], active=False, created_by=user_id)
     db.add(row)
     await db.flush()
@@ -193,8 +195,9 @@ def clean_inputs(flow: str, raw: dict[str, Any], *, defaults: dict[str, Any] | N
 
 
 async def flow_defaults(db: AsyncSession, flow: str) -> dict[str, Any]:
-    row = await active_config(db, crew_config.FLOWS[flow]["crew"])
-    return {k: v for k, v in crew_config.merge(row.config if row else None)["defaults"].items() if v is not None}
+    crew = crew_config.crew_of(flow)
+    row = await active_config(db, crew)
+    return {k: v for k, v in crew_config.merge(row.config if row else None, crew)["defaults"].items() if v is not None}
 
 
 # ---- the scheduler -------------------------------------------------------------------------
@@ -245,9 +248,8 @@ async def queue_scheduled(db: AsyncSession, sched: CrewSchedule, now: datetime) 
     if len(queued) >= s.investigation_queue_limit:
         raise ValueError("too many investigations are waiting; the next firing tries again")
     window = min(timedelta(minutes=inputs.get("minutes") or s.default_query_window_minutes), timedelta(minutes=min(env.max_query_window_minutes, s.max_query_window_minutes)))
-    question = inputs.get("question") or (f"Why is {inputs['kind']} {inputs['workload']} in namespace {inputs['namespace']} unhealthy?" if inputs.get("workload")
-                                          else f"What is wrong in namespace {inputs['namespace']}, and why?")  # the unified flow finds the workload itself
-    target = {k: inputs[k] for k in ("workload", "kind") if inputs.get(k)}
+    question = inputs.get("question") or crew_config.default_question(sched.flow, inputs)
+    target = {k: inputs[k] for k in ("workload", "kind") if inputs.get(k)}  # the unified flow finds the workload itself
     owner = await db.get(User, sched.owner_id)
     inv = Investigation(created_by=sched.owner_id, environment_id=env.id, namespace=inputs["namespace"], question=question, time_from=now - window, time_to=now,
                         status="queued", trigger="schedule")
@@ -257,7 +259,7 @@ async def queue_scheduled(db: AsyncSession, sched: CrewSchedule, now: datetime) 
     db.add(InvestigationEvent(investigation_id=inv.id, seq=0, type="queued", payload={
         "window_minutes": int(window.total_seconds() // 60), "requested_minutes": inputs.get("minutes"), "environment": env.name, "environment_reason": "the schedule's",
         "namespace": inputs["namespace"], "namespace_reason": "the schedule's", "traceparent": traceparent(), "trigger": "schedule", "schedule_id": str(sched.id),
-        "crewai": {**target, **{k: v for k, v in block.items() if k != "config_digest"}}}))
+        "crewai": crew_config.request_block(inputs, block)}))
     await audit.record(db, action="investigation.create", actor_id=sched.owner_id, actor_email=owner.email if owner else None, resource_type="investigation",
                        resource_id=str(inv.id), environment=env.name, namespace=inputs["namespace"], decision="allow",
                        details={"workflow": "crewai", "trigger": "schedule", "schedule_id": str(sched.id), "schedule": sched.name, **target})

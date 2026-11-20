@@ -12,6 +12,7 @@ import { PlanForm } from "./Ops";
 import { Judge, SimilarIncidents, SkillRecommendations } from "./MLParts";
 import { CrewAIForm, CrewAIPanel, type CrewCapability, type UnifiedCapability } from "./CrewAI";
 import { LivePipeline, UnifiedPanel } from "../intelligence/UnifiedPanel";
+import { CrewProgress } from "../crewai/IncidentReport";
 
 const SUGGESTIONS = [
   "Why is checkout returning 502 errors?",
@@ -33,7 +34,7 @@ export function NewInvestigation() {
   const [everywhere, setEverywhere] = useState(false);
   const config = useLoad(() => api<{ llm: { provider: string; model: string } | null; skills: string[]; environments?: string[]; crewai?: CrewCapability; unified?: UnifiedCapability }>("/investigate/config"), []);
   const [flow, setFlow] = useState<"standard" | "crewai">("standard");
-  const crewai = config.data?.crewai?.available ? config.data.crewai : null;
+  const crewai = config.data?.crewai?.available || config.data?.crewai?.available_any ? config.data.crewai : null;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -242,6 +243,7 @@ export function InvestigationView() {
               {report && <Relationships data={report.relationships} primary={report.primary_resource} />}
               <div className="card">
                 <h2>Progress</h2>
+                <CrewProgress events={events} />
                 <Timeline events={events} />
               </div>
               <div className="card">
@@ -307,6 +309,7 @@ const EVIDENCE_KINDS: Record<string, { label: string; tone: "ok" | "warn" | "bad
   access_denied: { label: "access denied", tone: "bad" },
   documentation: { label: "documentation", tone: "info" },
   historical: { label: "historical", tone: "neutral" },
+  model_output: { label: "ML signal (unvalidated)", tone: "info" },
 };
 
 export function EvidenceKind({ kind, ok }: { kind?: string; ok: boolean }) {
@@ -314,7 +317,7 @@ export function EvidenceKind({ kind, ok }: { kind?: string; ok: boolean }) {
   return <Badge kind={k.tone}>{k.label}</Badge>;
 }
 
-const FACT_KINDS: Record<string, string> = { collection: "about collection", documentation: "from documentation", historical: "earlier observation" };
+const FACT_KINDS: Record<string, string> = { collection: "about collection", documentation: "from documentation", historical: "earlier observation", model_output: "ML signal, not observed" };
 const VERIFIED: [string, string, string][] = [
   ["configuration_defect", "Verified configuration defects", "A check read the wrong setting from the object itself."],
   ["observed_failure", "Observed failures", "These happened. Why they happened is still open, so see the suspected causes."],
