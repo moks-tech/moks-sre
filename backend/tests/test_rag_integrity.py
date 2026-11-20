@@ -153,7 +153,7 @@ async def test_each_layer_of_the_boundary_holds_alone(monkeypatch):
     assert candidates
 
     async def bad_index(*a, **k):  # an index that returns what it should not
-        return [candidates], True, None
+        return [candidates], [1.0], True, None
     monkeypatch.setattr(service, "_rankings", bad_index)
     assert (await find(word))["results"] == []  # the authoritative layer
 

@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeedbackProvider } from "../ui";
-import { KnowledgeExplorer, RetrievalWorkspace, safeHref } from "./Knowledge";
+import { KnowledgeExplorer, RetrievalWorkspace, Understood, about, safeHref } from "./Knowledge";
 
 const perms = { list: ["knowledge.read", "knowledge.test"] };
 vi.mock("../auth", () => ({ useAuth: () => ({ can: (p: string) => perms.list.includes(p) }) }));
@@ -98,5 +98,29 @@ describe("RetrievalWorkspace", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "Outdated" }))[0]);
     await waitFor(() => expect((fetch as any).mock.calls.some(([u, o]: any[]) => u.includes("/feedback") && JSON.parse(o.body).chunk_id === "c1" && JSON.parse(o.body).verdict === "outdated")).toBe(true));
     expect(await screen.findByText(/changes nothing by itself/)).toBeTruthy();
+  });
+});
+
+describe("what a passage is about and how a question was read", () => {
+  it("names the resource, alert, operation, panel or section a chunk covers", () => {
+    expect(about({ resource: { kind: "Deployment", namespace: "shop", name: "payments" } })).toBe("Deployment shop/payments");
+    expect(about({ alert: "PaymentsHighErrorRate", severity: "critical" })).toBe("alert PaymentsHighErrorRate (critical)");
+    expect(about({ operation: "POST /payments" })).toBe("POST /payments");
+    expect(about({ dashboard: "RabbitMQ", panel: "Queue depth" })).toBe("panel Queue depth");
+    expect(about({ section: "root_cause" })).toBe("root cause");
+    expect(about({ section: "mitigation", steps: [2, 5] })).toBe("mitigation, steps 2–5");
+    expect(about({})).toBe("");
+  });
+
+  it("says what search read in the question, and where declared dependents came from", () => {
+    render(<Understood u={{ intents: ["dependencies"], services: ["redis"], environments: [], namespaces: ["shop"], time_window: null,
+      dependents: { redis: ["cart", "payments"] }, dependents_basis: "declared by knowledge sources you can read" }} />);
+    expect(screen.getByText(/Read as: asks for dependencies; names redis; in shop\./)).toBeTruthy();
+    expect(screen.getByText(/Declared as depending on redis: cart, payments/)).toBeTruthy();
+  });
+
+  it("shows nothing when the question named nothing", () => {
+    const { container } = render(<Understood u={{ intents: [], services: [], dependents: {} }} />);
+    expect(container.textContent).toBe("");
   });
 });

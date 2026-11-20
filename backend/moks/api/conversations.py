@@ -195,6 +195,9 @@ async def delete_conversation(cid: uuid.UUID, ctx: AuthContext = Depends(get_aut
         raise HTTPException(403, "Only the person who started this conversation or an administrator can delete it")
     conv.deleted_at, conv.deleted_by = datetime.now(timezone.utc), ctx.user.id
     await _stop_running(db, conv.id)
+    from ..rag import history
+
+    await history.forget(db, conversation_id=conv.id)  # searchable history goes at commit, not at the next sync
     await audit.record(db, action="conversation.delete", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="conversation", resource_id=str(conv.id),
                        environment=env.name, namespace=conv.namespace, decision="allow")
     return {"status": "deleted"}
@@ -227,6 +230,9 @@ async def delete_message(cid: uuid.UUID, mid: uuid.UUID, ctx: AuthContext = Depe
     msg.deleted_at, msg.deleted_by = datetime.now(timezone.utc), ctx.user.id
     if msg.investigation_id and msg.role == "user":
         await _stop_running(db, conv.id, msg.investigation_id)
+        from ..rag import history
+
+        await history.forget(db, investigation_id=msg.investigation_id)
     await audit.record(db, action="conversation.message_delete", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="conversation_message", resource_id=str(msg.id),
                        environment=env.name, namespace=conv.namespace, decision="allow", details={"conversation": str(conv.id), "role": msg.role})
     await db.flush()

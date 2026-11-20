@@ -345,7 +345,7 @@ class KnowledgeSource(Base):
     __tablename__ = "knowledge_sources"
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(100), unique=True)
-    type: Mapped[str] = mapped_column(String(20))  # github | upload | incident
+    type: Mapped[str] = mapped_column(String(20))  # github | upload | incident | web | investigation
     config: Mapped[dict] = mapped_column(JSONB, default=dict)
     credential_ref: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     scope_environment: Mapped[str] = mapped_column(String(100), default="*")
@@ -448,6 +448,9 @@ class Document(Base):
     vector_attempts: Mapped[int] = mapped_column(Integer, default=0)  # failed tries since vectors last succeeded
     vector_tried_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # backfill takes the least recently tried first
     ingest_note: Mapped[str | None] = mapped_column(Text, nullable=True)  # what ingestion could not keep, shown wherever the document is
+    doc_type: Mapped[str | None] = mapped_column(String(30), nullable=True)  # rag/doctypes.py: runbook, postmortem, alert_rules, ...
+    resource_types: Mapped[list] = mapped_column(JSONB, default=list)  # kinds it describes, lowercased: deployment, service, alert
+    content_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)  # not moved by a re-read
 
 
 class ImprovementProposal(Base):
@@ -519,6 +522,18 @@ class Chunk(Base):
     end_offset: Mapped[int | None] = mapped_column(Integer, nullable=True)
     token_estimate: Mapped[int | None] = mapped_column(Integer, nullable=True)
     text_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # rag/structure.py: resource, alert, operation, section, steps
+
+
+class EmbeddingCache(Base):
+    """One vector per model and exact input text, keyed by the text's SHA-256. Holds no text."""
+    __tablename__ = "embedding_cache"
+    model_key: Mapped[str] = mapped_column(String(300), primary_key=True)
+    input_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    dimensions: Mapped[int] = mapped_column(Integer)
+    vector: Mapped[bytes] = mapped_column(LargeBinary)  # float32, little-endian
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class EmbeddingIndex(Base):

@@ -140,7 +140,7 @@ async def execute(run_id: uuid.UUID) -> dict[str, Any]:
 
         from ..ml import evaluation as ml_eval
 
-        out = await {"rag": lambda: gates.run_rag(data, run_id), "skills": skills_run, "rerank": lambda: rerank_eval.run(data, run_id), "similar": lambda: ml_eval.run_similar(data, run_id)}[data["kind"]]()
+        out = await {"rag": lambda: gates.run_rag(data, run_id, mode), "skills": skills_run, "rerank": lambda: rerank_eval.run(data, run_id), "similar": lambda: ml_eval.run_similar(data, run_id)}[data["kind"]]()
         async with session_scope() as db:
             run = await db.get(EvalRun, run_id)
             run.results, run.score, run.status, run.finished_at = out["results"], Decimal(str(out["score"])), "completed", datetime.now(timezone.utc)

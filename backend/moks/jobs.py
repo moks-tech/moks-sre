@@ -205,12 +205,15 @@ def handlers() -> dict[str, Handler]:
         src = await db.get(KnowledgeSource, uuid.UUID(p["source_id"]))
         if src is None or not src.enabled or src.lifecycle not in SYNCING:
             return {"skipped": "source missing, disabled or not active"}
-        if src.type not in ("github", "web"):
+        if src.type not in ("github", "web", "investigation"):
             return {"skipped": f"{src.type} sources are updated on upload/approval"}
         src.last_attempt_at = datetime.now(timezone.utc)
         await db.commit()
         try:
-            result = await (ingest.sync_web if src.type == "web" else ingest.sync_github)(db, src)
+            from .rag import history
+
+            sync = {"web": ingest.sync_web, "investigation": history.sync}.get(src.type, ingest.sync_github)
+            result = await sync(db, src)
         except Exception as exc:
             status = "rate_limited" if getattr(exc, "kind", None) == "rate_limited" else "error"
             await service.mark_indexed_now(db, src, status, str(getattr(exc, "message", exc))[:500])
@@ -402,6 +405,12 @@ async def _schedule_ml(now: datetime) -> None:
 async def schedule_periodic() -> None:
     """Idempotent: dedupe keys keep one pending job per target."""
     s = get_settings()
+    try:  # before any sync is scheduled: a re-read after an upgrade then embeds only text that changed
+        from .rag import service as knowledge
+
+        await knowledge.seed_embedding_cache()
+    except Exception:
+        log.warning("embedding cache seeding failed", extra={"event": "embedding_cache_seed_failed"})
     try:
         await update_durability_metrics()
         await update_queue_metrics()
@@ -411,7 +420,11 @@ async def schedule_periodic() -> None:
         envs = (await db.execute(select(Environment.id).where(Environment.auto_investigate.is_(True)))).scalars().all()
         watched = (await db.execute(select(Environment.id).where(Environment.detection_enabled.is_(True)))).scalars().all()
         now = datetime.now(timezone.utc)
-        sources = (await db.execute(select(KnowledgeSource).where(KnowledgeSource.enabled.is_(True), KnowledgeSource.type.in_(("github", "web")), KnowledgeSource.lifecycle.in_(SYNCING),
+        if get_settings().rag_index_investigations:
+            from .rag import history
+
+            await history.source(db)  # created when first switched on; switched off, its next sync empties it
+        sources = (await db.execute(select(KnowledgeSource).where(KnowledgeSource.enabled.is_(True), KnowledgeSource.type.in_(("github", "web", "investigation")), KnowledgeSource.lifecycle.in_(SYNCING),
                                                                   KnowledgeSource.sync_interval_minutes > 0,
                                                                   or_(KnowledgeSource.next_sync_at.is_(None), KnowledgeSource.next_sync_at <= now)))).scalars().all()
     try:
@@ -434,5 +447,6 @@ async def schedule_periodic() -> None:
         from .rag import service
 
         await service.cleanup_retired()
+        await service.cleanup_embedding_cache()  # at most every few hours
     except Exception:
         log.warning("index cleanup failed", extra={"event": "index_cleanup_failed"})

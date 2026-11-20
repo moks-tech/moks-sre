@@ -32,12 +32,12 @@ def _many(value: str) -> set[str]:
 
 
 @router.get("/explorer/documents")
-async def browse(q: str = "", source: str = "", environment: str = "", namespace: str = "", service_name: str = Query(default="", alias="service"), resource_type: str = "", kind: str = "",
+async def browse(q: str = "", source: str = "", environment: str = "", namespace: str = "", service_name: str = Query(default="", alias="service"), resource_type: str = "", kind: str = "", doc_type: str = "",
                  owner: str = "", team: str = "", lifecycle: str = "", classification: str = "", freshness: str = "", indexing: str = "", embedding: str = "",
                  sort: Literal["title", "path", "checked", "chunks"] = "title", descending: bool = False, page: int = 1, size: int = 25,
                  ctx: AuthContext = Depends(needs(P.KNOWLEDGE_READ)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
     """Metadata only, with counts and filter options drawn from what this person can see. Search text matches titles, paths and chunk words."""
-    filters = {"source": source, "environment": environment, "namespace": namespace, "service": service_name, "resource_type": resource_type, "kind": kind, "owner": owner, "team": team,
+    filters = {"source": source, "environment": environment, "namespace": namespace, "service": service_name, "resource_type": resource_type, "kind": kind, "doc_type": doc_type, "owner": owner, "team": team,
                "lifecycle": lifecycle, "classification": classification, "freshness": freshness, "indexing": indexing, "embedding": embedding}
     return await explore.browse(db, ctx.principal, q.strip()[:200] or None, {k: _many(v) for k, v in filters.items()}, sort, descending, max(page, 1), min(max(size, 1), 100))
 
@@ -92,7 +92,8 @@ def _passage(r: dict) -> dict:
 
 def _variant(name: str, rerank: bool, out: dict, diagnostics: bool) -> dict:
     v = {"name": name, "reranked": rerank, "mode": out["mode"], "requested_mode": out.get("requested_mode", name), "fallback_reason": out.get("fallback_reason"), "note": out.get("note"), "abstain": out["abstain"], "evidence": out["evidence"],
-         "latency_ms": out.get("latency_ms"), "usage": out.get("usage"), "reranking": out.get("reranking"), "results": [_passage(r) for r in out["results"]], "score_note": out["score_note"]}
+         "latency_ms": out.get("latency_ms"), "usage": out.get("usage"), "reranking": out.get("reranking"), "results": [_passage(r) for r in out["results"]], "score_note": out["score_note"],
+         "understanding": out.get("understanding")}  # resolved against what the caller can read, so safe to show them
     if diagnostics:
         v["diagnostics"] = {"index": out.get("index"), "candidates": out.get("candidates"), "understanding": out.get("understanding")}
     elif v["reranking"]:
