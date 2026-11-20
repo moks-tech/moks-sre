@@ -270,6 +270,37 @@ async def test_files_past_the_cap_are_not_treated_as_deleted(monkeypatch):
     assert r["deleted"] == 0 and r["deletions_skipped"] and r["listing"] == "partial"
 
 
+@pytest.mark.parametrize("lookup, expected", [
+    (200, "GitHub repository acme/old-ops was renamed or moved to acme/ops; use acme/ops instead"),
+    (404, "GitHub repository acme/old-ops was renamed or moved (repository id 42); use its new owner/name"),
+])
+async def test_a_renamed_repository_names_where_it_went_without_following_the_redirect(lookup, expected):
+    from moks.connectors.base import ConnectorError
+    from moks.connectors.git import GitHubProvider
+
+    seen: list[str] = []
+
+    def gh(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path.startswith("/repos/acme/old-ops"):
+            return httpx.Response(301, headers={"location": f"https://api.github.com/repositories/42{request.url.path[len('/repos/acme/old-ops'):]}"})
+        if request.url.path == "/repositories/42":
+            return httpx.Response(lookup, json={"full_name": "acme/ops"} if lookup == 200 else {"message": "Not Found"})
+        if request.url.path.startswith("/repos/acme/elsewhere"):
+            return httpx.Response(302, headers={"location": "https://evil.example/repositories/42"})
+        return httpx.Response(500)
+
+    p = GitHubProvider({}, None, transport=httpx.MockTransport(gh))
+    with pytest.raises(ConnectorError) as moved:
+        await p.inventory("acme/old-ops", None)
+    assert moved.value.message == expected and moved.value.kind == "bad_request"
+    assert seen == ["/repos/acme/old-ops", "/repositories/42"]  # the redirect itself is never followed
+    with pytest.raises(ConnectorError) as other:  # a redirect off the API host keeps the generic message and no lookup
+        await p.read("acme/elsewhere", "README.md", "main")
+    assert "put the final address in base_url" in other.value.message and seen[-1].startswith("/repos/acme/elsewhere")
+    await p.aclose()
+
+
 async def test_new_source_syncs_now_and_then_daily_and_duplicates_are_refused(client, monkeypatch):
     tag = uuid.uuid4().hex[:6]
     await make_user(f"k-{tag}@example.com", ["admin"])

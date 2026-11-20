@@ -270,6 +270,20 @@ async def test_deleting_a_source_keeps_a_tombstone_and_frees_the_name(client):
         assert (await db.get(KnowledgeSource, uuid.UUID(sid))).lifecycle == "deleted"
 
 
+async def test_adding_a_source_with_a_taken_name_is_a_conflict_not_a_500(client):
+    """Submitting the Add form twice used to hit the unique name constraint and come back as 'Something went wrong'."""
+    h = await admin(client)
+    body = {"name": f"dup-{uuid.uuid4().hex[:6]}", "type": "github", "repository": "acme/ops", "shared_globally": True}
+    first = await client.post("/moks/api/knowledge/sources", json=body, headers=h)
+    assert first.status_code == 201
+    again = await client.post("/moks/api/knowledge/sources", json=body, headers=h)
+    assert again.status_code == 409, again.text
+    err = again.json()["error"]
+    assert err["code"] == "conflict" and body["name"] in err["message"] and "already exists" in err["message"]
+    names = [s["name"] for s in (await client.get("/moks/api/knowledge/sources", headers=h)).json()]
+    assert names.count(body["name"]) == 1
+
+
 # ---- chunking and citations --------------------------------------------------------------------
 
 

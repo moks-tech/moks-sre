@@ -1,8 +1,8 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, apiForm, qs } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, type Env, ErrorBox, LineChart, Loading, PageHead, Stat, Time, useInterval, useLoad } from "../components";
+import { Badge, DataTable, type Env, ErrorBox, FormDrawer, FormSection, LineChart, Loading, PageHead, Stat, Time, useInterval, useLoad } from "../components";
 import { useUrlFilters } from "../filters";
 import { fmtBytesMi, fmtCores, recsOf } from "../rightsizing";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
@@ -157,10 +157,14 @@ function WebFields({ urls, crawl, maxPages, onChange }: { urls: string; crawl: b
 const PROFILES: [string, string][] = [["documentation", "Documentation (Markdown, docs/, runbooks/)"], ["infrastructure", "Infrastructure (manifests, Helm, Terraform, Dockerfiles, CI workflows, shell)"],
   ["application", "Application code (Python, Go, JavaScript, TypeScript, TSX, shell)"]];
 
-function Profiles({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+const PROFILES_NOTE = "None ticked and no include globs: documentation and configuration, as sources read before profiles. Dependencies, generated files, binaries and files over 300 KB are never indexed; files that look like credentials are refused and listed with the reason.";
+
+function Profiles({ value, onChange, inSection }: { value: string[]; onChange: (v: string[]) => void; inSection?: boolean }) {
+  const boxes = PROFILES.map(([k, label]) => <label key={k} className="inline small"><input type="checkbox" checked={value.includes(k)} onChange={(e) => onChange(e.target.checked ? [...value, k] : value.filter((x) => x !== k))} /> {label}</label>);
+  if (inSection) return <div className="stack tight" role="group" aria-label="What to index">{boxes}<div className="small muted">{PROFILES_NOTE}</div></div>;
   return <fieldset className="stack tight"><legend className="small">What to index</legend>
-    {PROFILES.map(([k, label]) => <label key={k} className="inline small"><input type="checkbox" checked={value.includes(k)} onChange={(e) => onChange(e.target.checked ? [...value, k] : value.filter((x) => x !== k))} /> {label}</label>)}
-    <div className="small muted">None ticked and no include globs: documentation and configuration, as sources read before profiles. Dependencies, generated files, binaries and files over 300 KB are never indexed; files that look like credentials are refused and listed with the reason.</div>
+    {boxes}
+    <div className="small muted">{PROFILES_NOTE}</div>
   </fieldset>;
 }
 
@@ -184,22 +188,10 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
   const { can } = useAuth();
   const list = useLoad(() => api<any[]>("/knowledge/sources"), []);
   useInterval(() => { if (!list.loading && list.data?.some((s) => s.sync_state !== "idle")) list.reload(); }, 3000);
-  const [f, setF] = useState({ name: "", type: "github", repository: "", urls: "", crawl: false, maxPages: "50", include: "", scope_environment: "", scope_namespace: "*", credType: "none", credName: "", shared: false, team: "", classification: "internal", review: "", profiles: ["documentation", "infrastructure"] as string[], service: "" });
   const [detail, setDetail] = useState<any>(null);
   const [error, setError] = useState<unknown>();
   const [editing, setEditing] = useState<any>(null);
-  async function add(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    try {
-      await api("/knowledge/sources", { method: "POST", body: { name: f.name, type: f.type, repository: f.type === "github" ? f.repository : null,
-        ...(f.type === "web" ? { urls: parseUrls(f.urls), crawl: f.crawl, max_pages: Number(f.maxPages) } : {}),
-        include: f.include ? f.include.split(/[\s,]+/).filter(Boolean) : [], ...(f.type === "github" ? { profiles: f.profiles } : {}), service: f.service || null, scope_environment: f.shared ? "*" : f.scope_environment || "*", scope_namespace: f.shared ? "*" : f.scope_namespace,
-        shared_globally: f.shared, team: f.team || null, classification: f.classification, review_interval_days: f.review ? Number(f.review) : null,
-        credential_ref: f.credType === "env" ? { type: "env", name: f.credName } : { type: "none" } } });
-      list.reload(); onChange();
-    } catch (err) { setError(err); }
-  }
+  const [adding, setAdding] = useState(false);
   function startEdit(s: any) {
     setEditing({ id: s.id, name: s.name, github: s.type === "github", web: s.type === "web", urls: (s.config?.urls ?? []).join("\n"), crawl: !!s.config?.crawl, maxPages: String(s.config?.max_pages ?? 50), repository: s.config?.repository, include: (s.config?.include ?? []).join(", "), profiles: s.config?.profiles ?? [], exclude: (s.config?.exclude ?? []).join(", "),
       scope_environment: s.scope_environment, scope_namespace: s.scope_namespace, owner: s.owner ?? "", service: s.service ?? "", enabled: s.enabled,
@@ -230,9 +222,9 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
   }
   return (
     <div className="card stack" style={{ marginTop: 14 }}>
-      <div className="row between"><h2>Sources</h2>{can("knowledge.index") && <button className="ghost small" onClick={() => api("/knowledge/reindex", { method: "POST" }).then(() => toast("Reindex queued"), (e) => toast(e.message, "bad"))}>Rebuild index (embedding change)</button>}</div>
+      <div className="row between"><h2>Sources</h2><div className="row">{can("knowledge.index") && <button className="ghost small" onClick={() => api("/knowledge/reindex", { method: "POST" }).then(() => toast("Reindex queued"), (e) => toast(e.message, "bad"))}>Rebuild index (embedding change)</button>}<button className="small" onClick={() => setAdding(true)}>Add source</button></div></div>
       <Loading load={list} rows={4} />
-      {list.data && <DataTable label="Knowledge sources" rows={list.data} rowKey={(s) => s.id} empty={<Empty title="No sources yet.">Add a repository or an upload source below.</Empty>}
+      {list.data && <DataTable label="Knowledge sources" rows={list.data} rowKey={(s) => s.id} empty={<Empty title="No sources yet.">Use Add source to index a GitHub repository, web pages or files you upload.</Empty>}
         menu={(s) => ({ label: `Actions for ${s.name}`, items: [
           ...(s.syncable ? [{ label: s.sync_state === "idle" ? "Sync now" : "Sync in progress", disabled: s.sync_state !== "idle", run: () => { api(`/knowledge/sources/${s.id}/sync`, { method: "POST" }).then(list.reload); } }] : []),
           { label: "Details and failures", run: () => setDetail(s) },
@@ -257,9 +249,8 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
           </span> : "") },
           { key: "up", head: "Upload", cell: (s) => (s.type === "upload" ? <label className="btn ghost small">Upload<input type="file" hidden accept=".md,.txt,.yaml,.yml,.json,.rst,.adoc,.sh,.py,.tf" onChange={(e) => e.target.files?.[0] && upload(s.id, e.target.files[0])} /></label> : "") },
         ]} />}
-      {editing && <form className="stack" onSubmit={saveEdit} aria-label={`Edit ${editing.name}`}>
-        <h3>Edit {editing.name}{editing.repository ? ` (${editing.repository})` : ""}</h3>
-        <div className="row">
+      {editing && <FormDrawer title={`Edit ${editing.name}${editing.repository ? ` (${editing.repository})` : ""}`} submit="Save" busy={false} error={error} onSubmit={saveEdit} onClose={() => { setEditing(null); setError(null); }}>
+        <div className="form-grid">
           <label>Scope env<input value={editing.scope_environment} onChange={(e) => ed("scope_environment", e.target.value)} /></label>
           <label>Scope namespace<input value={editing.scope_namespace} onChange={(e) => ed("scope_namespace", e.target.value)} /></label>
           <label>Owner<input value={editing.owner} onChange={(e) => ed("owner", e.target.value)} /></label>
@@ -267,43 +258,146 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
           <label className="inline"><input type="checkbox" checked={editing.enabled} onChange={(e) => ed("enabled", e.target.checked)} /> enabled</label>
         </div>
         {editing.web && <WebFields urls={editing.urls} crawl={editing.crawl} maxPages={editing.maxPages} onChange={(c) => setEditing({ ...editing, ...c })} />}
-        {editing.github && <div className="row">
-          <label style={{ flex: 1 }}>Include globs<input value={editing.include} onChange={(e) => ed("include", e.target.value)} placeholder="default set" /></label>
-          <label style={{ flex: 1 }}>Exclude globs<input value={editing.exclude} onChange={(e) => ed("exclude", e.target.value)} /></label>
+        {editing.github && <div className="form-grid">
+          <label>Include globs<input value={editing.include} onChange={(e) => ed("include", e.target.value)} placeholder="default set" /></label>
+          <label>Exclude globs<input value={editing.exclude} onChange={(e) => ed("exclude", e.target.value)} /></label>
           <label>Token<select value={editing.credType} onChange={(e) => ed("credType", e.target.value)}><option value="none">shared token, or none</option><option value="env">env variable</option></select></label>
           {editing.credType === "env" && <label>Variable<input required pattern="MOKS_CRED_[A-Z0-9_]+" value={editing.credName} onChange={(e) => ed("credName", e.target.value)} placeholder="MOKS_CRED_GITHUB_TOKEN" /></label>}
         </div>}
         {editing.github && <Profiles value={editing.profiles} onChange={(v) => ed("profiles", v)} />}
         <div className="small muted">Indexed documents are kept. A new scope applies straight away; new include or exclude rules apply at the next sync, which removes files that no longer qualify. The value of a token is never entered here: this names the variable that holds it.</div>
-        <div className="row"><button>Save</button><button type="button" className="ghost" onClick={() => setEditing(null)}>Cancel</button></div>
-      </form>}
+      </FormDrawer>}
       {detail && <SourceDetail s={detail} onClose={() => { setDetail(null); list.reload(); }} />}
-      <form className="stack" onSubmit={add}>
-        <div className="row">
-          <label>Name<input required pattern="[a-z0-9][a-z0-9\-]*" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
-          <label>Type<select value={f.type} onChange={(e) => setF({ ...f, type: e.target.value })}><option value="github">GitHub repository</option><option value="web">Web pages</option><option value="upload">Uploads</option></select></label>
-          {f.type === "github" && <label>Repository<input required placeholder="owner/name" value={f.repository} onChange={(e) => setF({ ...f, repository: e.target.value })} /></label>}
-          <label>Scope env<input disabled={f.shared} required={!f.shared} value={f.scope_environment} onChange={(e) => setF({ ...f, scope_environment: e.target.value })} placeholder="prod" /></label>
-          <label>Scope namespace<input disabled={f.shared} value={f.scope_namespace} onChange={(e) => setF({ ...f, scope_namespace: e.target.value })} /></label>
-          <label>Team<input value={f.team} onChange={(e) => setF({ ...f, team: e.target.value })} /></label>
-          <label>Classification<select value={f.classification} onChange={(e) => setF({ ...f, classification: e.target.value })}>{["public", "internal", "confidential", "restricted"].map((c) => <option key={c}>{c}</option>)}</select></label>
-          <label>Review every (days)<input type="number" min={1} max={3650} value={f.review} onChange={(e) => setF({ ...f, review: e.target.value })} /></label>
-        </div>
-        <label className="inline"><input type="checkbox" checked={f.shared} disabled={["confidential", "restricted"].includes(f.classification)} onChange={(e) => setF({ ...f, shared: e.target.checked })} /> Share with everyone who can read knowledge, in every environment</label>
-        {f.shared && <div className="alert warn small">Anyone with any read access will be able to retrieve this source. Use it only for content that is safe everywhere.</div>}
-        {f.type === "web" && <WebFields urls={f.urls} crawl={f.crawl} maxPages={f.maxPages} onChange={(c) => setF({ ...f, ...c })} />}
-        {f.type === "github" && <div className="row">
-          <label style={{ flex: 1 }}>Include globs (default: docs, runbooks, Markdown, YAML, Helm, Terraform, workflows)<input value={f.include} onChange={(e) => setF({ ...f, include: e.target.value })} placeholder="docs/** **/*.md k8s/**" /></label>
-          <label>Token<select value={f.credType} onChange={(e) => setF({ ...f, credType: e.target.value })}><option value="none">public repo</option><option value="env">env variable</option></select></label>
-          {f.credType === "env" && <label>Variable<input value={f.credName} onChange={(e) => setF({ ...f, credName: e.target.value })} placeholder="MOKS_CRED_GITHUB_TOKEN" /></label>}
-          <label>Service<input value={f.service} onChange={(e) => setF({ ...f, service: e.target.value })} placeholder="payments" title="Ties this repository to a service, so investigations of that service treat it as authoritative" /></label>
-        </div>}
-        {f.type === "github" && <Profiles value={f.profiles} onChange={(v) => setF({ ...f, profiles: v })} />}
-        {f.type === "github" && <KnowledgeVsGit />}
-        <ErrorBox error={error} />
-        <div><button>Add source</button></div>
-      </form>
+      {adding && <AddSource taken={(list.data ?? []).map((x) => x.name)} onClose={() => setAdding(false)}
+        onAdded={(name, synced) => { setAdding(false); toast(synced ? `Added ${name}: first sync queued` : `Added ${name}: use Upload on its row to add files`); list.reload(); onChange(); }} />}
+      {!editing && <ErrorBox error={error} />}
     </div>
+  );
+}
+
+type SourceType = "github" | "web" | "upload";
+
+const SOURCE_TYPES: [SourceType, string, string][] = [
+  ["github", "GitHub repository", "Docs, runbooks and configuration from a repository, re-read on a schedule."],
+  ["web", "Web pages", "Public pages you list, or a whole docs site, re-read on a schedule."],
+  ["upload", "Uploads", "Files you upload yourself, from the source's row in the table."],
+];
+
+const SOURCE_NAME = "[a-z0-9][a-z0-9\\-]{0,99}";
+const REPOSITORY = "[A-Za-z0-9\\-]+/[A-Za-z0-9_.\\-]+";
+
+/** A name from what is being added: "acme/Ops.Docs" → "ops-docs", "https://docs.example.com/x" → "docs-example-com". */
+export function suggestSourceName(type: SourceType, repository: string, urls: string): string {
+  let raw = "";
+  if (type === "github") raw = repository.split("/").pop() ?? "";
+  else if (type === "web") {
+    try { raw = new URL(parseUrls(urls)[0] ?? "").hostname; } catch { raw = ""; }
+  }
+  return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
+}
+
+const NEW_SOURCE = { type: "github" as SourceType, name: "", named: false, repository: "", urls: "", crawl: false, maxPages: "50", credType: "none", credName: "",
+  everyone: false, scope_environment: "", scope_namespace: "*", classification: "internal", profiles: ["documentation", "infrastructure"] as string[],
+  include: "", service: "", team: "", review: "", schedule: 1440 };
+
+/** Adding a source in a drawer: what it is, where it comes from, who can read it, then the rarely needed options.
+ * The name follows the repository or first URL until it is typed, and a name already in the table is caught before sending. */
+export function AddSource({ taken, onClose, onAdded }: { taken: string[]; onClose: () => void; onAdded: (name: string, synced: boolean) => void }) {
+  const envs = useLoad(() => api<Env[]>("/environments"), []);
+  const [f, setF] = useState(NEW_SOURCE);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>();
+  const set = (c: Partial<typeof NEW_SOURCE>) => setF((cur) => {
+    const next = { ...cur, ...c };
+    return next.named ? next : { ...next, name: suggestSourceName(next.type, next.repository, next.urls) };
+  });
+  useEffect(() => { if (envs.data?.length) setF((cur) => (cur.scope_environment ? cur : { ...cur, scope_environment: envs.data![0].name })); }, [envs.data]);
+  const name = f.name.trim();
+  const duplicate = !!name && taken.includes(name);
+  const sensitive = f.classification === "confidential" || f.classification === "restricted";
+  const everyone = f.everyone && !sensitive;
+  const synced = f.type !== "upload";
+  const globs = (v: string) => v.split(/[\s,]+/).filter(Boolean);
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    setBusy(true);
+    try {
+      await api("/knowledge/sources", { method: "POST", body: { name, type: f.type, sync_interval_minutes: f.schedule,
+        ...(f.type === "github" ? { repository: f.repository, profiles: f.profiles, include: globs(f.include), service: f.service || null,
+          credential_ref: f.credType === "env" ? { type: "env", name: f.credName } : { type: "none" } } : {}),
+        ...(f.type === "web" ? { urls: parseUrls(f.urls), crawl: f.crawl, max_pages: Number(f.maxPages) } : {}),
+        shared_globally: everyone, scope_environment: everyone ? "*" : f.scope_environment || "*", scope_namespace: everyone ? "*" : f.scope_namespace || "*",
+        classification: f.classification, team: f.team || null, review_interval_days: f.review ? Number(f.review) : null } });
+      onAdded(name, synced);
+    } catch (err) { setError(err); } finally { setBusy(false); }
+  }
+
+  const where = `${f.scope_environment || "?"}${f.scope_namespace && f.scope_namespace !== "*" ? `/${f.scope_namespace}` : ""}`;
+  const when = f.schedule ? `now, then ${(SCHEDULES.find(([m]) => m === f.schedule)?.[1] ?? "on schedule").toLowerCase()}` : "now, then only when you press Sync";
+  const what = f.type === "github"
+    ? `${f.profiles.length ? new Intl.ListFormat("en", { type: "conjunction" }).format(f.profiles) : "documentation and configuration"} files from ${f.repository || "the repository"}`
+    : f.type === "web" ? `${parseUrls(f.urls).length || "the"} page${parseUrls(f.urls).length === 1 ? "" : "s"} you list${f.crawl ? ` and the pages they link to (up to ${f.maxPages})` : ""}` : "";
+  const summary = `${name || "This source"} ${synced ? `will copy ${what} ${when}` : "will hold the files you upload"}; ${everyone ? "everyone who can read knowledge can find it" : `people who can read ${where} can find it`}.`;
+
+  return (
+    <FormDrawer title="Add knowledge source" submit={synced ? "Add and sync" : "Add source"} busyLabel="Adding…" busy={busy} blocked={duplicate} error={error} onSubmit={submit} onClose={onClose}>
+      <FormSection title="What to add">
+        <div className="choice-cards" role="radiogroup" aria-label="Source type">
+          {SOURCE_TYPES.map(([key, title, body]) => (
+            <label key={key} className={`choice-card${f.type === key ? " selected" : ""}`}>
+              <input type="radio" name="source-type" value={key} checked={f.type === key} onChange={() => set({ type: key })} />
+              <strong>{title}</strong><span className="small muted">{body}</span>
+            </label>
+          ))}
+        </div>
+      </FormSection>
+      <FormSection title={f.type === "github" ? "Repository" : f.type === "web" ? "Pages" : "Name"}>
+        {f.type === "github" && <div className="form-grid">
+          <label>Repository<input required autoFocus pattern={REPOSITORY} placeholder="owner/name" title="owner/name, as in github.com/owner/name" value={f.repository} onChange={(e) => set({ repository: e.target.value.trim() })} /></label>
+          <label>Access token<select value={f.credType} onChange={(e) => set({ credType: e.target.value })}><option value="none">None needed (public, or MOKS's shared token)</option><option value="env">From an environment variable</option></select></label>
+          {f.credType === "env" && <label>Variable holding the token<input required pattern="MOKS_CRED_[A-Z0-9_]+" placeholder="MOKS_CRED_GITHUB_TOKEN" value={f.credName} onChange={(e) => set({ credName: e.target.value })} /></label>}
+        </div>}
+        {f.type === "web" && <WebFields urls={f.urls} crawl={f.crawl} maxPages={f.maxPages} onChange={(c) => set(c)} />}
+        <div className="form-grid">
+          <label>Name<input required pattern={SOURCE_NAME} maxLength={100} value={f.name} aria-invalid={duplicate} aria-describedby="source-name-help"
+            onChange={(e) => set({ name: e.target.value.toLowerCase(), named: true })} /></label>
+          {synced && <label>Sync<select value={f.schedule} onChange={(e) => set({ schedule: Number(e.target.value) })}>{SCHEDULES.map(([m, l]) => <option key={m} value={m}>{l}</option>)}</select></label>}
+        </div>
+        <div id="source-name-help" className={`small ${duplicate ? "danger-text" : "muted"}`}>
+          {duplicate ? `A source named ${name} already exists. Edit it from the table, or choose another name.` : "Lowercase letters, digits and hyphens. Shown with search results and citations."}
+        </div>
+        {f.type === "github" && <KnowledgeVsGit />}
+      </FormSection>
+      <FormSection title="Who can read it" help="Search only returns this source to people allowed to read where it applies.">
+        <div className="form-grid fill">
+          <label>Classification<select value={f.classification} onChange={(e) => set({ classification: e.target.value })}>{["public", "internal", "confidential", "restricted"].map((c) => <option key={c}>{c}</option>)}</select></label>
+        </div>
+        <label className="inline"><input type="radio" name="source-access" checked={!everyone} onChange={() => set({ everyone: false })} /> People who can read one environment</label>
+        {!everyone && <div className="form-grid">
+          <label>Environment{envs.data?.length
+            ? <select required value={f.scope_environment} onChange={(e) => set({ scope_environment: e.target.value })}>{envs.data.map((x) => <option key={x.name} value={x.name}>{x.display_name}{x.is_production ? " (production)" : ""}</option>)}</select>
+            : <input required pattern="[a-z0-9?\-]{1,100}" placeholder="prod" value={f.scope_environment} onChange={(e) => set({ scope_environment: e.target.value })} />}</label>
+          <label>Namespace<input required pattern="[a-z0-9*?\-]{1,63}" value={f.scope_namespace} onChange={(e) => set({ scope_namespace: e.target.value })} title="* for every namespace" /></label>
+        </div>}
+        {!everyone && <div className="small muted">Namespace * covers every namespace in the environment.</div>}
+        <label className="inline"><input type="radio" name="source-access" checked={everyone} disabled={sensitive} onChange={() => set({ everyone: true })} /> Everyone who can read knowledge, in every environment</label>
+        {sensitive && <div className="small muted">Confidential and restricted sources stay within one environment.</div>}
+        {everyone && <div className="alert warn small">Anyone with any read access will be able to retrieve this source. Use it only for content that is safe everywhere.</div>}
+      </FormSection>
+      {f.type === "github" && <FormSection title="What to index"><Profiles inSection value={f.profiles} onChange={(v) => set({ profiles: v })} /></FormSection>}
+      <details className="block">
+        <summary>More options{f.type === "github" ? ": include globs, service, team, review" : ": team, review"}</summary>
+        <div className="form-grid" style={{ marginTop: 10 }}>
+          {f.type === "github" && <label>Include globs<input value={f.include} onChange={(e) => set({ include: e.target.value })} placeholder="docs/** **/*.md k8s/**" title="Replaces the default set: docs, runbooks, Markdown, YAML, Helm, Terraform, workflows" /></label>}
+          {f.type === "github" && <label>Service<input value={f.service} onChange={(e) => set({ service: e.target.value })} placeholder="payments" title="Investigations of this service treat the repository as authoritative" /></label>}
+          <label>Team<input value={f.team} maxLength={120} onChange={(e) => set({ team: e.target.value })} placeholder="sre" /></label>
+          <label>Review every (days)<input type="number" min={1} max={3650} value={f.review} onChange={(e) => set({ review: e.target.value })} placeholder="never" /></label>
+        </div>
+      </details>
+      <div className="alert info small" aria-live="polite">{summary}</div>
+    </FormDrawer>
   );
 }
 

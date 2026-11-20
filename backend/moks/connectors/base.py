@@ -22,14 +22,16 @@ class ConnectorError(Exception):
 
     kind: config | auth | unavailable | timeout | bad_request | not_found | too_large | forbidden | rate_limited
     retry_after: seconds the upstream asked us to wait (rate_limited only).
+    location: where the upstream redirected to (redirects are never followed; a connector may explain them).
     """
 
-    def __init__(self, kind: str, message: str, *, retryable: bool = False, retry_after: float | None = None):
+    def __init__(self, kind: str, message: str, *, retryable: bool = False, retry_after: float | None = None, location: str | None = None):
         super().__init__(message)
         self.kind = kind
         self.message = message
         self.retryable = retryable
         self.retry_after = retry_after
+        self.location = location
 
     def __str__(self) -> str:
         return f"{self.kind}: {self.message}"
@@ -176,7 +178,8 @@ class BoundedHttp:
         if status in (401, 403):
             raise ConnectorError("auth" if status == 401 else "forbidden", f"{self.connector_type} rejected the credentials (HTTP {status})")
         if 300 <= status < 400:
-            raise ConnectorError("bad_request", f"{self.connector_type} redirected to {headers.get('location', 'another address')}; put the final address in base_url")
+            raise ConnectorError("bad_request", f"{self.connector_type} redirected to {headers.get('location', 'another address')}; put the final address in base_url",
+                                 location=headers.get("location"))
         if status == 404:
             raise ConnectorError("not_found", f"{self.connector_type} endpoint not found (HTTP 404); check the base URL/path prefix")
         if status >= 500:
