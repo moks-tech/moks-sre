@@ -9,8 +9,9 @@ checks every MOKS tool call passes. There is no exec, apply, patch, delete, scal
 tools are not on the list, and the executor refuses privileged tools whatever asks.
 
 Which pods belong to the workload is decided by Kubernetes owner references, never by name: a Deployment's
-pods are those whose controller is one of the ReplicaSets that Deployment (by UID) owns; a StatefulSet's or
-DaemonSet's are those it controls directly, by UID. Members holds the result (runner.Run resolves it through
+pods are those whose controller is one of the ReplicaSets that Deployment (by UID) owns; a CronJob's are those of
+the Jobs it owns (by UID); a StatefulSet's, DaemonSet's, Job's or ReplicaSet's are those it controls directly, by
+UID; a Pod is only itself. Members holds the result (runner.Run resolves it through
 the ToolExecutor). So cart's investigation never reads cart-worker's pods, a pod without owner references
 belongs to nothing, and a recreated workload's old pods drop out. When nothing matches, the answer is an
 explicit empty result, never the whole namespace.
@@ -97,6 +98,20 @@ class Members:
 NOBODY = Members(frozenset(), frozenset(), "the workload's pods have not been resolved")
 
 
+def controllers_for(t: Target, workloads: list[dict[str, Any]]) -> tuple[frozenset[tuple[str, str, str | None]], str]:
+    """The controllers whose pods are the target's, from k8s_workloads, and why there are none when there are none.
+    Not for Deployments (their ReplicaSets come from the rollout history) or Pods (a pod is its own member)."""
+    found = next((w for w in workloads if w.get("kind") == t.kind and w.get("name") == t.workload), None)
+    if found is None:
+        return frozenset(), f"there is no {t.kind} {t.workload} in {t.namespace}"
+    if t.kind == "CronJob":
+        jobs = frozenset(("Job", str(w.get("name")), w.get("uid")) for w in workloads
+                         if w.get("kind") == "Job" and w.get("ownerKind") == "CronJob" and w.get("ownerName") == t.workload
+                         and (found.get("uid") is None or w.get("ownerUid") == found.get("uid")))
+        return jobs, "" if jobs else "it has no Jobs now (none has run yet, or they were cleaned up)"
+    return frozenset({(t.kind, t.workload, found.get("uid"))}), ""
+
+
 def owned_by(pod: dict[str, Any], owners: frozenset[tuple[str, str, str | None]]) -> bool:
     """A pod summary (summarize_pod) belongs to the target when its controller is one of the owners, matched by UID
     whenever the owner's UID is known. No owner reference, no membership."""
@@ -128,6 +143,12 @@ def _object(t: Target, m: Members, name: str | None) -> str | None:
     if name and name != t.workload:
         _pod(t, m, name)
     return name
+
+
+def _deployment(t: Target) -> str:
+    if t.kind != "Deployment":
+        raise LookupError(f"{t.kind} has no Deployment rollout history; use the workload status and events instead")
+    return t.workload
 
 
 def _repository(t: Target) -> str:
@@ -165,13 +186,13 @@ TOOLS: tuple[CrewTool, ...] = (
     CrewTool("firing_alerts", "prom_alerts", "workload", "Prometheus alerts firing within your scope.",
              NoArgs, lambda t, a, m: {"firing_only": True}, "prometheus"),
     CrewTool("rollout_history", "k8s_rollout_history", "change", "Revisions of the target Deployment with images and creation times.",
-             NoArgs, lambda t, a, m: {"namespace": t.namespace, "deployment": t.workload}, "kubernetes"),
+             NoArgs, lambda t, a, m: {"namespace": t.namespace, "deployment": _deployment(t)}, "kubernetes"),
     CrewTool("config_audit", "k8s_config_audit", "change", "Configuration of the namespace's workloads: requests, probes, image pinning, missing Secret/ConfigMap references (contents never read).",
              NoArgs, lambda t, a, m: {"namespace": t.namespace}, "kubernetes"),
     CrewTool("recent_commits", "git_recent_commits", "change", "Commits in the environment's repository during the investigation window.",
              PathArgs, lambda t, a, m: {"repository": _repository(t), "path": a.path, "hours": max(1, -(-t.minutes // 60)), "limit": 20}, "git"),
     CrewTool("deployed_commit", "git_compare_deployment", "change", "Ties the running Deployment to its Git commit when its image or annotations carry a SHA.",
-             NoArgs, lambda t, a, m: {"namespace": t.namespace, "deployment": t.workload, "repository": _repository(t)}, "git"),
+             NoArgs, lambda t, a, m: {"namespace": t.namespace, "deployment": _deployment(t), "repository": _repository(t)}, "git"),
     CrewTool("search_runbooks", "kb_search", "change", "Search runbooks, docs and approved postmortems you may read (cited passages).",
              QueryArgs, lambda t, a, m: {"query": a.query, "k": 4}, "knowledge"),
 )

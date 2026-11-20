@@ -4,6 +4,7 @@ import { api } from "../api";
 import { Badge, ErrorBox, Time } from "../components";
 import { useFeedback } from "../ui";
 import { Section, StatusIcon, TRIGGERS, type RunRow } from "./shared";
+import { WORKLOAD_KINDS } from "../targets";
 
 // The crew editor (docs/crewai-console.md "Crews"): what a version may change, each field against the code's default
 // with a word diff, Check, Save as a new version or Save and activate, Test run on a finished run (Jenkins' Replay),
@@ -156,7 +157,7 @@ export function CrewEditor({ crew, reload }: { crew: any; reload: () => void }) 
               <input type="number" min={crew.ceilings[k][0]} max={crew.ceilings[k][1]} value={draft.limits[k]} readOnly={!canEdit} onChange={(e) => setTop("limits", k, Number(e.target.value))} />
               <span className="small muted">{crew.ceilings[k][0]}–{crew.ceilings[k][1]}, code {defaults.limits[k]}</span></label>)}
             <label>Default kind<select value={draft.defaults.kind} disabled={!canEdit} onChange={(e) => setTop("defaults", "kind", e.target.value)}>
-              {["Deployment", "StatefulSet", "DaemonSet"].map((x) => <option key={x}>{x}</option>)}</select></label>
+              {WORKLOAD_KINDS.map((x) => <option key={x}>{x}</option>)}</select></label>
             <label>Default window (min)<input type="number" min={5} max={10080} placeholder="deployment default" value={draft.defaults.minutes ?? ""} readOnly={!canEdit}
               onChange={(e) => setTop("defaults", "minutes", e.target.value === "" ? null : Number(e.target.value))} /></label>
           </div>

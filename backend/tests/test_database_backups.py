@@ -78,7 +78,7 @@ async def setup(monkeypatch, tmp_path):
     async def namespaces(self):
         return ["shop", "other", "kube-system"]
 
-    async def workloads(self, ns):
+    async def workloads(self, ns, kinds=None):
         return WORKLOADS.get(ns, [])
 
     async def object_meta(self, namespace, kind, name):

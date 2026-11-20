@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { Badge, ErrorBox } from "../components";
+import { KindOptions, NamespaceSelect, WorkloadSelect } from "../targets";
 
 // The opt-in CrewAI workload investigation (docs/crewai-investigation.md). Shown only when
 // /investigate/config reports it available, so with the flag off none of this renders.
@@ -39,10 +40,10 @@ export function CrewAIForm({ capability, environments, minutes }: { capability: 
         Limits: {capability.limits.timeout_seconds}s, {capability.limits.max_tool_calls} tool calls, {capability.limits.max_iterations_per_agent} iterations per agent.
       </div>
       <div className="filters">
-        <label>Environment<select value={environment} onChange={(e) => setEnvironment(e.target.value)}>{environments.map((n) => <option key={n}>{n}</option>)}</select></label>
-        <label>Namespace<input required pattern="[a-z0-9]([\-a-z0-9]*[a-z0-9])?" maxLength={63} value={namespace} onChange={(e) => setNamespace(e.target.value)} /></label>
-        <label>Kind<select value={kind} onChange={(e) => setKind(e.target.value)}><option>Deployment</option><option>StatefulSet</option><option>DaemonSet</option></select></label>
-        <label style={{ flex: 1 }}>Workload<input required pattern="[a-z0-9]([\-a-z0-9.]*[a-z0-9])?" maxLength={253} value={workload} onChange={(e) => setWorkload(e.target.value)} placeholder="e.g. payments" /></label>
+        <label>Environment<select value={environment} onChange={(e) => { setEnvironment(e.target.value); setNamespace(""); setWorkload(""); }}>{environments.map((n) => <option key={n}>{n}</option>)}</select></label>
+        <label htmlFor="crew-ns">Namespace<NamespaceSelect id="crew-ns" environment={environment} value={namespace} onChange={(v) => { setNamespace(v); setWorkload(""); }} /></label>
+        <label>Kind<select value={kind} onChange={(e) => { setKind(e.target.value); setWorkload(""); }}><KindOptions environment={environment} namespace={namespace} /></select></label>
+        <label htmlFor="crew-wl" style={{ flex: 1 }}>Workload<WorkloadSelect id="crew-wl" environment={environment} namespace={namespace} kind={kind} value={workload} onChange={setWorkload} /></label>
         <button disabled={busy || !namespace || !workload}>{busy ? "Starting…" : "Run CrewAI investigation"}</button>
       </div>
       <ErrorBox error={error} />

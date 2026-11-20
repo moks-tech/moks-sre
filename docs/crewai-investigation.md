@@ -8,7 +8,10 @@ with the crewai extra.
 Runs, logs, schedules and the crew's prompts are managed in the **CrewAI console** at `/moks/crewai`
 ([crewai-console.md](crewai-console.md)). `POST /investigations/crewai` (the form on New investigation) starts the
 console's *Workload investigation* flow, so every run is numbered, logged step by step and uses the crew's active
-configuration version (prompts, tool subset and limits; section 4 describes the code's defaults).
+configuration version (prompts, tool subset and limits; section 4 describes the code's defaults). The form, and
+the console's run and schedule forms, list the namespaces you may read and that namespace's workloads of the chosen
+kind (Deployment, StatefulSet, DaemonSet, CronJob, Job, standalone ReplicaSet or Pod), each kind with its count;
+*Type a name…* covers a workload that is not listed.
 
 Status: on `master`, and switched on for mk4 in `values-hetzner.yaml` (`crewai.enabled: true`). CI's
 `release-crewai` job builds the `moks-crewai` image on every push to `master`, after the backend suite passed on
@@ -137,8 +140,10 @@ There is also one additive field on `GET /investigate/config`: `crewai: {enabled
   audited (`tool.call`, outcome `not_needed`, reason `crewai: …`) and listed as a gap.
 - **Workload membership by owner reference, never by name.** Before its first pod-level call the run resolves
   the target through the `ToolExecutor`: for a Deployment, the ReplicaSets it owns by UID (`k8s_rollout_history`),
-  then the pods whose controller is one of them (`k8s_list_pods`, matched by owner name and UID); for a
-  StatefulSet or DaemonSet, the workload's UID (`k8s_workloads`) and the pods it controls. So `cart` never reads
+  then the pods whose controller is one of them (`k8s_list_pods`, matched by owner name and UID); for a CronJob,
+  the Jobs it owns by UID and their pods; for a StatefulSet, DaemonSet, Job or standalone ReplicaSet, the
+  workload's UID (`k8s_workloads`) and the pods it controls; for a Pod, that pod alone. Rollout history and the
+  deployed commit apply to Deployments only and are a gap for other kinds. So `cart` never reads
   `cart-worker`'s pods, a pod without owner references belongs to nothing, and pods left from a deleted and
   recreated workload drop out by UID. Pod logs, descriptions, events, Loki searches (an exact `(a|b)` pod
   matcher) and Prometheus pod metrics use only those pods. Namespace-wide results are narrowed to the target and

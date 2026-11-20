@@ -950,7 +950,7 @@ class Investigator:
         hits: dict[str, list[str]] = {}
         for ns in nss[:40]:
             try:
-                for w in await k.workloads(ns):
+                for w in await k.workloads(ns, ("Deployment", "StatefulSet", "DaemonSet", "CronJob")):
                     base = w["name"]
                     parts = set(base.split("-")) | {base}
                     if words & parts - {"service", "server", "api", "app", "web", "db", "the", "and"}:
