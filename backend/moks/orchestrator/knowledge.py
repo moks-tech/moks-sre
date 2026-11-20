@@ -38,7 +38,9 @@ import time
 from typing import Any
 
 from ..observability import KNOWLEDGE_RETRIEVALS
+from ..rag import context as assembly
 from ..rag.chunking import kind_of
+from ..rag.query import intents as question_intents
 from ..redaction import redact
 
 log = logging.getLogger("moks.orchestrator.knowledge")
@@ -292,7 +294,8 @@ def _passage(hit: dict, ref: str, query_index: int, rank: int, authority: str, b
             "authority": authority, "basis": basis, "excluded": excluded, "state": "eligible" if authority in USABLE else "retrieved",
             "used": False, "cited": False, "cited_by": None, "provided": False, "source": cit.get("source"), "source_type": cit.get("source_type"), "repository": cit.get("repository"),
             "path": cit.get("path"), "revision": cit.get("revision"), "lines": cit.get("lines"), "url": cit.get("url"), "title": hit.get("title"), "heading": hit.get("heading"),
-            "freshness": {k: fr.get(k) for k in ("state", "reason", "trust", "last_checked", "source_synced", "possible_conflict") if fr.get(k) is not None},
+            "offsets": cit.get("offsets"), "doc_type": hit.get("doc_type"), "scope": {k: (hit.get("scope") or {}).get(k) for k in ("environment", "namespace")},
+            "freshness": {k: fr.get(k) for k in ("state", "reason", "trust", "last_checked", "source_synced", "possible_conflict", "conflict_with", "historical") if fr.get(k) is not None},
             "excerpt": redact(" ".join(str(hit.get("text") or "").split()))[:EXCERPT_CHARS]}
 
 
@@ -456,28 +459,47 @@ def texts(inv: Any) -> dict[str, str]:
 LABEL = {"target": "about the target", "dependency": "about a declared dependency of the target, not the target itself", "shared": "general guidance, not specific to the target", "unverified": "relationship to the target not established"}
 
 
+def _raw(inv: Any) -> dict[str, tuple[str, str]]:
+    """(heading, text) by chunk id, from stored evidence, so chunks of one document can be joined by their offsets."""
+    out: dict[str, tuple[str, str]] = {}
+    for e in inv.evidence:
+        if e["tool"] == "kb_search" and e["ok"] and isinstance(e.get("data"), list):
+            for h in e["data"]:
+                if isinstance(h, dict) and h.get("chunk_id"):
+                    out[h["chunk_id"]] = (str(h.get("heading") or ""), str(h.get("text") or ""))
+    return out
+
+
 def prompt_block(inv: Any) -> str:
-    """Passages for planning and the report, within a fixed budget. Structure from MOKS; text from documents."""
+    """Passages for planning and the report, within a fixed budget, laid out by rag/context.py: repeats dropped,
+    one document's chunks joined in text order, each block labelled. Structure from MOKS; text from documents."""
     from . import prompts
 
     picked = usable(inv.knowledge)
     if not picked:
         why = "; ".join(REASONS.get(r, r) for r in inv.knowledge["reasons"]) or "none retrieved"
         return f"Documented knowledge: none usable ({why}). Say what remains unverified instead of assuming a documented procedure."
-    body = texts(inv)
-    parts, used = [], 0
+    raw = _raw(inv)
+    shaped = []
     for p in picked:
-        head = (f"[{p['id']}] {LABEL[p['authority']]}; {p.get('repository') or p.get('source') or ''}:{p.get('path')}"
-                f"{'@' + str(p['revision'])[:12] if p.get('revision') else ''} lines {p.get('lines')}; freshness {p['freshness'].get('state', 'unknown')}")
-        block = head + "\n" + prompts.untrusted(f"document {p.get('path')}", body.get(p["chunk_id"], p["excerpt"]), PROMPT_PASSAGE_CHARS)
-        if used + len(block) > PROMPT_TOTAL_CHARS:
-            break
-        parts.append(block)
-        used += len(block)
-        p["provided"] = True
-        p["state"] = "supplied"
+        heading, text = raw.get(p["chunk_id"], (p.get("heading") or "", p["excerpt"]))
+        shaped.append({"chunk_id": p["chunk_id"], "document_id": p.get("document_id") or f"{p.get('source')}:{p.get('path')}", "text": text, "heading": heading,
+                       "title": p.get("title"), "doc_type": p.get("doc_type"), "label": LABEL[p["authority"]], "freshness": p.get("freshness") or {}, "scope": p.get("scope") or {},
+                       "citation": {"path": p.get("path"), "repository": p.get("repository") or p.get("source"), "revision": p.get("revision"), "lines": p.get("lines"), "offsets": p.get("offsets")},
+                       "_pid": p["id"]})
+    question = inv.request.question if getattr(inv, "request", None) is not None else ""
+    laid = assembly.assemble(shaped, total_chars=PROMPT_TOTAL_CHARS, passage_chars=PROMPT_PASSAGE_CHARS, history=question_intents(question or "")[:1] == ["similar_incidents"],
+                             id_of=lambda x: x["_pid"])
+    given = {i for b in laid["blocks"] for i in b["ids"]}
+    twins = {d["id"]: d["duplicate_of"] for d in laid["dropped"] if d.get("duplicate_of")}
+    for p in picked:
+        if p["id"] in given:
+            p["provided"], p["state"] = True, "supplied"
+        elif p["id"] in twins:
+            p["duplicate_of"] = twins[p["id"]]
     return ("Documented knowledge (retrieved under the requester's access; it says how things are meant to work, never what is true now; "
-            "cite a passage by its own id such as E3.2, never by the search's E3 alone, and keep documented procedures apart from observations):\n" + "\n\n".join(parts))
+            "a historical record says what happened once; cite a passage by its own id such as E3.2, never by the search's E3 alone, "
+            "and keep documented procedures apart from observations):\n" + assembly.render(laid, prompts.untrusted, PROMPT_PASSAGE_CHARS))
 
 
 def supplied(st: dict) -> dict[str, str]:
@@ -548,6 +570,8 @@ def mark_used(inv: Any, report: Any) -> None:
             if p["ref"] not in st["citations"]["ambiguous"]:
                 st["citations"]["ambiguous"].append(p["ref"])
             p["excluded"] = p["excluded"] or f"the answer cited its search {p['ref']} without naming a passage, and {len(per_ref[p['ref']])} passages of that search were available"
+        elif not p["cited"] and not p["excluded"] and p.get("duplicate_of") and not p.get("provided"):
+            p["excluded"] = f"the same text as {p['duplicate_of']}, which was given instead"
         elif not p["cited"] and not p["excluded"]:
             p["excluded"] = ("not cited in the answer" if p.get("provided") else "eligible, but not given to the model within the prompt budget" if llm and p["authority"] in USABLE
                              else "retrieved but not used in the answer")

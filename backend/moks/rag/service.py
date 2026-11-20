@@ -10,14 +10,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import re
+import struct
 import time
 import uuid
+from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import case, delete, func, select, text, update
+from sqlalchemy import case, delete, func, or_, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,13 +30,13 @@ from ..connectors.base import ConnectorError
 from ..db import session_scope
 from ..llm import budget
 from ..llm.providers import LLMError, provider_for
-from ..models import Chunk, Document, DocumentIndexState, EmbeddingIndex, IndexOutbox, KnowledgeSource, LLMConfig, SearchBackendStatus
-from ..observability import RETRIEVAL_FALLBACKS, RETRIEVAL_LATENCY, RETRIEVAL_MODES, SEARCH_BACKEND, span as traced
+from ..models import Chunk, Document, DocumentIndexState, EmbeddingCache, EmbeddingIndex, IndexOutbox, KnowledgeSource, LLMConfig, SearchBackendStatus
+from ..observability import EMBEDDING_INPUTS, RETRIEVAL_FALLBACKS, RETRIEVAL_LATENCY, RETRIEVAL_MODES, SEARCH_BACKEND, span as traced
 from ..rbac import Principal
-from . import access, eligibility, rerank as reranking
-from .backends import MAPPING_VERSION, OpenSearchBackend, PineconeBackend, PostgresBackend, rrf
+from . import access, doctypes, eligibility, query as understanding_rules, rerank as reranking, structure
+from .backends import MAPPING_VERSION, Narrow, OpenSearchBackend, PineconeBackend, PostgresBackend, rrf
 from .query import parts, understand
-from .chunking import CODE_PIPELINE_VERSION, MAX_CHUNKS, PIPELINE_VERSION, chunk, kind_of, lifecycle_of, title_of, version_for
+from .chunking import MAX_CHUNKS, PIPELINE_VERSION, chunk, current_versions, kind_of, lifecycle_of, structured, title_of, version_for
 from .secrets import clean, exclusion_reason
 
 log = logging.getLogger("moks.rag")
@@ -170,19 +173,142 @@ async def _embed_batch(provider, cfg: LLMConfig, texts: list[str], tries: int) -
     raise LLMError("rate_limited", "embedding retries exhausted")
 
 
+def embed_text(heading: str | None, text_: str) -> str:
+    """What a chunk's vector is computed from. The embedding cache's key is this text's SHA-256."""
+    return f"{heading or ''}\n{text_}"
+
+
+def _input_hash(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _pack(vector: list[float]) -> bytes:
+    return struct.pack(f"<{len(vector)}f", *vector)
+
+
+def _unpack(blob: bytes, dims: int) -> list[float]:
+    return list(struct.unpack(f"<{dims}f", blob))
+
+
+CACHE_TOUCH = timedelta(days=1)  # a hit refreshes used_at at most this often, so reading the cache is not a write per chunk
+CACHE_UNUSED_DAYS = 30
+CACHE_CLEANUP_EVERY = timedelta(hours=6)
+
+
+async def _cached(db: AsyncSession, idx: EmbeddingIndex, hashes: set[str]) -> dict[str, list[float]]:
+    if not hashes:
+        return {}
+    rows = (await db.execute(select(EmbeddingCache.input_hash, EmbeddingCache.vector).where(
+        EmbeddingCache.model_key == idx.model_key, EmbeddingCache.dimensions == idx.dimensions, EmbeddingCache.input_hash.in_(hashes)))).all()
+    found = {h: _unpack(v, idx.dimensions) for h, v in rows}
+    if found:
+        await db.execute(update(EmbeddingCache).where(EmbeddingCache.model_key == idx.model_key, EmbeddingCache.input_hash.in_(list(found)),
+                                                      EmbeddingCache.used_at < func.now() - CACHE_TOUCH).values(used_at=func.now()))
+    return found
+
+
+async def _remember(db: AsyncSession, idx: EmbeddingIndex, vectors: dict[str, list[float]]) -> None:
+    if vectors:
+        await db.execute(insert(EmbeddingCache).values([{"model_key": idx.model_key, "input_hash": h, "dimensions": idx.dimensions, "vector": _pack(v)} for h, v in vectors.items()])
+                         .on_conflict_do_nothing(index_elements=["model_key", "input_hash"]))
+
+
 async def _embed(db: AsyncSession, idx: EmbeddingIndex, texts: list[str], tries: int = 2) -> list[list[float]] | None:
+    """Vectors for these texts. Text this model has embedded before comes from the cache, and each distinct text is
+    sent once, so a document that changes in one section costs one section's embedding, not the whole document's."""
     if not idx.llm_config_id or not idx.dimensions:
         return None  # keyword-only index: a vector field does not exist to write to
     cfg = await db.get(LLMConfig, idx.llm_config_id)
     if cfg is None:
         return None
-    provider = provider_for(cfg)
-    out: list[list[float]] = []
-    for i in range(0, len(texts), EMBED_BATCH):
-        out.extend(await _embed_batch(provider, cfg, texts[i:i + EMBED_BATCH], tries))
-    if any(len(v) != idx.dimensions for v in out):
-        raise LLMError("bad_response", f"embedding size differs from the index's {idx.dimensions} dimensions; reindex after a model change")
-    return out
+    hashes = [_input_hash(t) for t in texts]
+    known = await _cached(db, idx, set(hashes))
+    by_hash = dict(zip(hashes, texts))
+    missing = [h for h in dict.fromkeys(hashes) if h not in known]
+    if missing:
+        provider = provider_for(cfg)
+        fresh: list[list[float]] = []
+        for i in range(0, len(missing), EMBED_BATCH):
+            fresh.extend(await _embed_batch(provider, cfg, [by_hash[h] for h in missing[i:i + EMBED_BATCH]], tries))
+        if any(len(v) != idx.dimensions for v in fresh):
+            raise LLMError("bad_response", f"embedding size differs from the index's {idx.dimensions} dimensions; reindex after a model change")
+        new = dict(zip(missing, fresh))
+        await _remember(db, idx, new)
+        known.update(new)
+    EMBEDDING_INPUTS.labels("computed").inc(len(missing))
+    EMBEDDING_INPUTS.labels("reused").inc(len(texts) - len(missing))
+    return [known[h] for h in hashes]
+
+
+_cache_cleaned_at: datetime | None = None
+
+
+async def cleanup_embedding_cache(force: bool = False) -> int:
+    """Drops vectors no index can use: those of a model no live or recently retired generation has, and those unused
+    for a month whose text no chunk holds any more. A vector of current text is kept however old, so a rebuild with
+    the same model reads it instead of calling the model."""
+    global _cache_cleaned_at
+    now = datetime.now(timezone.utc)
+    if not force and _cache_cleaned_at and now - _cache_cleaned_at < CACHE_CLEANUP_EVERY:
+        return 0
+    _cache_cleaned_at = now
+    keep = timedelta(hours=get_settings().rag_retired_retention_hours)
+    async with session_scope() as db:
+        models = (await db.execute(text("DELETE FROM embedding_cache WHERE model_key NOT IN (SELECT model_key FROM embedding_indexes WHERE status <> 'retired' OR retired_at > :since)"),
+                                   {"since": now - keep})).rowcount or 0
+        unused = (await db.execute(text("""
+            WITH live AS (SELECT DISTINCT encode(sha256(convert_to(coalesce(heading, '') || E'\n' || text, 'UTF8')), 'hex') AS h FROM chunks)
+            DELETE FROM embedding_cache e WHERE e.used_at < :before AND NOT EXISTS (SELECT 1 FROM live WHERE live.h = e.input_hash)"""),
+                                   {"before": now - timedelta(days=CACHE_UNUSED_DAYS)})).rowcount or 0
+    return models + unused
+
+
+_seeded = False
+SEED_BATCH = 500
+SEED_BATCHES = 40  # per call: 20,000 vectors; a larger index carries on at the next tick
+
+
+async def seed_embedding_cache(batch: int = SEED_BATCH, batches: int = SEED_BATCHES) -> int:
+    """Fills the cache from the vectors PostgreSQL's active index already holds, in bounded batches, until none is
+    left; then never again in this process. So the first re-read after an upgrade embeds only chunks whose text changed."""
+    total = 0
+    for _ in range(batches):
+        got = await _seed_batch(batch)
+        total += got
+        if _seeded or not got:
+            break
+    return total
+
+
+async def _seed_batch(batch: int) -> int:
+    global _seeded
+    if _seeded or backend_name() != "postgres":
+        return 0
+    async with session_scope() as db:
+        idx = await active_index(db)
+        if idx is None or not idx.dimensions or not await PostgresBackend(db).has_vector():
+            _seeded = True
+            return 0
+        rows = (await db.execute(text("""
+            SELECT c.heading, c.text, e.embedding::text FROM chunk_embeddings e JOIN chunks c ON c.id = e.chunk_id
+            WHERE e.index_id = :i AND NOT EXISTS (SELECT 1 FROM embedding_cache k WHERE k.model_key = :m
+                  AND k.input_hash = encode(sha256(convert_to(coalesce(c.heading, '') || E'\n' || c.text, 'UTF8')), 'hex'))
+            LIMIT :n"""), {"i": idx.id, "m": idx.model_key, "n": batch})).all()
+        vectors = {}
+        for heading, body, raw in rows:
+            vec = json.loads(raw)
+            if len(vec) == idx.dimensions:
+                vectors[_input_hash(embed_text(heading, body))] = vec
+        await _remember(db, idx, vectors)
+    _seeded = len(rows) < batch
+    return len(vectors)
+
+
+async def clear_embedding_cache(model: str | None = None) -> int:
+    """For a model whose weights changed under the same name: its next rebuild then calls the model for every chunk."""
+    async with session_scope() as db:
+        q = delete(EmbeddingCache) if model is None else delete(EmbeddingCache).where(EmbeddingCache.model_key == model)
+        return (await db.execute(q)).rowcount or 0
 
 
 def _when(value: datetime | None) -> str | None:
@@ -254,6 +380,9 @@ async def index_document(db: AsyncSession, src: KnowledgeSource, path: str, raw:
     doc.content_hash, doc.revision, doc.url = content_hash, revision, url
     if content_changed:
         doc.changed_revision = revision
+        doc.content_changed_at = now  # a re-read for a new pipeline is not a change, so "what changed" stays true
+    elif doc.content_changed_at is None:
+        doc.content_changed_at = doc.updated_at or now
     doc.kind = kind_of(path)
     doc.environment = extra.get("environment", src.scope_environment)
     doc.namespace = extra.get("namespace", src.scope_namespace)
@@ -263,7 +392,12 @@ async def index_document(db: AsyncSession, src: KnowledgeSource, path: str, raw:
     doc.pipeline_version = version_for(path)
     reason = exclusion_reason(path, raw)
     text_clean = clean(raw) if not reason else ""
-    pieces = chunk(path, text_clean) if not reason else []
+    doc_type = doctypes.classify(path, text_clean, src.type, extra.get("doc_type")) if not reason else None
+    if doc_type and structured():  # a dashboard is stored as its panels and queries; redaction ran first, on the original
+        text_clean = structure.render(doc_type, path, text_clean)
+    doc.doc_type = doc_type
+    doc.resource_types = doctypes.resource_types(doc_type, text_clean) if doc_type else []
+    pieces = chunk(path, text_clean, doc_type) if not reason else []
     if len(pieces) > MAX_CHUNKS:
         reason, pieces = f"would make {len(pieces)} chunks, over the {MAX_CHUNKS} limit", []
     if reason:
@@ -280,7 +414,7 @@ async def index_document(db: AsyncSession, src: KnowledgeSource, path: str, raw:
     doc.vector_state, doc.vector_error = "unknown", None
     await db.flush()
     chunks = [Chunk(id=chunk_id(doc.id, content_hash, i, doc.pipeline_version), document_id=doc.id, ord=i, heading=p.heading[:480], text=p.text, start_line=p.start_line, end_line=p.end_line,
-                    start_offset=p.start_offset, end_offset=p.end_offset, token_estimate=p.tokens, text_hash=p.text_hash) for i, p in enumerate(pieces)]
+                    start_offset=p.start_offset, end_offset=p.end_offset, token_estimate=p.tokens, text_hash=p.text_hash, meta=p.meta or None) for i, p in enumerate(pieces)]
     db.add_all(chunks)
     await db.flush()
     await _record_change(db, doc, "upsert")
@@ -313,7 +447,7 @@ async def _note_index(db: AsyncSession, doc_id: uuid.UUID, idx: EmbeddingIndex, 
 
 async def _try_embed(db: AsyncSession, idx: EmbeddingIndex, chunks: list[Chunk]) -> tuple[list[list[float]] | None, str | None]:
     try:
-        return (await _embed(db, idx, [f"{c.heading}\n{c.text}" for c in chunks]) if chunks else None), None
+        return (await _embed(db, idx, [embed_text(c.heading, c.text) for c in chunks]) if chunks else None), None
     except LLMError as exc:
         log.warning("embedding failed; indexed keyword-only", extra={"event": "embedding_failed", "errorType": exc.kind})
         return None, f"{exc.kind}: {exc.message}"[:300]
@@ -608,7 +742,7 @@ async def retry_dead(document_id: uuid.UUID | None = None, limit: int = 200) -> 
 async def _index_batch(db: AsyncSession, new: EmbeddingIndex, batch: list) -> bool:
     """Whether vectors went in. _embed answers None when a generation's model has gone."""
     rows = [_row(c, d, src, new) for c, d, src in batch]
-    embs = await _embed(db, new, [f"{r['heading']}\n{r['text']}" for r in rows], tries=REINDEX_EMBED_TRIES)
+    embs = await _embed(db, new, [embed_text(r["heading"], r["text"]) for r in rows], tries=REINDEX_EMBED_TRIES)
     if external():
         await external().index_chunks(new.index_name, rows, embs)
     else:
@@ -903,11 +1037,22 @@ async def _unsearchable(db: AsyncSession) -> tuple[dict, bool]:
     return {"sources": [str(i) for i in sources[:EXCLUDE_LIMIT]], "documents": [str(i) for i in documents[:EXCLUDE_LIMIT]]}, complete
 
 
+def weights() -> dict[str, float]:
+    """Fusion weights as configured, each held to 0..5, and the RRF constant to 1..1000."""
+    s = get_settings()
+    w = lambda v: max(0.0, min(float(v), 5.0))  # noqa: E731
+    return {"keyword": w(s.rag_weight_keyword), "vector": w(s.rag_weight_vector), "identifier": w(s.rag_weight_identifier), "entity": w(s.rag_weight_entity),
+            "k": max(1, min(int(s.rag_rrf_k), 1000))}
+
+
 async def _rankings(db: AsyncSession, query: str, tokens: list[str], found: list, pool: int, idx: EmbeddingIndex | None, qv: list[float] | None,
-                    retrieval: str = "hybrid", only: list[str] | None = None) -> tuple[list[list[str]], bool, str | None]:
-    """Each ranker's candidates, whether every one of them came through a complete filter, and why any fell back.
-    `only` narrows to named sources; it never adds anything the grants do not."""
-    rankings, exact, reason = [], True, None
+                    retrieval: str = "hybrid", only: list[str] | None = None, narrow: Narrow | None = None, entities: list[str] | None = None) -> tuple[list[list[str]], list[float], bool, str | None]:
+    """Each ranker's candidates and fusion weight, whether every one of them came through a complete filter, and why
+    any fell back. `only` and `narrow` narrow to named sources, types or times; they never add what the grants do not."""
+    rankings: list[list[str]] = []
+    weighting: list[float] = []
+    exact, reason = True, None
+    w = weights()
     pg = PostgresBackend(db)
     exclude: dict = {}
     if is_opensearch(backend_name()):
@@ -924,25 +1069,32 @@ async def _rankings(db: AsyncSession, query: str, tokens: list[str], found: list
                 exact = exact and ok
             except ConnectorError as exc:
                 reason = f"OpenSearch unavailable, keyword search served by PostgreSQL ({exc.kind})"
-                rankings.append(await pg.keyword(query, found, pool, only))
+                rankings.append(await pg.keyword(query, found, pool, only, narrow))
         else:
-            rankings.append(await pg.keyword(query, found, pool, only))
-        if tokens:
-            ranked = await pg.identifiers(tokens, found, pool, only)
-            rankings += [ranked, ranked]  # an exact identifier outweighs any other single signal
+            rankings.append(await pg.keyword(query, found, pool, only, narrow))
+        weighting.append(w["keyword"])
+        if tokens:  # an exact identifier outweighs any other single signal at the default weight of 2
+            rankings.append(await pg.identifiers(tokens, found, pool, only, narrow))
+            weighting.append(w["identifier"])
         for part in parts(query) if get_settings().rag_decompose else ():
-            rankings.append(await pg.keyword(part, found, pool, only))  # bounded, and under the same grants as everything else
+            rankings.append(await pg.keyword(part, found, pool, only, narrow))  # bounded, and under the same grants as everything else
+            weighting.append(w["keyword"])
+        if entities and w["entity"] > 0:  # "which services depend on redis": a manifest that says REDIS_HOST never says "depend"
+            rankings.append(await pg.keyword(" or ".join(entities[:6]), found, pool, only, narrow))
+            weighting.append(w["entity"])
     if qv is not None and idx is not None and retrieval != "keyword":
         if external():
             try:
                 ranked, ok = await external().vector(idx.index_name, qv, found, pool, exclude)
                 rankings.append(ranked)
+                weighting.append(w["vector"])
                 exact = exact and ok
             except ConnectorError as exc:
                 reason = reason or f"vector search unavailable ({exc.kind}), so this is keyword only"
         else:
-            rankings.append(await pg.vector(qv, idx.id, found, pool, only))
-    return rankings, exact, reason
+            rankings.append(await pg.vector(qv, idx.id, found, pool, only, narrow))
+            weighting.append(w["vector"])
+    return rankings, weighting, exact, reason
 
 
 async def _query_vector(db: AsyncSession, principal: Principal, query: str, idx: EmbeddingIndex | None) -> tuple[list[float] | None, str | None]:
@@ -996,13 +1148,59 @@ async def search(db: AsyncSession, principal: Principal, query: str, k: int = 8,
         return out
 
 
+_signals: ContextVar[bool | None] = ContextVar("moks_rag_query_signals", default=None)  # an evaluation compares both
+
+
+def query_signals() -> bool:
+    override = _signals.get()
+    return get_settings().rag_query_signals if override is None else override
+
+
+def use_query_signals(on: bool | None):
+    return _signals.set(on)
+
+
+def reset_query_signals(token) -> None:
+    _signals.reset(token)
+
+
+async def _understand(db: AsyncSession, query: str, tokens: list[str], found: list, now: datetime) -> tuple[dict, dict]:
+    """(understanding to report, hints for ranking). Names are resolved against what these grants can read, so the
+    answer can neither name nor hint at anything else."""
+    out = understand(query, tokens)
+    if not query_signals():
+        return out, {}
+    named = understanding_rules.resolve(query, await PostgresBackend(db).catalog(found))
+    window = understanding_rules.time_window(query, now)
+    found_intents = understanding_rules.intents(query)
+    out |= {"intents": found_intents, "services": named["services"], "environments": named["environments"], "namespaces": named["namespaces"],
+            "dependents": named["dependents"], "time_window": {"since": window["since"].isoformat(), "phrase": window["phrase"]} if window else None}
+    if named["dependents"]:
+        out["dependents_basis"] = "declared by knowledge sources you can read (applies_to.dependency_of); not observed traffic"
+    return out, {"intents": found_intents, "services": set(named["services"]), "environments": set(named["environments"]), "namespaces": set(named["namespaces"]),
+                 "since": window["since"] if window else None}
+
+
+DOC_TYPE_FILTER_LIMIT = 8
+
+
+def narrowing(doc_types: list[str] | None = None, changed_since: datetime | None = None) -> Narrow:
+    types = tuple(t for t in dict.fromkeys(doc_types or ()) if t in doctypes.TYPES)[:DOC_TYPE_FILTER_LIMIT]
+    if doc_types and not types:
+        raise ConnectorError("bad_request", f"unknown document type; known types: {', '.join(doctypes.TYPES)}")
+    if changed_since is not None and changed_since.tzinfo is None:
+        changed_since = changed_since.replace(tzinfo=timezone.utc)
+    return Narrow(types, changed_since)
+
+
 async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8, environment: str | None = None,
                   namespace: str | None = None, service: str | None = None, neighbors: bool = False, reranker: reranking.Reranker | None = None,
                   retrieval: str = "hybrid", rerank: bool | None = None, sources: list[str] | None = None, resource_type: str | None = None,
-                  prepared: tuple[list[float] | None, str | None] | None = None) -> dict:
+                  prepared: tuple[list[float] | None, str | None] | None = None, doc_types: list[str] | None = None, changed_since: datetime | None = None,
+                  interactive: bool = False) -> dict:
     """question and scope, then identifiers, then keyword and vector candidates under whole-binding filters, then
     PostgreSQL's lifecycle and access check, then optional reranking, then diverse selection, citations and an
-    evidence report. `retrieval`, `rerank` and `sources` are what the test workspace varies: each can only narrow."""
+    evidence report. `retrieval`, `rerank`, `sources`, `doc_types` and `changed_since` can each only narrow."""
     start = time.monotonic()
     environment, namespace = environment or None, None if namespace in (None, "*") else namespace
     found = access.grants(principal, environment, namespace)
@@ -1022,14 +1220,17 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
         qv, reason = await _query_vector(db, principal, query, idx)
         embedded = int(qv is not None)
     now = datetime.now(timezone.utc)
+    narrow = narrowing(doc_types, changed_since)
     pool = max(k * 4, 20)
     expanded = 0
     wanted_sources = set(sources or ())
+    fusion = weights()
+    understanding, hints = await _understand(db, query, tokens, found, now)
     while True:
-        rankings, exact, backend_reason = await _rankings(db, query, tokens, found, pool, idx, qv, retrieval, sources)
+        rankings, weighting, exact, backend_reason = await _rankings(db, query, tokens, found, pool, idx, qv, retrieval, sources, narrow, sorted(hints.get("services") or ()))
         reason = backend_reason or reason
         mode = _mode(retrieval, qv, backend_reason)
-        fused = rrf(*rankings)
+        fused = rrf(*rankings, weights=weighting, k=fusion["k"])
         ids = [uuid.UUID(cid) for cid, _ in fused]
         rows = (await db.execute(select(Chunk, Document, KnowledgeSource).join(Document, Document.id == Chunk.document_id)
                                  .join(KnowledgeSource, KnowledgeSource.id == Document.source_id)
@@ -1045,6 +1246,10 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
                 continue
             if wanted_sources and str(d.source_id) not in wanted_sources:
                 continue
+            if narrow.doc_types and d.doc_type not in narrow.doc_types:
+                continue  # an external index cannot filter on these, so this check is where they hold
+            if narrow.changed_since and (d.content_changed_at is None or d.content_changed_at < narrow.changed_since):
+                continue
             if eligibility.excluded(s, d, now):  # the rule readiness counts with
                 continue
             state, why = _freshness(s, d, now)
@@ -1054,10 +1259,12 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
             break  # enough survived, or there is nothing further down
         pool = min(pool * 3, MAX_POOL)  # unreadable or retired documents crowded this page
         expanded += 1
-    understanding = understand(query, tokens)
     resources = set(understanding["resource_types"]) | ({resource_type.lower()} if resource_type else set())
-    scored = _score(allowed, query, tokens, service, now, resources, environment, namespace)
+    scored = _score(allowed, query, tokens, service, now, resources, environment, namespace, hints)
     client = reranker or reranking.active()
+    skipped = None
+    if interactive and rerank is None and reranker is None and client is not None and not get_settings().rag_rerank_interactive:
+        client, skipped = None, {"state": "skipped", "reason": "the reranker runs for investigations, not for this page (MOKS_RAG_RERANK_INTERACTIVE=false)", "note": reranking.NOTE}
     applied: dict | None = None
     if rerank is not False and client is not None and scored:
         scored, applied = await _apply_reranker(client, scored, query)
@@ -1065,18 +1272,22 @@ async def _search(db: AsyncSession, principal: Principal, query: str, k: int = 8
     if applied:
         results = await _finish_reranking(db, principal, results, applied, environment, namespace)
     if neighbors:
-        await _attach_neighbors(db, results)
+        found_intents = hints.get("intents") or []
+        await _attach_neighbors(db, results, understanding_rules.PREFERS.get(found_intents[0], ((), frozenset()))[1] if found_intents else frozenset())
     _flag_conflicts(results)
     elapsed = time.monotonic() - start
     RETRIEVAL_LATENCY.labels(backend_name()).observe(elapsed)
     _note_retrieval(mode, reason)
     judged = _judge(query, tokens, results)
     out = {"results": results, "mode": mode, "requested_mode": retrieval, "index": idx.index_name if idx else None, "evidence": judged, "abstain": judged["state"] != "supported", "score_note": SCORE_NOTE,
-           "understanding": understanding, "latency_ms": round(elapsed * 1000, 1),
+           "understanding": understanding, "latency_ms": round(elapsed * 1000, 1), "fusion": fusion,
+           "filters": {"doc_types": list(narrow.doc_types), "changed_since": narrow.changed_since.isoformat() if narrow.changed_since else None},
            "usage": {"embedding_calls": embedded, "tokens": len(query) // 4 if embedded else 0, "tokens_basis": "estimated: embedding providers do not report usage"},
            "candidates": {"filtered_before_ranking": exact, "expanded": expanded, "considered": len(allowed)}}
     if applied:
         out["reranking"] = applied["public"]
+    elif skipped:
+        out["reranking"] = skipped
     if reason and (retrieval != "keyword"):
         out["fallback_reason"] = reason
     return out
@@ -1093,12 +1304,30 @@ def _note_retrieval(mode: str, reason: str | None) -> None:
         RETRIEVAL_SEEN["fallbacks"][reason] = RETRIEVAL_SEEN["fallbacks"].get(reason, 0) + 1
 
 
-def _score(allowed: list, query: str, tokens: list[str], service: str | None, now: datetime, resources: set[str] | None = None, environment: str | None = None, namespace: str | None = None) -> list:
+# A resource word standing alone ("which pods"), not inside a name ("payment-service"): only then does a manifest
+# that defines that kind of object count as being about it.
+STANDALONE_RESOURCE = re.compile(r"(?i)(?<![\w-])(pods?|deployments?|services?|ingress(?:es)?|nodes?|statefulsets?|daemonsets?|pvcs?|configmaps?|jobs?|cronjobs?|hpas?)(?![\w-])")
+
+
+def doc_type_of(d: Document, s: KnowledgeSource) -> str:
+    """A document read before types existed has none stored until it is read again; its path still says a lot."""
+    return d.doc_type or doctypes.classify(d.path, "", s.type)
+
+
+def _score(allowed: list, query: str, tokens: list[str], service: str | None, now: datetime, resources: set[str] | None = None, environment: str | None = None,
+           namespace: str | None = None, hints: dict | None = None) -> list:
     """After authorization, so nothing unreadable can influence it. Small, explainable adjustments
-    on top of the fused rank: enough to break near ties, not enough to bury a clear match."""
-    wanted = {service.lower()} if service else set()
+    on top of the fused rank: enough to break near ties, not enough to bury a clear match. `hints` are what the
+    question names (rag/query.py): its intent, services, places and time, each a visible signal of its own."""
+    hints = hints or {}
+    wanted = ({service.lower()} if service else set()) | {x.lower() for x in hints.get("services", ())}
     resources = resources or set()
+    standalone = {m.lower().rstrip("s") if not m.lower().endswith("ss") else m.lower() for m in STANDALONE_RESOURCE.findall(query)}
     terms = _terms(query)
+    found_intents = hints.get("intents") or []
+    primary = understanding_rules.PREFERS.get(found_intents[0]) if found_intents else None
+    secondary = set().union(*(understanding_rules.PREFERS[i][0] for i in found_intents[1:] if i in understanding_rules.PREFERS))
+    since, places = hints.get("since"), (hints.get("environments") or set(), hints.get("namespaces") or set())
     scored = []
     for cid, score, c, d, s, state, why in allowed:
         signals: dict[str, float] = {}
@@ -1111,8 +1340,20 @@ def _score(allowed: list, query: str, tokens: list[str], service: str | None, no
             signals["service"] = 0.015
         if resources & {str(x).lower() for x in (s.applies_to or {}).get("resources") or []}:
             signals["resource_type"] = 0.01
-        if (environment and d.environment == environment) or (namespace and d.namespace == namespace):
+        elif standalone & set(d.resource_types or []):
+            signals["resource_type"] = 0.004
+        if (environment and d.environment == environment) or (namespace and d.namespace == namespace) or d.environment in places[0] or d.namespace in places[1]:
             signals["scope"] = 0.005  # written for this place, ahead of something shared everywhere
+        if primary or secondary:
+            dt = doc_type_of(d, s)
+            if primary and dt in primary[0]:
+                signals["document_type"] = 0.006  # the kind of document this kind of question is answered by
+            elif dt in secondary:
+                signals["document_type"] = 0.003
+            if primary and (c.meta or {}).get("section") in primary[1]:
+                signals["section"] = 0.003
+        if since and d.content_changed_at and d.content_changed_at >= since:
+            signals["recent"] = 0.006  # changed within the time the question asks about
         if s.authority and d.trust == "reviewed":  # a sync finding a file gives it no authority of its own
             signals["authority"] = 0.003 * s.authority
         if state == "stale":
@@ -1120,7 +1361,9 @@ def _score(allowed: list, query: str, tokens: list[str], service: str | None, no
         elif state in ("superseded", "deprecated"):
             signals["retired"] = -0.03
         scored.append((score + sum(signals.values()), signals, cid, c, d, s, state, why))
-    scored.sort(key=lambda t: (-t[0], t[2]))
+    # A tie goes to the document path and the place in it, not to a random id: the same corpus orders the same way
+    # after every reindex, and an evaluation measures ranking rather than chance.
+    scored.sort(key=lambda t: (-t[0], t[4].path, t[3].ord, t[2]))
     return scored
 
 
@@ -1154,6 +1397,10 @@ async def _apply_reranker(client: reranking.Reranker, scored: list, query: str) 
     ordered = sorted(window, key=lambda r: (-got.scores[r[2]], before[r[2]]))
     pinned = sorted([r for r in ordered if "exact_identifier" in r[1]], key=lambda r: before[r[2]])
     held = [r for r in ordered if "exact_identifier" not in r[1]]
+    floor = get_settings().rag_rerank_min_score
+    if floor is not None:  # what the model scored below the floor goes, and so does what it was never shown
+        public["below_threshold"], public["min_score"] = sum(got.scores[r[2]] < floor for r in held), floor
+        held, rest = [r for r in held if got.scores[r[2]] >= floor], []
     final = pinned + [r for r in held if r[6] not in ("superseded", "deprecated")] + [r for r in held if r[6] in ("superseded", "deprecated")] + rest
     partial = set(got.truncated) | set(got.clipped)
     chunks = {r[2]: {"before": before[r[2]] + 1, "after": i + 1, "reranker_score": round(got.scores[r[2]], 4) if r[2] in got.scores else None, "pinned": "exact_identifier" in r[1], "partially_scored": r[2] in partial}
@@ -1195,29 +1442,42 @@ def _select(scored: list, k: int) -> list[dict]:
         same.append(shingles)
         if c.text_hash:
             seen_hash.add((where, c.text_hash))
+        dt = doc_type_of(d, s)
         results.append({
             "chunk_id": cid, "document_id": str(d.id), "ord": c.ord, "score": round(rank, 5), "signals": signals, "title": d.title, "heading": c.heading, "text": c.text,
+            "doc_type": dt, "meta": c.meta or {},
             "citation": {"source": s.name, "source_type": s.type, "repository": (s.config or {}).get("repository"), "path": d.path, "revision": d.revision,
-                         "lines": [c.start_line, c.end_line], "offsets": [c.start_offset, c.end_offset], "url": _line_url(d.url, c.start_line, c.end_line, s.type, d.kind)},
+                         "lines": [c.start_line, c.end_line], "offsets": [c.start_offset, c.end_offset],
+                         "url": _line_url(d.url, c.start_line, c.end_line, s.type, d.kind, rendered=doctypes.is_rendered(dt, d.path)), "rendered": doctypes.is_rendered(dt, d.path)},
             "scope": {"environment": d.environment, "namespace": d.namespace, "service": d.service, "owner": d.owner, "team": s.team, "classification": s.classification,
                       "applies_to": s.applies_to or {}},
             "freshness": {"state": state, "reason": why, "trust": d.trust, "reviewed_at": d.reviewed_at.isoformat() if d.reviewed_at else None, "last_checked": d.checked_at.isoformat() if d.checked_at else None, "content_changed_in": d.changed_revision,
-                          "document_updated": d.updated_at.isoformat() if d.updated_at else None, "source_synced": s.last_sync_at.isoformat() if s.last_sync_at else None},
+                          "document_updated": d.updated_at.isoformat() if d.updated_at else None, "source_synced": s.last_sync_at.isoformat() if s.last_sync_at else None,
+                          "content_changed_at": d.content_changed_at.isoformat() if d.content_changed_at else None, "historical": dt in doctypes.HISTORICAL},
         })
         if len(results) >= k:
             break
     return results
 
 
-async def _attach_neighbors(db: AsyncSession, results: list[dict]) -> None:
-    """The chunk on each side, from the same document and so the same access decision, within a token budget."""
+async def _attach_neighbors(db: AsyncSession, results: list[dict], sections: frozenset = frozenset()) -> None:
+    """Context from the same document, and so the same access decision, within a token budget: the sections the
+    question is about first (a postmortem's root cause, when the question is about past incidents: the parent document
+    of the hit), then the chunk on each side. Each carries its offsets, so context assembly can join it to the hit."""
     left = CONTEXT_TOKENS
+    shown = {x["chunk_id"] for x in results}
     for r in results[:3]:
-        rows = (await db.execute(select(Chunk).where(Chunk.document_id == uuid.UUID(r["document_id"]), Chunk.ord.in_((r["ord"] - 1, r["ord"] + 1))).order_by(Chunk.ord))).scalars().all()
+        near = Chunk.ord.in_((r["ord"] - 1, r["ord"] + 1))
+        want = or_(near, Chunk.meta["section"].astext.in_(list(sections))) if sections else near
+        rows = (await db.execute(select(Chunk).where(Chunk.document_id == uuid.UUID(r["document_id"]), want).order_by(Chunk.ord))).scalars().all()
+        rows = sorted(rows, key=lambda n: (0 if (n.meta or {}).get("section") in sections else 1, abs(n.ord - r["ord"])))
         for n in rows:
             cost = n.token_estimate or len(n.text) // 4
-            if cost <= left and str(n.id) not in {x["chunk_id"] for x in results}:
-                r.setdefault("context", []).append({"lines": [n.start_line, n.end_line], "text": n.text})
+            if cost <= left and str(n.id) not in shown:
+                relation = "section" if (n.meta or {}).get("section") in sections else "neighbor"
+                r.setdefault("context", []).append({"chunk_id": str(n.id), "lines": [n.start_line, n.end_line], "offsets": [n.start_offset, n.end_offset], "heading": n.heading,
+                                                    "text": n.text, "relation": relation})
+                shown.add(str(n.id))
                 left -= cost
 
 
@@ -1241,10 +1501,11 @@ def safe_url(url: str | None) -> str | None:
     return url if url and url.lower().startswith(("https://", "http://")) else None
 
 
-def _line_url(url: str | None, start: int | None, end: int | None, source_type: str = "github", kind: str = "") -> str | None:
-    """Line anchors exist on a Git host's file view, not on a web page, and only the plain view of Markdown has them."""
+def _line_url(url: str | None, start: int | None, end: int | None, source_type: str = "github", kind: str = "", rendered: bool = False) -> str | None:
+    """Line anchors exist on a Git host's file view, not on a web page, and only the plain view of Markdown has them.
+    A rendered document (a dashboard's panels) has lines of its own, so its link names the file without a line."""
     url = safe_url(url)
-    if not url or source_type != "github" or not start:
+    if not url or source_type != "github" or not start or rendered:
         return url
     return f"{url}{'?plain=1' if kind == 'markdown' else ''}#L{start}" + (f"-L{end}" if end and end != start else "")
 
@@ -1305,11 +1566,12 @@ async def stats(db: AsyncSession) -> dict:
     outbox = dict((await db.execute(text("SELECT CASE WHEN status = 'pending' AND attempts > 0 THEN 'retrying' ELSE status END, count(*) FROM index_outbox WHERE status <> 'done' GROUP BY 1"))).all())
     stale = (await db.execute(select(func.count()).select_from(Document).where(Document.content_revision != Document.indexed_revision, Document.realm == realm))).scalar_one()
     vectors = dict((await db.execute(select(Document.vector_state, func.count()).where(Document.status == "active", Document.realm == realm).group_by(Document.vector_state))).all())
+    docs_version, code_version = current_versions()
     old_pipeline = (await db.execute(select(func.count()).select_from(Document).where(Document.status == "active", Document.realm == realm,
-                                         Document.pipeline_version != case((Document.kind == "code", CODE_PIPELINE_VERSION), else_=PIPELINE_VERSION)))).scalar_one()
+                                         Document.pipeline_version != case((Document.kind == "code", code_version), else_=docs_version)))).scalar_one()
     gaps = await _coverage(db, idx) if idx else {}
     need = sum(vectors.get(k, 0) for k in ("complete", "missing", "unknown"))
-    return {"backend": backend_name(), "documents": counts, "chunks": chunks, "pipeline": {"version": PIPELINE_VERSION, "documents_behind": old_pipeline},
+    return {"backend": backend_name(), "documents": counts, "chunks": chunks, "pipeline": {"version": docs_version, "code_version": code_version, "documents_behind": old_pipeline},
             "outbox": {"pending": outbox.get("pending", 0), "retrying": outbox.get("retrying", 0), "dead": outbox.get("dead", 0), "documents_behind": stale},
             "embedding": {"complete": vectors.get("complete", 0), "missing": vectors.get("missing", 0), "unknown": vectors.get("unknown", 0), "not_applicable": vectors.get("not_applicable", 0),
                           "coverage": round(vectors.get("complete", 0) / need, 4) if need else None},

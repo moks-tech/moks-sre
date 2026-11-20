@@ -114,8 +114,21 @@ class Settings(BaseSettings):
     rag_rerank_timeout_ms: int = 1500
     rag_rerank_max_query_chars: int = 1000
     rag_rerank_max_passage_chars: int = 2000
+    rag_rerank_min_score: float | None = None  # a reranked passage scoring below this is dropped (exact identifiers never are); empty: none
+    rag_rerank_interactive: bool = True  # false: the Knowledge search page skips the reranker; investigations still use it
     rag_decompose: bool = False  # off: the rag dataset measured no gain from it. Turn on only with a dataset that shows one.
     rag_activation: str = "strict"  # strict: a reindex with any incomplete document fails. degraded: it activates and says so.
+    # Fusion weights for reciprocal rank fusion. 1/1/2 is what search did before they were settings: an exact
+    # identifier counted twice. 0 leaves a ranker out. rag/service.py bounds each to 0..5.
+    rag_weight_keyword: float = 1.0
+    rag_weight_vector: float = 1.0
+    rag_weight_identifier: float = 2.0
+    rag_weight_entity: float = 0.5  # services a question names, resolved against what the asker can read, searched by name
+    rag_rrf_k: int = 60
+    rag_structured_chunking: bool = True  # alert rules per rule, manifests per resource, ...; false: split by format only
+    rag_query_signals: bool = True  # intent, services, environments and time a question names, as small ranking signals
+    rag_index_investigations: bool = False  # finished investigations become searchable history, scoped like the investigation
+    rag_history_days: int = 180  # how far back investigation history reaches
     evidence_max_age_seconds: int = 900  # older evidence cannot back a claim about the current state without saying so
     # Opt-in CrewAI workload investigation (docs/crewai-investigation.md). Off unless MOKS_CREWAI_ENABLED is true and the
     # image was built with the crewai extra. The global ceilings (max_tool_calls, max_duration_seconds) still apply.

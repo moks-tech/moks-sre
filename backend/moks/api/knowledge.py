@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +19,8 @@ from ..config import get_settings
 from ..connectors.base import ConnectorError, describe_credential_ref
 from ..db import get_db
 from ..models import Chunk, Document, IndexOutbox, Job, KnowledgeSource, KnowledgeSyncItem, User
+from ..orchestrator import prompts
+from ..rag import context as assembly
 from ..rag import explore, ingest, service, web
 from ..rbac import P
 from .admin import CredentialRef
@@ -26,7 +28,7 @@ from .common import flush_unique
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
-SYNCED = ("github", "web")
+SYNCED = ("github", "web", "investigation")  # investigation: the built-in history source (rag/history.py)
 Profile = Literal["documentation", "infrastructure", "application"]
 
 
@@ -152,16 +154,59 @@ def source_out(s: KnowledgeSource, counts: dict | None = None, job: str | None =
 
 
 @router.get("/search")
-async def search(q: str, k: int = 8, environment: str | None = None, namespace: str | None = None, service_name: str | None = None, ctx: AuthContext = Depends(get_auth),
+async def search(q: str, k: int = 8, environment: str | None = None, namespace: str | None = None, service_name: str | None = None,
+                 doc_type: list[str] = Query(default=[], max_length=8), changed_since: datetime | None = None, ctx: AuthContext = Depends(get_auth),
                  db: AsyncSession = Depends(get_db, scope="function")) -> dict:
     if not 2 <= len(q) <= 500:
         raise HTTPException(422, "query must be 2-500 characters")
     try:
-        r = await service.search(db, ctx.principal, q, min(max(k, 1), 20), environment=environment, namespace=namespace, service=service_name)
+        r = await service.search(db, ctx.principal, q, min(max(k, 1), 20), environment=environment, namespace=namespace, service=service_name,
+                                 doc_types=doc_type or None, changed_since=changed_since, interactive=True)
     except ConnectorError as exc:
-        raise HTTPException(502, exc.message) from None
+        raise HTTPException(422 if exc.kind == "bad_request" else 502, exc.message) from None
     await audit.record(db, action="knowledge.search", actor_id=ctx.user.id, actor_email=ctx.user.email, details={"chars": len(q), "results": len(r["results"])})
     return for_reader(r, ctx.principal)
+
+
+class ContextIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    query: str = Field(min_length=2, max_length=500)
+    k: int = Field(default=8, ge=1, le=20)
+    environment: str | None = Field(default=None, max_length=100)
+    namespace: str | None = Field(default=None, max_length=253)
+    service: str | None = Field(default=None, max_length=100)
+    doc_types: list[str] = Field(default_factory=list, max_length=8)
+    changed_since: datetime | None = None
+    budget_tokens: int = Field(default=2250, ge=200, le=8000)
+    passage_tokens: int = Field(default=300, ge=50, le=2000)
+
+
+@router.post("/context")
+async def context(body: ContextIn, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    """What a model should read to answer this question: the same search under the caller's own grants, then laid out
+    by rag/context.py within a token budget, with citations, labels, conflicts and what did not fit. `prompt` is the
+    block ready to place in a prompt, every passage framed as untrusted data."""
+    try:
+        r = await service.search(db, ctx.principal, body.query, body.k, environment=body.environment, namespace=body.namespace, service=body.service,
+                                 doc_types=body.doc_types or None, changed_since=body.changed_since, neighbors=True, interactive=True)
+    except ConnectorError as exc:
+        raise HTTPException(422 if exc.kind == "bad_request" else 502, exc.message) from None
+    history = (r.get("understanding") or {}).get("intents", [])[:1] == ["similar_incidents"]
+    laid = assembly.assemble(r["results"], total_chars=body.budget_tokens * 4, passage_chars=body.passage_tokens * 4, history=history)
+    await audit.record(db, action="knowledge.context", actor_id=ctx.user.id, actor_email=ctx.user.email,
+                       details={"chars": len(body.query), "results": len(r["results"]), "blocks": len(laid["blocks"])})
+    out = {"query_mode": r.get("mode"), "evidence": r["evidence"], "abstain": r["abstain"], "understanding": r.get("understanding"), "fallback_reason": r.get("fallback_reason"),
+           **laid, "prompt": assembly.render(laid, prompts.untrusted, body.passage_tokens * 4) if laid["blocks"] else "",
+           "note": "Documented knowledge says how things are meant to work, never what is true now; current state needs live evidence."}
+    return out
+
+
+@router.post("/index/embedding-cache/clear")
+async def clear_embedding_cache(model: str | None = None, ctx: AuthContext = Depends(needs(P.KNOWLEDGE_INDEX)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    """For a model whose weights changed under the same name: the next rebuild then embeds every chunk afresh."""
+    n = await service.clear_embedding_cache(model)
+    await audit.record(db, action="knowledge.embedding_cache_clear", actor_id=ctx.user.id, actor_email=ctx.user.email, decision="allow", details={"removed": n, "model": model})
+    return {"removed": n}
 
 
 def for_reader(result: dict, principal) -> dict:

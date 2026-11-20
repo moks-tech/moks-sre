@@ -1,6 +1,7 @@
 """Chunking for operational content. Markdown splits on headings and keeps fenced code together when
 it fits, YAML on documents and top-level keys, code on blank lines. These are line-based heuristics,
-not parsers: nothing here understands a language.
+not parsers: nothing here understands a language. A document with a known type (rag/doctypes.py) is split by
+rag/structure.py instead, when structured chunking is on: alert rules per rule, manifests per resource, and so on.
 
 Every character of the document lands in a chunk. A line too long for one chunk is split across
 several, preferably at whitespace or punctuation. Offsets and line numbers refer to the stored
@@ -14,13 +15,18 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 
 from ..config import get_settings
 
-PIPELINE_VERSION = 3  # 3: line numbers count only newlines and skip leading blanks; redaction keeps line breaks
+PIPELINE_VERSION = 4  # 4: document types, per-chunk metadata, structure-aware alert rules, manifests, OpenAPI, dashboards, logs, steps
 # Code has its own version, so changing how code is split re-reads code only, not every runbook and manifest.
-CODE_PIPELINE_VERSION = 4  # 4: code splits at top-level definitions, and each chunk is headed by the definitions in it
+CODE_PIPELINE_VERSION = 5  # 5: document types and Terraform resources per chunk; 4: code splits at top-level definitions
+# What a document read with structured chunking switched off goes through: the versions before it existed, so
+# switching it either way re-reads what the other setting produced.
+LEGACY_PIPELINE_VERSION, LEGACY_CODE_PIPELINE_VERSION = 3, 4
+_structured: ContextVar[bool | None] = ContextVar("moks_rag_structured", default=None)  # an evaluation compares both
 CHARS_PER_TOKEN = 4  # an estimate: no tokenizer is shipped, and models differ
 MAX_CHUNKS = 3000
 
@@ -40,6 +46,7 @@ DEFINITION = {  # a top-level definition, at column 0: where a reader of the fil
 FENCE = re.compile(r"^\s*(```|~~~)")
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*$")
 SAFE_BREAK = re.compile(r"[\s,;:)\]}>]")
+LIST_START = re.compile(r"^\s{0,3}(?:\d{1,3}[.)]|[-*+]|\|)\s")  # a step, a bullet or a table row
 
 
 @dataclass
@@ -50,6 +57,7 @@ class ChunkPiece:
     end_line: int
     start_offset: int = 0
     end_offset: int = 0
+    meta: dict = field(default_factory=dict)  # what this piece is about: resource, alert, operation, section, steps
 
     @property
     def tokens(self) -> int:
@@ -72,6 +80,20 @@ class _Span:
 
 def estimate_tokens(text: str) -> int:
     return max(1, len(text) // CHARS_PER_TOKEN)
+
+
+def structured() -> bool:
+    override = _structured.get()
+    return get_settings().rag_structured_chunking if override is None else override
+
+
+def use_structured(on: bool | None):
+    """For an evaluation that compares both ways of splitting in one run. Returns a token for reset_structured."""
+    return _structured.set(on)
+
+
+def reset_structured(token) -> None:
+    _structured.reset(token)
 
 
 def limits() -> tuple[int, int]:
@@ -100,7 +122,14 @@ def kind_of(path: str) -> str:
 
 
 def version_for(path: str) -> int:
+    if not structured():
+        return LEGACY_CODE_PIPELINE_VERSION if kind_of(path) == "code" else LEGACY_PIPELINE_VERSION
     return CODE_PIPELINE_VERSION if kind_of(path) == "code" else PIPELINE_VERSION
+
+
+def current_versions() -> tuple[int, int]:
+    """(documents, code): what a document read now goes through."""
+    return (PIPELINE_VERSION, CODE_PIPELINE_VERSION) if structured() else (LEGACY_PIPELINE_VERSION, LEGACY_CODE_PIPELINE_VERSION)
 
 
 def _definitions(path: str) -> re.Pattern | None:
@@ -127,21 +156,35 @@ def lifecycle_of(text: str) -> tuple[str, str | None]:
     return ("deprecated" if re.search(r"(?im)^(status|state):\s*[\"']?(deprecated|obsolete|archived)\b", head) else "current"), None
 
 
-def chunk(path: str, text: str) -> list[ChunkPiece]:
+def chunk(path: str, text: str, doc_type: str | None = None) -> list[ChunkPiece]:
+    """Pieces of the stored text. With a document type and structured chunking on, each piece also says what it is about."""
     if not text.strip():
         return []
     k = kind_of(path)
     size, overlap = limits()
-    spans, sections = _spans(text, k, size, _definitions(path) if k == "code" else None)
-    out: list[ChunkPiece] = []
-    for heading, a, b in sections:
-        out.extend(_windows(text, spans[a:b], heading, size, overlap))
+    out: list[ChunkPiece] | None = None
+    if doc_type and structured():
+        from . import structure
+
+        out = structure.chunk(doc_type, path, text, size, overlap)
+    if out is None:
+        spans, sections = _spans(text, k, size, _definitions(path) if k == "code" else None)
+        out = []
+        for heading, a, b in sections:
+            out.extend(_windows(text, spans[a:b], heading, size, overlap))
+    if doc_type and structured():
+        from . import structure
+
+        for p in out:
+            p.heading, p.meta = structure.annotate(doc_type, p.heading, p.text)
+            p.heading = p.heading[:480]
     return out
 
 
-def _spans(text: str, kind: str, size: int, definitions: re.Pattern | None = None) -> tuple[list[_Span], list[tuple[str, int, int]]]:
+def _spans(text: str, kind: str, size: int, definitions: re.Pattern | None = None, lists: bool = False) -> tuple[list[_Span], list[tuple[str, int, int]]]:
     """Lines split to fit, and the sections they fall in. In code, a top-level definition opens a section once the
-    current one holds a third of a chunk; smaller ones share a section, and its heading names each of them."""
+    current one holds a third of a chunk; smaller ones share a section, and its heading names each of them. With
+    `lists`, a Markdown chunk ends between list items (steps, timeline entries), not inside one."""
     spans: list[_Span] = []
     sections: list[tuple[str, int, int]] = []
     stack: list[tuple[int, str]] = []
@@ -182,6 +225,10 @@ def _spans(text: str, kind: str, size: int, definitions: re.Pattern | None = Non
             boundary = not bare.strip() or bool(definitions is not None and definitions.match(bare))
         elif kind in ("yaml", "data"):
             boundary = not bare.strip() or (not bare[:1].isspace() and bare[:1] not in "}]")
+        elif lists:
+            following = lines[number] if number < len(lines) else ""
+            continued = bool(following.strip()) and following[:1].isspace() and not LIST_START.match(following)
+            boundary = (not bare.strip() and not continued) or bool(LIST_START.match(bare))
         else:
             boundary = not bare.strip()
         for start, end in _split_line(raw, offset, size):
@@ -209,7 +256,7 @@ def _split_line(raw: str, offset: int, size: int) -> list[tuple[int, int]]:
     return out
 
 
-def _windows(text: str, spans: list[_Span], heading: str, size: int, overlap: int) -> list[ChunkPiece]:
+def _windows(text: str, spans: list[_Span], heading: str, size: int, overlap: int, anywhere: bool = False) -> list[ChunkPiece]:
     out: list[ChunkPiece] = []
     start, n = 0, len(spans)
     while start < n:
@@ -218,7 +265,7 @@ def _windows(text: str, spans: list[_Span], heading: str, size: int, overlap: in
             used += spans[end].end - spans[end].start
             end += 1
         if end < n:
-            end = _better_end(spans, start, end)
+            end = _better_end(spans, start, end, anywhere)
         piece = _piece(text, spans[start:end], heading)
         if piece:
             out.append(piece)
@@ -232,9 +279,10 @@ def _windows(text: str, spans: list[_Span], heading: str, size: int, overlap: in
     return out
 
 
-def _better_end(spans: list[_Span], start: int, end: int) -> int:
-    """Back off within the second half of the window: leave a code fence whole, else stop at a boundary."""
-    half = start + (end - start) // 2
+def _better_end(spans: list[_Span], start: int, end: int, anywhere: bool = False) -> int:
+    """Back off within the second half of the window: leave a code fence whole, else stop at a boundary. With
+    `anywhere`, any boundary after the first line will do: for a log, a short chunk beats an event cut in two."""
+    half = start if anywhere else start + (end - start) // 2
     if spans[end].fenced and spans[end - 1].fenced:
         for j in range(end - 1, half, -1):
             if not spans[j].fenced:

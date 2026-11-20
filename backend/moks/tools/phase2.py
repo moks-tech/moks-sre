@@ -186,16 +186,21 @@ async def git_compare_deployment(ctx: ToolContext, a: CompareDeployArgs) -> Tool
 # ---- Knowledge (RAG) -------------------------------------------------------------------------
 
 
+KB_TYPES = Literal["runbook", "postmortem", "investigation", "documentation", "readme", "k8s_manifest", "helm_values", "helm_template", "terraform", "alert_rules",
+                   "dashboard", "openapi", "ci_pipeline", "dockerfile", "code", "config", "log"]
+
+
 class KbArgs(ToolArgs):
     query: str = Field(min_length=2, max_length=500, description="What to look for in runbooks, docs, manifests and postmortems")
     k: int = Field(default=6, ge=1, le=12)
+    doc_types: list[KB_TYPES] = Field(default_factory=list, max_length=6, description="only these kinds of document, e.g. runbook, alert_rules, postmortem")
 
 
 async def kb_search(ctx: ToolContext, a: KbArgs) -> ToolResult:
     from ..rag import service
 
     async with session_scope() as db:
-        r = await service.search(db, ctx.principal, a.query, a.k, environment=ctx.environment.name, namespace=ctx.focus_namespace, neighbors=True)
+        r = await service.search(db, ctx.principal, a.query, a.k, environment=ctx.environment.name, namespace=ctx.focus_namespace, neighbors=True, doc_types=list(a.doc_types) or None)
     hits = r["results"]
     ranking = {h["chunk_id"]: h.pop("ranking") for h in hits if "ranking" in h}  # for the evidence view, not for the model
     summary = f"{len(hits)} knowledge passages ({r.get('mode')}) for {a.query!r}. Documented knowledge only: current state needs live evidence."

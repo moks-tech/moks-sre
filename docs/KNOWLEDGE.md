@@ -103,22 +103,61 @@ A file PostgreSQL refuses is recorded as failed, and the pass goes on. A page ov
 
 `PIPELINE_VERSION` in `rag/chunking.py` is part of change detection. Raise it when chunking, redaction,
 extraction or stored metadata change, and GitHub documents are read again even though their content did not change.
-Code has its own `CODE_PIPELINE_VERSION` (4), so a change to how code is split re-reads code files only. The
-first sync after this release re-reads and re-embeds the code files a source already holds (Dockerfiles, `.tf`,
-shell), not its Markdown or YAML.
+Code has its own `CODE_PIPELINE_VERSION`, so a change to how code is split re-reads code files only.
+
+**Upgrading to pipeline 4 (code 5), 2026-11-20:** document types and per-chunk metadata are new for every document,
+so the first sync after this release reads every GitHub and web document once more. Text that did not change is not
+embedded again: the [embedding cache](#embedding-cache) is filled from the vectors the PostgreSQL index already holds
+before that, so only chunks whose text changed (mostly alert rules, manifests, OpenAPI, dashboards and logs, which
+are now split differently) call the model. Switching **Split documents by their structure** off and on again does the
+same: each setting has its own pipeline versions (3 and 4 for code), so the other setting's documents are read again.
 Uploads and postmortems keep no original text, so they stay on their old pipeline until uploaded or approved again. Status shows how many.
+Postmortems are typed by the migration; an upload has no type until it is uploaded again, so a type filter does not find it.
+
+## Document types
+
+Every document has a type, decided without a model from its path, its source and its first lines
+(`rag/doctypes.py`): `runbook`, `postmortem`, `investigation`, `readme`, `documentation`, `web_page`, `k8s_manifest`,
+`helm_chart`, `helm_values`, `helm_template`, `kustomization`, `terraform`, `alert_rules`, `dashboard`, `openapi`,
+`ci_pipeline`, `dockerfile`, `code`, `log`, `config`, `text`. A path under `runbooks/`, `playbooks/` or `sops/`, or front
+matter `type: runbook`, makes a runbook; `postmortems/`, `incidents/`, `rca/`, or two of the headings Root cause,
+Timeline, Impact, Contributing factors make a postmortem. YAML with `groups:` and `- alert:` (or a `PrometheusRule`) is
+alert rules; YAML or JSON with `openapi:` or `swagger:` is an API description; JSON with `panels` is a Grafana dashboard.
+
+A type decides how the text is split, which questions it answers best and how it is labelled where it is cited. It
+never decides who may read it. Each document also records `resource_types` (the Kubernetes kinds a manifest defines,
+the Terraform resource types, `alert`, `dashboard`) and `content_changed_at`, which moves only when its words change,
+not when it is read again for a new pipeline. The Explorer filters by type; search and `kb_search` can be narrowed to
+types (`doc_type`, `doc_types`) and to documents changed since a time (`changed_since`). Filters only narrow, run before
+ranking in PostgreSQL and again in the authoritative check, and an unknown type is refused with the list of known ones.
 
 ## Chunks and citations
 
 Chunks are limited by estimated tokens (`MOKS_RAG_CHUNK_TOKENS`, default 350, and `MOKS_RAG_CHUNK_OVERLAP_TOKENS`,
-default 30, at 4 characters a token, an estimate because no tokenizer ships with MOKS). Markdown splits on headings
-and keeps fences together when they fit, YAML on documents and top-level keys. Code splits at top-level
+default 30, at 4 characters a token, an estimate because no tokenizer ships with MOKS). With **structured chunking**
+(`MOKS_RAG_STRUCTURED_CHUNKING`, on by default, in Settings > Knowledge search) a typed document is split by its
+structure (`rag/structure.py`):
+
+| Type | Split | Each chunk says |
+|---|---|---|
+| alert rules | one chunk per alerting or recording rule; the lines that open a group join its first rule | alert or record name, group, severity, whether it has a `runbook_url` |
+| manifests, Helm templates, kustomizations | one section per YAML document, breaking at keys and list items | `Kind namespace/name` |
+| OpenAPI | one section per operation and per schema; a JSON description is stored as YAML | `GET /payments`, its `operationId` |
+| Grafana dashboards | stored as their panels: title, type, description, row, datasource, queries, unit, thresholds; layout and styling are left out | dashboard and panel |
+| logs | a chunk ends only where an event starts, so a stack trace stays with its event | first and last timestamps, levels |
+| runbooks, postmortems, investigations | Markdown headings, and a chunk ends between steps, bullets or table rows, not inside one | the section (root cause, timeline, mitigation, diagnosis, ...) and step numbers |
+| Terraform | top-level blocks, as before | the resources and modules in it |
+
+A file whose shape a rule cannot read is split by its format as before, and everything else keeps the format rules:
+Markdown splits on headings and keeps fences together when they fit, YAML on documents and top-level keys. Code splits at top-level
 definitions (Python `def`/`class`, Go `func`/`type`, JavaScript and TypeScript functions, classes, exported
 constants, interfaces and types, shell functions, Terraform blocks, Dockerfile stages) once a section holds a
 third of a chunk, and each chunk's heading names the definitions in it; otherwise at blank lines. These are
 line heuristics, not parsers. A line too long for one chunk is split across several, so nothing is dropped.
 
-Offsets refer to the stored, redacted text. A citation gives source, path, revision and line range.
+Offsets refer to the stored, redacted text. A dashboard or a JSON API description is stored as a rendering, so its lines
+are the rendering's: its link names the file without a line anchor, and the citation says `rendered`. Redaction runs on
+the original before the rendering. A citation gives source, path, revision and line range.
 `revision` is the last commit it was confirmed at, `content_changed_in` the commit its content last changed in. A link always names the same commit as `revision`, including when a file was confirmed unchanged.
 
 Only newlines count as lines, as on a Git host, and redaction keeps every line break, so a citation's lines are the source's. Links have line anchors on Git hosts only, using the plain view for Markdown. Only `http` and `https` links leave MOKS.
@@ -138,11 +177,40 @@ PostgreSQL is the authority. Each change adds an outbox event in its own transac
 
 Deletion and replacement run write-first: new chunks go in, fenced by content revision, then old ones are pruned, and every bulk item's result is read. `sync_generation` repairs a generation from `document_index_state` alone, which is also how a generation catches up after a cutover or rollback. [OPENSEARCH.md](OPENSEARCH.md) covers deployment, migration and recovery.
 
+## Embedding cache
+
+`embedding_cache` holds one vector per embedding model and exact input text (a chunk's heading and text), keyed by the
+text's SHA-256. It holds no text. Every path that embeds goes through it: indexing in PostgreSQL, the outbox for
+OpenSearch and Pinecone, vector backfill and a rebuild. So:
+
+- a document that changes in one section calls the model for that section (and a chunk overlapping it), not the
+  whole document; identical chunks in one document are sent once;
+- a rebuild with the same model (after a mapping change, say) reads every vector from the cache;
+- the first re-read after a pipeline upgrade costs only the chunks whose text changed, because the worker fills the
+  cache from the vectors the active PostgreSQL index already holds, 500 at a time, before that.
+
+`moks_rag_embedding_inputs_total{outcome="computed"|"reused"}` counts both. Vectors of a model no live or recently
+retired generation uses are deleted, and so are vectors unused for 30 days whose text no chunk holds any more; a
+vector of current text is kept however old. If a model's weights change under the same name, clear its vectors with
+`POST /knowledge/index/embedding-cache/clear?model=<model key>` (`knowledge.index`, audited) before the rebuild.
+
 ## Retrieval
 
-Results are fused from keyword, vector and exact-identifier rankings with RRF, then adjusted after authorization by
-small, visible `signals`: exact identifier, service, resource type, a document written for the scope asked about, source authority, stale, superseded. Duplicates collapse within
-a scope. An RRF score only orders one result list. It is not a probability, and MOKS never presents it as confidence.
+Results are fused with weighted reciprocal rank fusion from up to four rankings: keyword (PostgreSQL full text, or
+OpenSearch BM25), vector, exact identifier, and **named services**: a keyword search for the services the question
+names, among those the asker can read about, so "which services depend on redis" also finds manifests that say
+`REDIS_HOST` but never "depend". The weights are settings (Settings > Knowledge search, or `MOKS_RAG_WEIGHT_KEYWORD`,
+`_VECTOR`, `_IDENTIFIER`, `_ENTITY`, each 0 to 5, with `MOKS_RAG_RRF_K`); 1, 1, 2 and 60 reproduce search before
+weights existed exactly, when an exact identifier was listed twice. 0 leaves a ranking out. Every search reports the
+`fusion` it used.
+
+After authorization, small visible `signals` adjust the fused order: exact identifier, service, resource type (a
+source's `applies_to.resources`, or a manifest defining the kind a question names on its own), a document written
+for the scope asked about (or for an environment or namespace the question names), source authority, and from the
+question: **document type** (the kind of document its intent is answered by, below), **section** (a postmortem's root
+cause or summary for a question about past incidents) and **recent** (content changed within the time the question
+asks about). Stale and superseded documents lose a little. Duplicates collapse within a scope. An RRF score only
+orders one result list. It is not a probability, and MOKS never presents it as confidence.
 
 `mode` and `fallback_reason` say what actually ran. `evidence.state` is `supported`, `weak` or `none`, decided from what
 the passages literally contain. `supported` means the terms are present, not that the answer is right. Search abstains when no identifier from the question appears, when the terms barely overlap, or when every passage that matches is stale or superseded, and it lists the identifiers it could not find.
@@ -174,13 +242,83 @@ Everything comes from PostgreSQL. The Explorer never calls OpenSearch, and there
 
 Feedback (relevant, irrelevant, outdated, missing information) goes to **Knowledge review** for a person. Nothing reads it to train a model, change ranking or publish anything. It is redacted when stored, and a reviewer sees only what their binding covers.
 
+## Evaluation
+
+Two retrieval datasets run in CI (`tests/test_eval_gates.py`): `rag`, the safety and governance gates, and `sre`
+(version 1), retrieval quality over an operations corpus, run twice, as search was before this pipeline and as
+configured now. Metrics, results and their limits are in [RAG_EVALUATION.md](RAG_EVALUATION.md).
+
 ## Evaluation isolation
 
 Evaluation content lives in `realm = 'evaluation'`, enforced in every candidate query, in the authoritative check and by a composite foreign key that ties a document to its source's realm. No grant reaches across it, including a wildcard admin. A run uses its own backend name, so it never touches an external index or the outbox; it proves isolation before its first case and stops if it cannot. It removes its content in a `finally` block, and `cleanup_evaluations` collects what a dead run left. This is application-enforced in one database, not a separate database or role.
 
 ## Query understanding
 
-Search reads identifiers, error names, resource types and time references without a model, and returns them as `understanding`. `MOKS_RAG_DECOMPOSE` splits multi-part questions into separate rankings. It is off: on the `rag` dataset it changed neither recall, MRR nor nDCG and added latency. That dataset is small and synthetic, so re-measure on real questions before turning it on.
+Search reads identifiers, error names, resource types and time references without a model, and returns them as `understanding`.
+With `MOKS_RAG_QUERY_SIGNALS` (on by default) it also reads (`rag/query.py`):
+
+| | From | Used for |
+|---|---|---|
+| `intents` | rules: past incidents, dependencies, change, procedure, alert, dashboard, API, configuration, troubleshooting; several can match and the first leads | the document-type and section signals |
+| `services`, `environments`, `namespaces` | names in the question that match what the asker can read: `payment-service` also names `payments`, `production` names `prod` | the named-services ranking and the service and scope signals |
+| `dependents` | for a named service, the services its readable sources declare it a dependency of (`applies_to.dependency_of`), with `dependents_basis` | shown with the answer; it is a declaration, not observed traffic |
+| `time_window` | "last hour", "last 3 days", "yesterday", "since 2026-11-01", "recently", and a question about changes with no time (7 days) | the recent signal |
+
+| Intent | Answered best by |
+|---|---|
+| past incidents | postmortems, investigation history; root cause, summary, impact and resolution sections |
+| dependencies, change, configuration | manifests, Helm values and templates, Terraform (and documentation for dependencies, CI for change) |
+| procedure | runbooks, documentation, READMEs |
+| alert | alert rules, runbooks |
+| dashboard / API | dashboards / OpenAPI |
+| troubleshooting | runbooks, postmortems, alert rules, documentation |
+
+Names are resolved against one query of the readable catalog (the environments, namespaces and services of documents
+the asker's grants can read, under the same filter as search), so understanding can neither name nor hint at anything
+the asker cannot read. None of it filters anything or widens a scope: it orders what the grants already allowed. "What
+changed in the last hour" is still answered by live evidence (Git and the cluster); knowledge says which documents changed. `MOKS_RAG_DECOMPOSE` splits multi-part questions into separate rankings. It is off: on the `rag` dataset it changed neither recall, MRR nor nDCG and added latency. That dataset is small and synthetic, so re-measure on real questions before turning it on.
+
+## Context assembly
+
+`rag/context.py` lays out retrieved passages for a model, for investigations (`prompt_block`) and for
+`POST /knowledge/context` (`knowledge.read`; the same search under the caller's grants, then the block, with
+`budget_tokens` and `passage_tokens`). It changes neither what may be read nor the order search chose:
+
+1. **Repeats go:** the same chunk twice, or the same words from another document in the same scope; the dropped one
+   names the passage given instead.
+2. **Current first:** superseded and deprecated documents follow current ones and say what replaced them, unless the
+   question is about past incidents, when history keeps its rank.
+3. **One document reads as one piece:** its chunks are grouped where the document first ranked, in the order of the
+   text, and chunks that overlap or touch are joined exactly by their offsets, so the overlap is not repeated.
+   Search attaches the chunk on each side of the top hits and, for a question about past incidents, the postmortem's
+   root cause and summary (the same document, so the same access decision); they join their hit's block without an
+   id of their own.
+4. **Labels:** document type, freshness and what replaced it, a possible conflict and with what, `unreviewed`, and
+   "historical record: what happened then, not how things work now" for postmortems and investigation history.
+5. **Budget:** blocks are added until the budget is spent (9,000 characters in an investigation, 1,200 per passage);
+   what does not fit is listed as dropped, never cut silently.
+
+Every passage is framed as untrusted data, and the passage ids are the ones the model must cite (`[E3.2]`); a merged
+block lists each id in its own bracket.
+
+## Investigation history
+
+With **Search past investigations** on (`MOKS_RAG_INDEX_INVESTIGATIONS`, off by default), finished investigations
+become a built-in source, `investigation-history` (type `investigation`, authority -1), synced hourly by the worker:
+the question, summary, findings, suspected causes (marked verified or not), verified causes, observed facts and next
+steps, redacted like any document and typed `investigation`, so "find similar OOMKilled incidents" reaches what MOKS
+found before, not only approved postmortems.
+
+- **Access is the investigation's.** A history document has the investigation's environment and namespace, and
+  knowledge reads it under the same single-binding rule investigations are read by. That holds only while every role
+  with `knowledge.read` also has `investigation.read`; a sync checks this first and refuses otherwise.
+- **Left out:** unfinished or failed runs, evaluation runs, runs older than `MOKS_RAG_HISTORY_DAYS` (180), runs whose
+  conversation or question was deleted, and runs of every namespace (`*`), because on a document `*` means
+  unrestricted. At most the newest 500.
+- **Deleting a conversation or a question removes its history in the same transaction**; every sync also removes,
+  from a complete listing, whatever is no longer eligible. Switching it off removes all of it at the next sync.
+- It is a historical record: labelled so, unreviewed, ranked below reviewed guidance, and quarantinable in the
+  Explorer like any document. It says what was suspected then, never what is true now.
 
 ## Knowledge in investigations
 
@@ -225,8 +363,9 @@ Passages are judged again as context grows (triage names the workloads), so a bi
 triage is marked unrelated once the run knows it is about payments. To make a repository authoritative for a
 service, set the source's **Service** (or `applies_to.services`) or the `services` path map.
 
-Passages reach the planner and the report once, in a bounded block (9,000 characters, 1,200 per passage) inside
-untrusted-data fences, labeled with authority, path, commit, lines and freshness.
+Passages reach the planner and the report once, laid out by [context assembly](#context-assembly) in a bounded block
+(9,000 characters, 1,200 per passage) inside untrusted-data fences, labeled with authority, document type, path, commit,
+lines, freshness and any conflict. `kb_search` takes optional `doc_types`, so a plan can ask for alert rules or postmortems only.
 
 **Passage citations.** One `kb_search` is one evidence ref, say `E3`, and holds up to six passages. Each passage
 has its own id, `E3.2` (its rank in that search), tied to the chunk, document, revision and line range. The model

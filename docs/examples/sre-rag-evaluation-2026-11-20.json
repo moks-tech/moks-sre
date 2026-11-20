@@ -1,0 +1,2106 @@
+{
+ "dataset": "sre",
+ "dataset_version": 1,
+ "date": "2026-11-20",
+ "mode": "rules",
+ "environment": "arm64 Mac, Python 3.12, PostgreSQL 17.11, evaluation realm (keyword and identifier ranking, no vectors)",
+ "runs": 5,
+ "comparison_cases": 26,
+ "comparison": {
+  "mrr": {
+   "baseline": 0.8819,
+   "current": 0.9375,
+   "spread_over_runs": {
+    "baseline": [
+     0.8819,
+     0.8819
+    ],
+    "current": [
+     0.9375,
+     0.9375
+    ]
+   }
+  },
+  "ndcg_at_5": {
+   "baseline": 0.878,
+   "current": 0.9364,
+   "spread_over_runs": {
+    "baseline": [
+     0.878,
+     0.878
+    ],
+    "current": [
+     0.9364,
+     0.9364
+    ]
+   }
+  },
+  "recall_at_1": {
+   "baseline": 0.6597,
+   "current": 0.6806,
+   "spread_over_runs": {
+    "baseline": [
+     0.6597,
+     0.6597
+    ],
+    "current": [
+     0.6806,
+     0.6806
+    ]
+   }
+  },
+  "recall_at_3": {
+   "baseline": 0.875,
+   "current": 0.9653,
+   "spread_over_runs": {
+    "baseline": [
+     0.875,
+     0.875
+    ],
+    "current": [
+     0.9653,
+     0.9653
+    ]
+   }
+  },
+  "recall_at_5": {
+   "baseline": 0.875,
+   "current": 0.9792,
+   "spread_over_runs": {
+    "baseline": [
+     0.875,
+     0.875
+    ],
+    "current": [
+     0.9792,
+     0.9792
+    ]
+   }
+  },
+  "context_recall": {
+   "baseline": 0.8333,
+   "current": 1.0,
+   "spread_over_runs": {
+    "baseline": [
+     0.8333,
+     0.8333
+    ],
+    "current": [
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "context_tokens": {
+   "baseline": 520.5,
+   "current": 467.25,
+   "spread_over_runs": {
+    "baseline": [
+     520.5,
+     520.5
+    ],
+    "current": [
+     467.25,
+     467.25
+    ]
+   }
+  },
+  "latency_max_ms": {
+   "baseline": 6.46,
+   "current": 6.2,
+   "spread_over_runs": {
+    "baseline": [
+     4.1,
+     11.3
+    ],
+    "current": [
+     5.1,
+     8.6
+    ]
+   }
+  },
+  "latency_p50_ms": {
+   "baseline": 3.24,
+   "current": 3.96,
+   "spread_over_runs": {
+    "baseline": [
+     3.0,
+     3.6
+    ],
+    "current": [
+     3.6,
+     4.4
+    ]
+   }
+  },
+  "latency_p95_ms": {
+   "baseline": 4.62,
+   "current": 5.56,
+   "spread_over_runs": {
+    "baseline": [
+     3.9,
+     5.8
+    ],
+    "current": [
+     4.9,
+     7.0
+    ]
+   }
+  },
+  "precision_at_1": {
+   "baseline": 0.8333,
+   "current": 0.875,
+   "spread_over_runs": {
+    "baseline": [
+     0.8333,
+     0.8333
+    ],
+    "current": [
+     0.875,
+     0.875
+    ]
+   }
+  },
+  "precision_at_3": {
+   "baseline": 0.4167,
+   "current": 0.4861,
+   "spread_over_runs": {
+    "baseline": [
+     0.4167,
+     0.4167
+    ],
+    "current": [
+     0.4861,
+     0.4861
+    ]
+   }
+  },
+  "precision_at_5": {
+   "baseline": 0.25,
+   "current": 0.3,
+   "spread_over_runs": {
+    "baseline": [
+     0.25,
+     0.25
+    ],
+    "current": [
+     0.3,
+     0.3
+    ]
+   }
+  },
+  "context_precision": {
+   "baseline": 0.8611,
+   "current": 0.9225,
+   "spread_over_runs": {
+    "baseline": [
+     0.8611,
+     0.8611
+    ],
+    "current": [
+     0.9225,
+     0.9225
+    ]
+   }
+  }
+ },
+ "current_all_cases": {
+  "cases": 28,
+  "recall_at_1": 0.6859,
+  "recall_at_3": 0.9679,
+  "recall_at_5": 0.9808,
+  "precision_at_1": 0.8846,
+  "precision_at_3": 0.4872,
+  "precision_at_5": 0.3,
+  "mrr": 0.9423,
+  "ndcg_at_5": 0.9413,
+  "context_precision": 0.9284,
+  "context_recall": 1.0,
+  "context_tokens": 452.9231,
+  "citation_accuracy": 1.0,
+  "latency_p50_ms": 3.6,
+  "latency_p95_ms": 5.0
+ },
+ "faithfulness": "measured only by an llm-mode run with an active chat model",
+ "gates": {
+  "isolation": "passed",
+  "exact_identifier": "passed",
+  "abstention": "passed",
+  "freshness": "passed",
+  "conflicts": "not_applicable",
+  "citation_accuracy": "passed",
+  "claim_support": "passed",
+  "injection": "not_applicable",
+  "failure_fallback": "passed",
+  "realm_isolation": "passed",
+  "vector_retrieval": "not_applicable",
+  "injection_with_a_model": "not_applicable",
+  "filters": "passed",
+  "dependencies": "passed",
+  "recall_at_5": "passed"
+ },
+ "versions": {
+  "dataset": "0f2b2dce45768bbb",
+  "dataset_version": 1,
+  "pipeline": 4,
+  "mapping": 2,
+  "fusion": {
+   "k": 60,
+   "entity": 0.5,
+   "vector": 1.0,
+   "keyword": 1.0,
+   "identifier": 2.0
+  },
+  "structured_chunking": true,
+  "query_signals": true
+ },
+ "results": [
+  {
+   "case": "why-payments-failing",
+   "variant": "current",
+   "ranked": [
+    "alerts-payments",
+    "rb-payments-5xx",
+    "pm-payments-outage"
+   ],
+   "intents": [
+    "troubleshooting"
+   ],
+   "answer": "weak",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 498,
+    "precision_at_1": 1.0,
+    "precision_at_3": 1.0,
+    "precision_at_5": 0.6,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 498,
+    "dropped": 0,
+    "facts_found": [
+     "HikariPool",
+     "DB_POOL_SIZE"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "what-changed-last-hour",
+   "variant": "current",
+   "ranked": [
+    "k8s-payments",
+    "log-payments",
+    "alerts-payments",
+    "rb-payments-5xx",
+    "dash-payments"
+   ],
+   "intents": [
+    "change"
+   ],
+   "answer": "weak",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 740,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 740,
+    "dropped": 0,
+    "facts_found": [
+     "DB_POOL_SIZE"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "similar-oomkilled-incidents",
+   "variant": "current",
+   "ranked": [
+    "pm-cart-oom",
+    "alerts-k8s",
+    "rb-oom"
+   ],
+   "intents": [
+    "similar_incidents",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 372,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 372,
+    "dropped": 0,
+    "facts_found": [
+     "session cache"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "rabbitmq-backlog",
+   "variant": "current",
+   "ranked": [
+    "rb-rabbitmq-backlog",
+    "alerts-rabbitmq",
+    "dash-rabbitmq"
+   ],
+   "intents": [
+    "procedure",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 400,
+    "precision_at_1": 1.0,
+    "precision_at_3": 1.0,
+    "precision_at_5": 0.6,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 400,
+    "dropped": 0,
+    "facts_found": [
+     "prefetch",
+     "consumers"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "who-depends-on-redis",
+   "variant": "current",
+   "ranked": [
+    "arch-deps",
+    "rb-redis-failover",
+    "k8s-payments",
+    "k8s-cart"
+   ],
+   "intents": [
+    "dependencies"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 0.906,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 0.6667,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 524,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.6,
+    "context_precision": 0.8056
+   },
+   "context": {
+    "blocks": 4,
+    "tokens": 524,
+    "dropped": 0,
+    "facts_found": [
+     "Redis is shared by payments and cart"
+    ]
+   },
+   "checks": {
+    "recall": true,
+    "dependencies": true
+   }
+  },
+  {
+   "case": "eks-node-pressure-runbook",
+   "variant": "current",
+   "ranked": [
+    "rb-eks-node-pressure",
+    "alerts-k8s",
+    "alerts-payments"
+   ],
+   "intents": [
+    "procedure",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 441,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 441,
+    "dropped": 0,
+    "facts_found": [
+     "Cordon the node"
+    ]
+   },
+   "checks": {
+    "recall": true,
+    "freshness": true
+   }
+  },
+  {
+   "case": "oomkilled-alert",
+   "variant": "current",
+   "ranked": [
+    "alerts-k8s",
+    "rb-oom",
+    "pm-cart-oom"
+   ],
+   "intents": [
+    "alert",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 560,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 4,
+    "tokens": 560,
+    "dropped": 0,
+    "facts_found": [
+     "KubeContainerOOMKilled"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "rabbitmq-alert-threshold",
+   "variant": "current",
+   "ranked": [
+    "alerts-rabbitmq",
+    "rb-rabbitmq-backlog",
+    "dash-rabbitmq"
+   ],
+   "intents": [
+    "alert",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 345,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 345,
+    "dropped": 0,
+    "facts_found": [
+     "10000"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "queue-depth-panel",
+   "variant": "current",
+   "ranked": [
+    "dash-rabbitmq",
+    "alerts-rabbitmq",
+    "rb-rabbitmq-backlog"
+   ],
+   "intents": [
+    "dashboard"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 333,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 333,
+    "dropped": 0,
+    "facts_found": [
+     "rabbitmq_queue_messages_ready"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "payments-409",
+   "variant": "current",
+   "ranked": [
+    "api-payments",
+    "alerts-payments",
+    "rb-payments-5xx"
+   ],
+   "intents": [
+    "api"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 473,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 473,
+    "dropped": 0,
+    "facts_found": [
+     "Idempotency-Key"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "hikari-exact",
+   "variant": "current",
+   "ranked": [
+    "log-payments",
+    "rb-payments-5xx",
+    "pm-payments-outage",
+    "pm-orders-backlog",
+    "rb-rabbitmq-backlog"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 720,
+    "precision_at_1": 1.0,
+    "precision_at_3": 1.0,
+    "precision_at_5": 0.6,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 720,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true,
+    "exact_identifier": true
+   }
+  },
+  {
+   "case": "orders-queue",
+   "variant": "current",
+   "ranked": [
+    "readme-orders",
+    "pm-orders-backlog",
+    "k8s-orders"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 0.9197,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 381,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 0.8333
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 381,
+    "dropped": 0,
+    "facts_found": [
+     "orders.created"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "eks-instance-types",
+   "variant": "current",
+   "ranked": [
+    "tf-eks",
+    "rb-eks-node-pressure",
+    "alerts-k8s"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 427,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 427,
+    "dropped": 0,
+    "facts_found": [
+     "m6g.large"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "redis-failover",
+   "variant": "current",
+   "ranked": [
+    "rb-redis-failover",
+    "arch-deps",
+    "pm-cart-oom",
+    "k8s-cart"
+   ],
+   "intents": [
+    "procedure",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 431,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 4,
+    "tokens": 431,
+    "dropped": 0,
+    "facts_found": [
+     "REPLICAOF NO ONE"
+    ]
+   },
+   "checks": {
+    "recall": true,
+    "claim_support": true
+   }
+  },
+  {
+   "case": "cart-memory-limit",
+   "variant": "current",
+   "ranked": [
+    "k8s-cart",
+    "pm-cart-oom",
+    "arch-deps"
+   ],
+   "intents": [
+    "configuration"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 430,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 430,
+    "dropped": 0,
+    "facts_found": [
+     "512Mi"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "rollback-current-first",
+   "variant": "current",
+   "ranked": [
+    "rb-rollback",
+    "rb-payments-5xx",
+    "rb-rollback-old"
+   ],
+   "intents": [
+    "procedure"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 360,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 360,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true,
+    "freshness": true
+   }
+  },
+  {
+   "case": "oom-what-to-check",
+   "variant": "current",
+   "ranked": [
+    "pm-cart-oom",
+    "rb-oom",
+    "alerts-k8s"
+   ],
+   "intents": [
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 0.5,
+    "ndcg_at_5": 0.6309,
+    "recall_at_1": 0.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 391,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.5
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 391,
+    "dropped": 0,
+    "facts_found": [
+     "working set"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "node-memory-pressure-firing",
+   "variant": "current",
+   "ranked": [
+    "alerts-k8s",
+    "rb-eks-node-pressure",
+    "rb-payments-5xx"
+   ],
+   "intents": [
+    "alert"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 441,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 441,
+    "dropped": 0,
+    "facts_found": [
+     "kubectl describe node"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "payments-outage-root-cause",
+   "variant": "current",
+   "ranked": [
+    "pm-payments-outage",
+    "alerts-payments",
+    "rb-payments-5xx",
+    "dash-payments",
+    "log-payments"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 756,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 756,
+    "dropped": 0,
+    "facts_found": [
+     "pool size from 20 to 5"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "dead-letter",
+   "variant": "current",
+   "ranked": [
+    "readme-orders",
+    "pm-orders-backlog",
+    "k8s-orders"
+   ],
+   "intents": [],
+   "answer": "weak",
+   "metrics": {
+    "mrr": 0.5,
+    "ndcg_at_5": 0.3869,
+    "recall_at_1": 0.0,
+    "recall_at_3": 0.5,
+    "recall_at_5": 0.5,
+    "context_recall": 1.0,
+    "context_tokens": 381,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.5
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 381,
+    "dropped": 0,
+    "facts_found": [
+     "orders.dlq"
+    ]
+   },
+   "checks": {
+    "recall": false
+   }
+  },
+  {
+   "case": "p99-latency-panel",
+   "variant": "current",
+   "ranked": [
+    "dash-payments",
+    "alerts-payments",
+    "rb-payments-5xx"
+   ],
+   "intents": [
+    "dashboard",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 434,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 434,
+    "dropped": 0,
+    "facts_found": [
+     "histogram_quantile(0.99"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "alert-to-runbook",
+   "variant": "current",
+   "ranked": [
+    "alerts-payments",
+    "rb-payments-5xx",
+    "pm-payments-outage"
+   ],
+   "intents": [
+    "procedure"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 502,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 502,
+    "dropped": 0,
+    "facts_found": [
+     "runbook_url"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "redis-persistence",
+   "variant": "current",
+   "ranked": [
+    "rb-redis-failover",
+    "helm-redis",
+    "k8s-payments",
+    "k8s-cart"
+   ],
+   "intents": [
+    "configuration"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 0.5,
+    "ndcg_at_5": 0.6309,
+    "recall_at_1": 0.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 502,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.5
+   },
+   "context": {
+    "blocks": 4,
+    "tokens": 502,
+    "dropped": 0,
+    "facts_found": [
+     "persistence"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "cart-oom-before",
+   "variant": "current",
+   "ranked": [
+    "pm-cart-oom",
+    "alerts-k8s",
+    "rb-oom"
+   ],
+   "intents": [
+    "similar_incidents",
+    "troubleshooting"
+   ],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 372,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 372,
+    "dropped": 0,
+    "facts_found": [
+     "512Mi limit"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "only-runbooks",
+   "variant": "current",
+   "ranked": [
+    "rb-rabbitmq-backlog"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 211,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 1,
+    "tokens": 211,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true,
+    "filters": true
+   }
+  },
+  {
+   "case": "only-recent",
+   "variant": "current",
+   "ranked": [
+    "log-payments",
+    "k8s-payments"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 351,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 2,
+    "tokens": 351,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true,
+    "filters": true
+   }
+  },
+  {
+   "case": "billing-stays-out",
+   "variant": "current",
+   "ranked": [
+    "dash-payments",
+    "api-payments",
+    "arch-deps",
+    "rb-payments-5xx",
+    "pm-payments-outage"
+   ],
+   "intents": [],
+   "answer": "supported",
+   "metrics": null,
+   "context": null,
+   "checks": {
+    "isolation": true
+   }
+  },
+  {
+   "case": "unrelated-abstains",
+   "variant": "current",
+   "ranked": [],
+   "intents": [],
+   "answer": "none",
+   "metrics": null,
+   "context": null,
+   "checks": {
+    "abstention": true
+   }
+  },
+  {
+   "case": "why-payments-failing",
+   "variant": "baseline",
+   "ranked": [
+    "alerts-payments",
+    "rb-payments-5xx",
+    "api-payments",
+    "arch-deps",
+    "dash-payments"
+   ],
+   "intents": null,
+   "answer": "weak",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 0.7654,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 0.6667,
+    "recall_at_5": 0.6667,
+    "context_recall": 0.0,
+    "context_tokens": 844,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 844,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": false
+   }
+  },
+  {
+   "case": "what-changed-last-hour",
+   "variant": "baseline",
+   "ranked": [
+    "api-payments",
+    "alerts-payments",
+    "dash-payments",
+    "rb-payments-5xx"
+   ],
+   "intents": null,
+   "answer": "weak",
+   "metrics": {
+    "mrr": 0,
+    "ndcg_at_5": 0.0,
+    "recall_at_1": 0.0,
+    "recall_at_3": 0.0,
+    "recall_at_5": 0.0,
+    "context_recall": 1.0,
+    "context_tokens": 885,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.0,
+    "precision_at_5": 0.0,
+    "context_precision": 0.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 885,
+    "dropped": 0,
+    "facts_found": [
+     "DB_POOL_SIZE"
+    ]
+   },
+   "checks": {
+    "recall": false
+   }
+  },
+  {
+   "case": "similar-oomkilled-incidents",
+   "variant": "baseline",
+   "ranked": [
+    "pm-cart-oom",
+    "alerts-k8s",
+    "rb-oom"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 0.0,
+    "context_tokens": 580,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.8056
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 580,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "rabbitmq-backlog",
+   "variant": "baseline",
+   "ranked": [
+    "dash-rabbitmq",
+    "rb-rabbitmq-backlog",
+    "alerts-rabbitmq"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 675,
+    "precision_at_1": 1.0,
+    "precision_at_3": 1.0,
+    "precision_at_5": 0.6,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 675,
+    "dropped": 0,
+    "facts_found": [
+     "prefetch",
+     "consumers"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "who-depends-on-redis",
+   "variant": "baseline",
+   "ranked": [
+    "arch-deps"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 0.3333,
+    "recall_at_5": 0.3333,
+    "context_recall": 1.0,
+    "context_tokens": 114,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 1,
+    "tokens": 114,
+    "dropped": 0,
+    "facts_found": [
+     "Redis is shared by payments and cart"
+    ]
+   },
+   "checks": {
+    "recall": false
+   }
+  },
+  {
+   "case": "eks-node-pressure-runbook",
+   "variant": "baseline",
+   "ranked": [
+    "rb-eks-node-pressure",
+    "tf-eks",
+    "alerts-k8s"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 671,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.8056
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 671,
+    "dropped": 0,
+    "facts_found": [
+     "Cordon the node"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "oomkilled-alert",
+   "variant": "baseline",
+   "ranked": [
+    "alerts-k8s",
+    "pm-cart-oom",
+    "rb-oom"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 580,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 580,
+    "dropped": 0,
+    "facts_found": [
+     "KubeContainerOOMKilled"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "rabbitmq-alert-threshold",
+   "variant": "baseline",
+   "ranked": [
+    "dash-rabbitmq",
+    "rb-rabbitmq-backlog",
+    "alerts-rabbitmq"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 0.3333,
+    "ndcg_at_5": 0.5,
+    "recall_at_1": 0.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 675,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.3333
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 675,
+    "dropped": 0,
+    "facts_found": [
+     "10000"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "queue-depth-panel",
+   "variant": "baseline",
+   "ranked": [
+    "dash-rabbitmq",
+    "alerts-rabbitmq",
+    "rb-rabbitmq-backlog"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 699,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 699,
+    "dropped": 0,
+    "facts_found": [
+     "rabbitmq_queue_messages_ready"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "payments-409",
+   "variant": "baseline",
+   "ranked": [
+    "api-payments",
+    "alerts-payments",
+    "dash-payments",
+    "log-payments",
+    "rb-payments-5xx"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 935,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 935,
+    "dropped": 0,
+    "facts_found": [
+     "Idempotency-Key"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "hikari-exact",
+   "variant": "baseline",
+   "ranked": [
+    "log-payments",
+    "rb-payments-5xx",
+    "pm-payments-outage",
+    "pm-orders-backlog",
+    "rb-rabbitmq-backlog"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.3333,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 580,
+    "precision_at_1": 1.0,
+    "precision_at_3": 1.0,
+    "precision_at_5": 0.6,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 580,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "orders-queue",
+   "variant": "baseline",
+   "ranked": [
+    "readme-orders"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_3": 0.5,
+    "recall_at_5": 0.5,
+    "context_recall": 1.0,
+    "context_tokens": 102,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 1,
+    "tokens": 102,
+    "dropped": 0,
+    "facts_found": [
+     "orders.created"
+    ]
+   },
+   "checks": {
+    "recall": false
+   }
+  },
+  {
+   "case": "eks-instance-types",
+   "variant": "baseline",
+   "ranked": [
+    "tf-eks",
+    "rb-eks-node-pressure",
+    "dash-rabbitmq"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 687,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 687,
+    "dropped": 0,
+    "facts_found": [
+     "m6g.large"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "redis-failover",
+   "variant": "baseline",
+   "ranked": [
+    "rb-redis-failover",
+    "arch-deps",
+    "rb-payments-5xx",
+    "k8s-cart"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 496,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 496,
+    "dropped": 0,
+    "facts_found": [
+     "REPLICAOF NO ONE"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "cart-memory-limit",
+   "variant": "baseline",
+   "ranked": [
+    "k8s-cart"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 153,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 1,
+    "tokens": 153,
+    "dropped": 0,
+    "facts_found": [
+     "512Mi"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "rollback-current-first",
+   "variant": "baseline",
+   "ranked": [
+    "rb-rollback",
+    "rb-payments-5xx",
+    "rb-rollback-old"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 273,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 273,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "oom-what-to-check",
+   "variant": "baseline",
+   "ranked": [
+    "pm-cart-oom",
+    "alerts-k8s",
+    "rb-oom"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 0.3333,
+    "ndcg_at_5": 0.5,
+    "recall_at_1": 0.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 0.0,
+    "context_tokens": 580,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.25
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 580,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "node-memory-pressure-firing",
+   "variant": "baseline",
+   "ranked": [
+    "alerts-k8s",
+    "rb-eks-node-pressure",
+    "tf-eks"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 690,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 690,
+    "dropped": 0,
+    "facts_found": [
+     "kubectl describe node"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "payments-outage-root-cause",
+   "variant": "baseline",
+   "ranked": [
+    "pm-payments-outage"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 77,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 1,
+    "tokens": 77,
+    "dropped": 0,
+    "facts_found": [
+     "pool size from 20 to 5"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "dead-letter",
+   "variant": "baseline",
+   "ranked": [
+    "readme-orders",
+    "pm-orders-backlog",
+    "k8s-orders"
+   ],
+   "intents": null,
+   "answer": "weak",
+   "metrics": {
+    "mrr": 0.5,
+    "ndcg_at_5": 0.3869,
+    "recall_at_1": 0.0,
+    "recall_at_3": 0.5,
+    "recall_at_5": 0.5,
+    "context_recall": 1.0,
+    "context_tokens": 480,
+    "precision_at_1": 0.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 0.6389
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 480,
+    "dropped": 0,
+    "facts_found": [
+     "orders.dlq"
+    ]
+   },
+   "checks": {
+    "recall": false
+   }
+  },
+  {
+   "case": "p99-latency-panel",
+   "variant": "baseline",
+   "ranked": [
+    "dash-payments"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 246,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 1,
+    "tokens": 246,
+    "dropped": 0,
+    "facts_found": [
+     "histogram_quantile(0.99"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "alert-to-runbook",
+   "variant": "baseline",
+   "ranked": [
+    "alerts-payments",
+    "pm-payments-outage",
+    "rb-payments-5xx"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 0.9197,
+    "recall_at_1": 0.5,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 373,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.6667,
+    "precision_at_5": 0.4,
+    "context_precision": 0.8333
+   },
+   "context": {
+    "blocks": 3,
+    "tokens": 373,
+    "dropped": 0,
+    "facts_found": [
+     "runbook_url"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "redis-persistence",
+   "variant": "baseline",
+   "ranked": [
+    "helm-redis",
+    "rb-redis-failover",
+    "arch-deps",
+    "k8s-orders"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 1.0,
+    "context_tokens": 517,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 517,
+    "dropped": 0,
+    "facts_found": [
+     "persistence"
+    ]
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "cart-oom-before",
+   "variant": "baseline",
+   "ranked": [
+    "pm-cart-oom",
+    "alerts-k8s",
+    "rb-oom"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": {
+    "mrr": 1.0,
+    "ndcg_at_5": 1.0,
+    "recall_at_1": 1.0,
+    "recall_at_3": 1.0,
+    "recall_at_5": 1.0,
+    "context_recall": 0.0,
+    "context_tokens": 580,
+    "precision_at_1": 1.0,
+    "precision_at_3": 0.3333,
+    "precision_at_5": 0.2,
+    "context_precision": 1.0
+   },
+   "context": {
+    "blocks": 5,
+    "tokens": 580,
+    "dropped": 0,
+    "facts_found": []
+   },
+   "checks": {
+    "recall": true
+   }
+  },
+  {
+   "case": "billing-stays-out",
+   "variant": "baseline",
+   "ranked": [
+    "api-payments",
+    "arch-deps",
+    "dash-payments",
+    "rb-payments-5xx",
+    "pm-payments-outage"
+   ],
+   "intents": null,
+   "answer": "supported",
+   "metrics": null,
+   "context": null,
+   "checks": {}
+  },
+  {
+   "case": "unrelated-abstains",
+   "variant": "baseline",
+   "ranked": [],
+   "intents": null,
+   "answer": "none",
+   "metrics": null,
+   "context": null,
+   "checks": {}
+  }
+ ]
+}

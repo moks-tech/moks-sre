@@ -91,7 +91,9 @@ def _summary(d: Document, s: KnowledgeSource, chunks: int, state: DocumentIndexS
     freshness, why = service._freshness(s, d, now)
     return {"id": str(d.id), "title": d.title or d.path.rsplit("/", 1)[-1], "path": d.path, "kind": d.kind, "status": d.status, "excluded_reason": d.excluded_reason,
             "source": {"id": str(s.id), "name": s.name, "type": s.type, "lifecycle": s.lifecycle, "last_success_at": _when(s.last_success_at)},
-            "environment": d.environment, "namespace": d.namespace, "service": d.service or "", "resource_types": sorted(str(x) for x in (s.applies_to or {}).get("resources") or []),
+            "doc_type": service.doc_type_of(d, s),
+            "environment": d.environment, "namespace": d.namespace, "service": d.service or "",
+            "resource_types": sorted({str(x) for x in (s.applies_to or {}).get("resources") or []} | {str(x) for x in d.resource_types or []}),
             "owner": d.owner or s.owner or "", "team": s.team or "", "classification": s.classification, "lifecycle": d.lifecycle, "trust": d.trust,
             "revision": d.revision, "checked_at": _when(d.checked_at), "updated_at": _when(d.updated_at), "chunks": chunks,
             "freshness": {"state": freshness, "reason": why}, "indexing": _indexing(d, chunks, state, idx, dead), "embedding": _embedding(d, chunks, state, idx), "note": d.ingest_note}
@@ -109,7 +111,7 @@ async def _index_facts(db: AsyncSession, ids: list[uuid.UUID]) -> tuple[Embeddin
 # exactly the rows the predicate returned.
 FACETS: dict[str, Any] = {
     "source": lambda r: r["source"]["name"], "environment": lambda r: r["environment"], "namespace": lambda r: r["namespace"], "service": lambda r: r["service"],
-    "resource_type": lambda r: r["resource_types"], "kind": lambda r: r["kind"], "owner": lambda r: r["owner"], "team": lambda r: r["team"], "lifecycle": lambda r: r["lifecycle"],
+    "resource_type": lambda r: r["resource_types"], "kind": lambda r: r["kind"], "doc_type": lambda r: r["doc_type"], "owner": lambda r: r["owner"], "team": lambda r: r["team"], "lifecycle": lambda r: r["lifecycle"],
     "classification": lambda r: r["classification"], "freshness": lambda r: r["freshness"]["state"], "indexing": lambda r: r["indexing"], "embedding": lambda r: r["embedding"]["state"],
 }
 SORTS = {"title": lambda r: r["title"].lower(), "path": lambda r: r["path"], "checked": lambda r: r["checked_at"] or "", "chunks": lambda r: r["chunks"]}
