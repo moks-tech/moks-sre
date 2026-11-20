@@ -147,6 +147,15 @@ async def execute(run_id: uuid.UUID) -> dict[str, Any]:
             run.gates, run.versions = out["gates"], {**gates.versions(data), "model": out["metrics"].get("model"), "metrics": out["metrics"]}
         return {"score": out["score"], "gates_passed": gates.gates_ok(out["gates"])}
     env_id = await _eval_env(f"eval-{dataset}")
+    if data.get("kind") == "crewai":  # the CrewAI incident scenarios (crew_eval.py)
+        from . import crew_eval
+
+        out = await crew_eval.run(data, env_id, mode)
+        async with session_scope() as db:
+            run = await db.get(EvalRun, run_id)
+            run.results, run.score, run.status, run.finished_at = out["results"], Decimal(str(out["score"])), "completed", datetime.now(timezone.utc)
+            run.gates, run.versions = out["gates"], {**gates.versions(data), "model": await gates._active_model(), "metrics": out["metrics"]}
+        return {"score": out["score"], "cases": len(out["results"]), "gates_passed": gates.gates_ok(out["gates"]), "kind": "crewai"}
     results = []
     token = access.enter_realm(access.EVALUATION)  # anything these runs retrieve comes from the evaluation realm, never production
     for case in data["cases"]:

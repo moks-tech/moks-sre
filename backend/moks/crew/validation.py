@@ -467,12 +467,21 @@ def severity(registry: Any, views: dict[str, Any], target: Any, production: bool
                 level = str((rule.get("labels") or {}).get("severity") or "warning").lower()
                 alert_levels.add(level)
                 criteria.append(f"alert {rule.get('name')} firing ({level})")
-    errors = None
+    errors, slow, measured = None, False, False
     for _, v in _views_of(registry, views, {"prom_service_signals"}):
-        stat = ((v or {}).get("stats") or {}).get("error_ratio") if isinstance(v, dict) else None
+        stats = ((v or {}).get("stats") or {}) if isinstance(v, dict) else {}
+        stat = stats.get("error_ratio")
         if stat and stat.get("latest") is not None:
-            read_any, errors = True, float(stat["latest"])
+            read_any, measured, errors = True, True, float(stat["latest"])
             criteria.append(f"5xx error ratio {errors * 100:.1f}%")
+        for key, unit in (("latency_p95_ms", 1.0), ("latency_p95_s", 1000.0)):  # p95 in ms: 1 s or more, or four times the window's best
+            p95 = stats.get(key) or {}
+            if p95.get("latest") is not None:
+                read_any = measured = True
+                latest, best = float(p95["latest"]) * unit, float(p95.get("min") or p95["latest"]) * unit
+                if latest >= 1000 or (best > 0 and latest >= 4 * best and latest >= 200):
+                    slow = True
+                    criteria.append(f"p95 latency {latest:.0f} ms" + (f" ({latest / best:.0f}x the window's lowest)" if best > 0 and latest >= 2 * best else ""))
     criteria.append("production environment" if production else "not a production environment")
     critical = "critical" in alert_levels or (errors is not None and errors >= 0.25)
     if not read_any:
@@ -482,11 +491,14 @@ def severity(registry: Any, views: dict[str, Any], target: Any, production: bool
         level = "SEV1"
     elif outage or critical or degraded or alert_levels or (errors is not None and errors >= 0.05):
         level = "SEV2"
-    elif restarting or (errors is not None and errors >= 0.01):
+    elif restarting or slow or (errors is not None and errors >= 0.01):
         level = "SEV3"
-    else:
+    elif measured or alert_levels:
         level = "SEV4"
         criteria.insert(0, "no impact signal in the evidence")
+    else:  # healthy pods alone do not show that users are unaffected
+        level = "unknown"
+        criteria.insert(0, "the workload looks healthy, but nothing that measures its users' experience could be read")
     proposed = proposed if proposed in ("SEV1", "SEV2", "SEV3", "SEV4") else None
     return Severity(level=level, criteria=list(dict.fromkeys(criteria))[:8], proposed=proposed)
 
@@ -553,8 +565,10 @@ def _summary(case: Case, cause: dict[str, Any] | None) -> str:
     else:
         top = next((h for h in sorted(case.hypotheses, key=lambda h: h.rank) if h.status == "possible_explanation"), None)
         head = f"No root cause is established. Possible explanation ({top.id}): {top.statement}" if top else "The evidence collected does not support a root cause yet."
-    facts = [f.observation for f in case.findings if f.status == "confirmed_observation"][:2]
-    return (sev + head + (" Observed: " + " ".join(facts) if facts else ""))[:2000]
+    backing = set(next((h.supporting for h in case.hypotheses if cause and h.id == cause["hypothesis"]), []))
+    confirmed = [f for f in case.findings if f.status == "confirmed_observation"]
+    facts = [f.observation.rstrip(".") for f in sorted(confirmed, key=lambda f: not set(f.citations) & backing)][:2]
+    return (sev + head.rstrip(".") + "." + (" Observed: " + "; ".join(facts) + "." if facts else ""))[:2000]
 
 
 def to_report(case: Case, registry: Any, notes: list[str]) -> tuple[Report, dict[str, Any], dict[str, Any] | None]:

@@ -56,14 +56,19 @@ class ScriptedSRE:
             found.setdefault(ref, tool)
         return [ref for ref, tool in found.items() if tool in tools]
 
+    def resolve(self, names: list[str], transcript: str) -> list[str]:
+        ids = [c for c in names if re.match(r"^[FHE]\d+$", c)]
+        return [*self.ids(transcript, [c for c in names if c not in ids]), *ids]
+
     def cite(self, value: Any, transcript: str) -> Any:
         """Replaces {"cite": [tool, ...]} with the evidence ids seen for those tools; finding ids pass through."""
         if isinstance(value, dict):
             out = {k: self.cite(v, transcript) for k, v in value.items() if k != "cite"}
             if "cite" in value:
                 key = "supporting" if "statement" in value and "observation" not in value else "evidence"
-                refs = self.ids(transcript, [c for c in value["cite"] if not re.match(r"^[FHE]\d+$", c)])
-                out[key] = [*refs, *[c for c in value["cite"] if re.match(r"^[FHE]\d+$", c)]]
+                out[key] = self.resolve(value["cite"], transcript)
+            if isinstance(value.get("contradicting"), list):
+                out["contradicting"] = self.resolve(value["contradicting"], transcript)
             return out
         if isinstance(value, list):
             return [self.cite(v, transcript) for v in value]
