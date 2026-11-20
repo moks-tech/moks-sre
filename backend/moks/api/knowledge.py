@@ -22,6 +22,7 @@ from ..models import Chunk, Document, IndexOutbox, Job, KnowledgeSource, Knowled
 from ..rag import explore, ingest, service, web
 from ..rbac import P
 from .admin import CredentialRef
+from .common import flush_unique
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
@@ -288,7 +289,7 @@ async def create_source(body: SourceIn, ctx: AuthContext = Depends(needs(P.KNOWL
                           shared_globally=body.shared_globally, team=body.team, classification=body.classification, applies_to=body.applies_to, authority=body.authority,
                           lifecycle=body.lifecycle, review_required=body.review_required, review_interval_days=body.review_interval_days, stale_policy=body.stale_policy, stale_after_days=body.stale_after_days)
     db.add(src)
-    await db.flush()
+    await flush_unique(db, f"A knowledge source named {body.name!r} already exists; edit it or choose another name")
     await audit.record(db, action="knowledge.source_create", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="knowledge_source",
                        resource_id=str(src.id), details=body.model_dump(mode="json"))
     if body.type in SYNCED:

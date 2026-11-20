@@ -19,6 +19,8 @@ from .base import BoundedHttp, ConnectorError, HttpLimits, resolve_credential
 
 SHA = re.compile(r"^[0-9a-f]{7,40}$")
 REPO = re.compile(r"^[A-Za-z0-9-]+/[A-Za-z0-9_.-]+$")
+REPO_PATH = re.compile(r"^/repos/([A-Za-z0-9-]+/[A-Za-z0-9_.-]+)(?:/|$)")
+MOVED = re.compile(r"^/repositories/(\d+)(?:[/?]|$)")
 # Never read or index these, whatever the repository says.
 SECRET_PATHS = re.compile(r"(?i)(^|/)(\.env(\..*)?|.*\.pem|.*\.key|id_rsa.*|.*kubeconfig.*|.*secret.*\.ya?ml|.*\.tfstate.*|credentials(\.json)?|\.npmrc|\.pypirc|\.netrc)$")
 MAX_FILE_BYTES = 400_000
@@ -52,20 +54,41 @@ class GitHubProvider:
     async def aclose(self) -> None:
         await self.http.aclose()
 
+    async def _get(self, operation: str, path: str, params: Any = None) -> Any:
+        try:
+            return await self.http.get_json(operation, path, params=params)
+        except ConnectorError as exc:
+            moved = MOVED.match(exc.location[len(self.api):]) if exc.location and exc.location.startswith(self.api + "/") else None
+            old = REPO_PATH.match(path)
+            if moved is None or old is None:
+                raise
+            raise ConnectorError("bad_request", await self._moved_message(old.group(1), moved.group(1))) from None
+
+    async def _moved_message(self, old: str, repo_id: str) -> str:
+        """GitHub answers a renamed or transferred repository with a redirect to /repositories/<id>.
+        Asks the same API, with the same credentials, for the current name; never follows the redirect itself."""
+        try:
+            now = (await self.http.get_json("repo", f"/repositories/{repo_id}")).get("full_name")
+        except ConnectorError:
+            now = None
+        if now and REPO.match(now):
+            return f"GitHub repository {old} was renamed or moved to {now}; use {now} instead"
+        return f"GitHub repository {old} was renamed or moved (repository id {repo_id}); use its new owner/name"
+
     async def test(self) -> str:
         if not self.repositories:
             raise ConnectorError("config", "git connector needs config.repositories (owner/name list)")
-        r = await self.http.get_json("repo", f"/repos/{self.repositories[0]}")
+        r = await self._get("repo", f"/repos/{self.repositories[0]}")
         return f"GitHub reachable; {r.get('full_name')} default branch {r.get('default_branch')} ({'private' if r.get('private') else 'public'})"
 
     async def default_branch(self, repo: str) -> str:
-        return (await self.http.get_json("repo", f"/repos/{repo}")).get("default_branch", "main")
+        return (await self._get("repo", f"/repos/{repo}")).get("default_branch", "main")
 
     async def tree(self, repo: str, ref: str | None) -> tuple[str, list[dict]]:
         ref = ref or await self.default_branch(repo)
-        commit = await self.http.get_json("commit", f"/repos/{repo}/commits/{quote(ref, safe='')}")
+        commit = await self._get("commit", f"/repos/{repo}/commits/{quote(ref, safe='')}")
         sha = commit["sha"]
-        body = await self.http.get_json("tree", f"/repos/{repo}/git/trees/{sha}", params={"recursive": "1"})
+        body = await self._get("tree", f"/repos/{repo}/git/trees/{sha}", params={"recursive": "1"})
         if body.get("truncated"):
             raise ConnectorError("too_large", f"{repo} tree is too large for one listing; narrow the source paths")
         return sha, [{"path": t["path"], "sha": t["sha"], "size": t.get("size", 0)} for t in body.get("tree", []) if t.get("type") == "blob"]
@@ -74,8 +97,8 @@ class GitHubProvider:
         """(pinned commit, files, complete | partial). GitHub cuts a recursive tree off at about 100,000
         entries, so a truncated one is walked directory by directory, within a bound."""
         ref = ref or await self.default_branch(repo)
-        sha = (await self.http.get_json("commit", f"/repos/{repo}/commits/{quote(ref, safe='')}"))["sha"]
-        body = await self.http.get_json("tree", f"/repos/{repo}/git/trees/{sha}", params={"recursive": "1"})
+        sha = (await self._get("commit", f"/repos/{repo}/commits/{quote(ref, safe='')}"))["sha"]
+        body = await self._get("tree", f"/repos/{repo}/git/trees/{sha}", params={"recursive": "1"})
         blobs = lambda rows, prefix="": [{"path": prefix + t["path"], "sha": t["sha"], "size": t.get("size", 0)} for t in rows if t.get("type") == "blob"]
         if not body.get("truncated"):
             return sha, blobs(body.get("tree", [])), "complete"
@@ -85,7 +108,7 @@ class GitHubProvider:
             if requests >= MAX_TREE_REQUESTS:
                 return sha, files, "partial"
             prefix, tree = todo.pop()
-            body = await self.http.get_json("tree", f"/repos/{repo}/git/trees/{tree}")
+            body = await self._get("tree", f"/repos/{repo}/git/trees/{tree}")
             requests += 1
             listing = "partial" if body.get("truncated") else listing  # a single directory too large to list
             files += blobs(body.get("tree", []), prefix)
@@ -97,7 +120,7 @@ class GitHubProvider:
             raise ConnectorError("forbidden", f"{path} looks like a secret file and is never read")
         params = {"ref": ref} if ref else None
         try:
-            body = await self.http.get_json("contents", f"/repos/{repo}/contents/{quote(path)}", params=params)
+            body = await self._get("contents", f"/repos/{repo}/contents/{quote(path)}", params=params)
         except ConnectorError as exc:
             if exc.kind != "not_found":
                 raise
@@ -112,7 +135,7 @@ class GitHubProvider:
         return text, body.get("sha", "")
 
     async def blob(self, repo: str, sha: str) -> str:
-        body = await self.http.get_json("blob", f"/repos/{repo}/git/blobs/{sha}")
+        body = await self._get("blob", f"/repos/{repo}/git/blobs/{sha}")
         if body.get("size", 0) > MAX_FILE_BYTES:
             raise ConnectorError("too_large", "blob too large")
         return base64.b64decode(body.get("content", "")).decode("utf-8", "replace")
@@ -123,19 +146,19 @@ class GitHubProvider:
             params["path"] = path
         if since:
             params["since"] = since.isoformat()
-        rows = await self.http.get_json("commits", f"/repos/{repo}/commits", params=params)
+        rows = await self._get("commits", f"/repos/{repo}/commits", params=params)
         return [{"sha": c["sha"], "short": c["sha"][:8], "message": c["commit"]["message"].splitlines()[0][:200],
                  "author": (c["commit"].get("author") or {}).get("name"), "date": (c["commit"].get("author") or {}).get("date"),
                  "url": c.get("html_url")} for c in rows[:limit]]
 
     async def commit(self, repo: str, sha: str) -> dict:
-        c = await self.http.get_json("commit", f"/repos/{repo}/commits/{quote(sha, safe='')}")
+        c = await self._get("commit", f"/repos/{repo}/commits/{quote(sha, safe='')}")
         return {"sha": c["sha"], "message": c["commit"]["message"][:500], "date": (c["commit"].get("author") or {}).get("date"),
                 "author": (c["commit"].get("author") or {}).get("name"), "url": c.get("html_url"),
                 "files": [{"path": f["filename"], "status": f["status"], "changes": f.get("changes")} for f in c.get("files", [])[:50]]}
 
     async def compare(self, repo: str, base: str, head: str) -> dict:
-        c = await self.http.get_json("compare", f"/repos/{repo}/compare/{quote(base, safe='')}...{quote(head, safe='')}")
+        c = await self._get("compare", f"/repos/{repo}/compare/{quote(base, safe='')}...{quote(head, safe='')}")
         return {"status": c.get("status"), "ahead_by": c.get("ahead_by"), "behind_by": c.get("behind_by"), "url": c.get("html_url"),
                 "commits": [{"sha": x["sha"][:8], "message": x["commit"]["message"].splitlines()[0][:160]} for x in c.get("commits", [])[-20:]],
                 "files": [{"path": f["filename"], "status": f["status"]} for f in c.get("files", [])[:50]]}
@@ -149,11 +172,11 @@ class GitHubProvider:
     # ---- the only write path (executor, approved plans only) -------------------------
 
     async def open_pull_request(self, repo: str, base: str, branch: str, path: str, content: str, message: str, title: str, body: str) -> dict:
-        base_sha = (await self.http.get_json("ref", f"/repos/{repo}/git/ref/heads/{quote(base, safe='')}"))["object"]["sha"]
+        base_sha = (await self._get("ref", f"/repos/{repo}/git/ref/heads/{quote(base, safe='')}"))["object"]["sha"]
         await self._post(f"/repos/{repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": base_sha})
         existing_sha = None
         try:
-            existing = await self.http.get_json("contents", f"/repos/{repo}/contents/{quote(path)}", params={"ref": branch})
+            existing = await self._get("contents", f"/repos/{repo}/contents/{quote(path)}", params={"ref": branch})
             existing_sha = existing.get("sha")
         except ConnectorError as exc:
             if exc.kind != "not_found":
