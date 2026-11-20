@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.deps import deny
@@ -23,6 +24,15 @@ async def env_or_404(db: AsyncSession, name: str) -> Environment:
     if env is None:
         raise HTTPException(404, f"Unknown environment {name!r}")
     return env
+
+
+async def flush_unique(db: AsyncSession, conflict: str) -> None:
+    """Flushes pending writes; a unique-constraint clash becomes a 409 with `conflict` instead of a 500."""
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, conflict) from None
 
 
 def max_window(env: Environment) -> timedelta:

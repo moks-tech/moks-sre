@@ -1,7 +1,7 @@
-import { Fragment, useState, type FormEvent, type ReactNode } from "react";
+import { Fragment, useState, type FormEvent } from "react";
 import { api, qs } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, ErrorBox, Loading, PageHead, Time, useLoad } from "../components";
+import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, Loading, PageHead, Time, useLoad } from "../components";
 import { type Chip, FilterPanel } from "../filters";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
 
@@ -23,25 +23,6 @@ function useAction() {
 }
 
 const lines = (s: string) => s.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
-
-/** Add and edit forms open beside the table, so Edit never fills in a form scrolled out of view. */
-function FormDrawer({ title, submit, busy, blocked, error, onSubmit, onClose, children }: { title: string; submit: string; busy: boolean; blocked?: boolean; error: unknown; onSubmit: (e: FormEvent) => void; onClose: () => void; children: ReactNode }) {
-  return (
-    <Drawer title={title} onClose={onClose} footer={<><ErrorBox error={error} /><div className="row"><button form="admin-form" disabled={busy || blocked}>{busy ? "Saving…" : submit}</button><button type="button" className="ghost" onClick={onClose}>Cancel</button></div></>}>
-      <form id="admin-form" className="stack" onSubmit={onSubmit}>{children}</form>
-    </Drawer>
-  );
-}
-
-function FormSection({ title, help, children }: { title: string; help?: string; children: ReactNode }) {
-  return (
-    <section className="form-section">
-      <h3>{title}</h3>
-      {help && <div className="small muted">{help}</div>}
-      {children}
-    </section>
-  );
-}
 
 // ---- Data sources -------------------------------------------------------------------------------
 

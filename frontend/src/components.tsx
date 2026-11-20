@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { api, ApiError, qs } from "./api";
-import { ActionMenu, CopyButton, Empty, type MenuItem, Skeleton, useIsMobile } from "./ui";
+import { ActionMenu, CopyButton, Drawer, Empty, type MenuItem, Skeleton, useIsMobile } from "./ui";
 
 /** A table row that opens something. It stays a row for layout, and keyboards can reach it. */
 export function rowAction(fn: () => void) {
@@ -389,3 +389,24 @@ export function SourceRef({ source }: { source?: Record<string, any> | null }) {
 }
 
 export { qs };
+
+/** Add and edit forms open beside the table, so Edit never fills in a form scrolled out of view. */
+export function FormDrawer({ title, submit, busy, busyLabel = "Saving…", blocked, error, onSubmit, onClose, children }: {
+  title: string; submit: string; busy: boolean; busyLabel?: string; blocked?: boolean; error: unknown; onSubmit: (e: FormEvent) => void; onClose: () => void; children: ReactNode;
+}) {
+  return (
+    <Drawer title={title} onClose={onClose} footer={<><ErrorBox error={error} /><div className="row"><button form="drawer-form" disabled={busy || blocked}>{busy ? busyLabel : submit}</button><button type="button" className="ghost" onClick={onClose}>Cancel</button></div></>}>
+      <form id="drawer-form" className="stack" onSubmit={onSubmit}>{children}</form>
+    </Drawer>
+  );
+}
+
+export function FormSection({ title, help, children }: { title: string; help?: ReactNode; children: ReactNode }) {
+  return (
+    <section className="form-section">
+      <h3>{title}</h3>
+      {help && <div className="small muted">{help}</div>}
+      {children}
+    </section>
+  );
+}
