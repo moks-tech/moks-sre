@@ -98,6 +98,11 @@ crewai:
   maxConcurrent: 2          # crews per worker pod
   excerptChars: 2000
   logLines: 100
+  # The CrewAI worker's run time limit (its MOKS_MAX_DURATION_SECONDS, and what the api checks the crews' time limits
+  # against). The incident flow (docs/crewai-sre-engine.md) runs eight steps and defaults to 600 s; config.maxDurationSeconds
+  # stays the limit of every other worker.
+  maxDurationSeconds: 600
+  fallback: langgraph       # when the incident flow cannot start: run the standard investigation (langgraph) or fail (none)
 
 # Machine learning (docs/ML.md). Capability modes (disabled, shadow, enabled) are switched in Settings > Features
 # and stored in PostgreSQL; these bound the work. ml.disabled is the deploy-time kill switch for all of it.

@@ -33,6 +33,8 @@ data:
   MOKS_CREWAI_MAX_CONCURRENT: {{ .Values.crewai.maxConcurrent | quote }}
   MOKS_CREWAI_EXCERPT_CHARS: {{ .Values.crewai.excerptChars | quote }}
   MOKS_CREWAI_LOG_LINES: {{ .Values.crewai.logLines | quote }}
+  MOKS_CREWAI_MAX_DURATION_SECONDS: {{ .Values.crewai.maxDurationSeconds | quote }}
+  MOKS_CREWAI_FALLBACK: {{ .Values.crewai.fallback | quote }}
   MOKS_CREWAI_HOME: /tmp/moks-crewai
   CREWAI_DISABLE_TELEMETRY: "true"
   CREWAI_DISABLE_TRACKING: "true"

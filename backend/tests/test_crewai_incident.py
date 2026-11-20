@@ -222,19 +222,15 @@ async def test_limits_end_a_step_and_the_run_goes_on(client, incident_on, limits
 
 
 async def test_the_token_budget_keeps_a_reserve_for_review_and_rca(client, incident_on, limits):
-    limits(token_budget=5000)
-
-    class Heavy(ScriptedSRE):
-        async def __call__(self, provider, system, messages, **kw):
-            out = await super().__call__(provider, system, messages, **kw)
-            return type(out)(out.text, 2000 if "Kubernetes investigator" in system else 40, 20, out.provider, out.model) if hasattr(out, "provider") else out
     from moks.llm.providers import LLMResponse
 
-    class Heavy2(ScriptedSRE):
+    limits(token_budget=5000)
+
+    class Heavy(ScriptedSRE):  # the Kubernetes investigator's calls are expensive
         async def __call__(self, provider, system, messages, **kw):
             out = await super().__call__(provider, system, messages, **kw)
             return LLMResponse(out.text, 2000 if "Kubernetes investigator" in system else 40, 20, "fake", "m")
-    incident_on.setattr(budget, "complete", Heavy2(HAPPY))
+    incident_on.setattr(budget, "complete", Heavy(HAPPY))
     inv, _, _ = await run_one(client, {})
     crew = inv.report["crewai"]
     tasks = {t["task"]: t for t in crew["investigation"]["tasks"]}
@@ -436,3 +432,23 @@ async def test_the_console_versions_the_incident_crew(client, incident_on):
     errors, _ = crew_config.check({"limits": {"review_rounds": 9}}, "sre")
     assert errors and errors[0]["field"] == "limits.review_rounds"
     assert crew_config.check({"agents": {"commander": {"goal": "Run {target}."}}, "limits": {"followup_calls": 2}}, "sre") == ([], [])
+
+
+async def test_the_console_runs_the_incident_flow_and_shows_one_step_per_task(client, incident_on):
+    incident_on.setattr(budget, "complete", ScriptedSRE(HAPPY))
+    _, h = await start(client)
+    env = (await client.get("/moks/api/investigate/config", headers=h)).json()["environments"][0]
+    flows = {f["name"]: f for f in (await client.get("/moks/api/crewai/flows", headers=h)).json()["flows"]}
+    assert flows["incident_investigation"]["crew"] == "sre" and flows["incident_investigation"]["defaults"]["change_window"] == "24h"
+    r = await client.post("/moks/api/crewai/flows/incident_investigation/run", json={"inputs": {"environment": env, "namespace": "shop", "workload": "payments",
+                                                                                               "change_window": "1h"}}, headers=h)
+    assert r.status_code == 201, r.text
+    await Investigator(uuid.UUID(r.json()["id"]), "t").run()
+    detail = (await client.get(f"/moks/api/crewai/runs/{r.json()['id']}", headers=h)).json()
+    steps = [s["step"] for s in detail["steps"]]
+    assert steps == ["setup", "plan", "kubernetes", "observability", "change", "knowledge", "hypotheses", "review", "rca", "validate"]
+    assert detail["steps"][1]["label"] == "Incident commander: Plan the investigation" and all(s["status"] == "succeeded" for s in detail["steps"])
+    assert detail["inputs"]["change_window"] == "1h" and detail["report"]["crewai"]["severity"]
+    bad = await client.post("/moks/api/crewai/flows/incident_investigation/run", json={"inputs": {"environment": env, "namespace": "shop", "workload": "payments",
+                                                                                                 "change_window": "2d"}}, headers=h)
+    assert bad.status_code == 422 and "change_window" in bad.text

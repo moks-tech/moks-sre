@@ -25,7 +25,7 @@ spec:
       imagePullSecrets: {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- include "moks.podSecurity" . | nindent 6 }}
-      terminationGracePeriodSeconds: {{ add .Values.config.maxDurationSeconds 20 }}
+      terminationGracePeriodSeconds: {{ add .Values.crewai.maxDurationSeconds 20 }}
       {{- include "moks.migrateInit" (dict "root" . "component" "worker") | nindent 6 }}
       containers:
         - name: crewai
@@ -37,6 +37,7 @@ spec:
           {{- include "moks.env" (dict "root" . "component" "worker") | nindent 10 }}
           env:
             - {name: MOKS_WORKER_CLASSES, value: crewai}
+            - {name: MOKS_MAX_DURATION_SECONDS, value: {{ .Values.crewai.maxDurationSeconds | quote }}}  # crews take longer than other investigations
             - {name: MOKS_WORKER_CAPACITY, value: ""}
             {{- if include "moks.searchActive" . }}
             {{- include "moks.searchIdentities" (dict "root" . "component" "worker") | nindent 12 }}
