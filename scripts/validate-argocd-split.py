@@ -59,8 +59,9 @@ SCENARIOS = {
     "backup": (BACKUP, {"backup"}, set()),
     "backup-split": (BACKUP + SPLIT, {"backup", "migrate"}, set()),
     "reranker-on": (RERANKER, {"reranker"}, set()),
-    "reranker-off": (["--set", "reranker.enabled=false"], set(), {"reranker"}),
-    "embedder-on": (["--set", "reranker.enabled=false", "--set", "embedder.enabled=true", "--set", "embedder.image.digest=sha256:" + "c" * 64], {"reranker"}, set()),
+    # The embedder (moks-embedder) renders in the reranker group too, and values-hetzner turns it on: the group is empty
+    # only with both model services off (models-off), never with the reranker alone off.
+    "embedder-on":(["--set", "reranker.enabled=false", "--set", "embedder.enabled=true", "--set", "embedder.image.digest=sha256:" + "c" * 64], {"reranker"}, set()),
     "models-off": (["--set", "reranker.enabled=false", "--set", "embedder.enabled=false"], set(), {"reranker"}),
     "crewai-on": (["--set", "crewai.enabled=true"], {"crewai"}, set()),
     "crewai-off": (["--set", "crewai.enabled=false"], set(), {"crewai"}),
