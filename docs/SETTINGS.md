@@ -64,6 +64,35 @@ Not editable here, on purpose: hard ceilings (`max_tool_calls`, `max_duration_se
 who may sign in or what MOKS may reach (auth, OIDC, connectors' credentials, secret sync policy), terminal values
 (the terminal gateway has its own), and anything read only at start-up (worker pools, rate limiters).
 
+## LLM providers: budgets
+
+Every LLM call reserves its worst-case cost first and must fit **every** limit below (`moks/llm/budget.py`). Days
+and months are UTC calendar periods, the same ones Anthropic's spend limits reset on. Spend counts finished calls
+plus calls still in progress. Nothing here is preset: the monthly budget and both totals start empty, which means no
+limit.
+
+| Limit | Where | Empty |
+|---|---|---|
+| Daily budget of one LLM | the LLM's form, **Budget** | required (0 allows only free models) |
+| Monthly budget of one LLM | the LLM's form, **Budget** | no monthly limit |
+| Daily and monthly total of a provider (all its LLMs together, e.g. one Anthropic account's credit) | **Provider totals** card, below the list | no limit |
+| Per person per day, per investigation | Limits & schedules → LLM spend | no limit |
+
+The list shows each LLM's spend today and this month against its limits, and the totals card a month-end forecast
+(the month's average daily spend so far, over the whole month). Spend at 80 % of a limit or more is highlighted.
+A refused call says which limit stopped it, how much was used and when it resets, for example: *The monthly total for
+all anthropic LLMs is reached: $100.00 of $100.00 used this month. It resets at 2026-12-01 00:00 UTC; an
+administrator can change it in Settings → LLM providers.*
+
+When the provider itself refuses for money (an Anthropic Console spend limit: HTTP 400 "You have reached your
+specified API usage limits"; the usage tier's monthly cap: HTTP 429 `enforced_spend_limit_reached`; a billing
+problem: HTTP 402), the call fails the same way, as a budget refusal with Anthropic's own message, not as a bad
+request or a rate limit. Setting the provider's monthly total to the Console's spend limit keeps MOKS from reaching it.
+
+API: `GET /api/admin/llm/totals`, `PUT /api/admin/llm/totals/{provider}` with `{daily_budget_usd, monthly_budget_usd}`
+(`null` = no limit; both `null` removes the totals; audited as `llm.total.update`). `monthly_budget_usd` is a field
+of `POST`/`PUT /api/admin/llm`.
+
 ## Credentials
 
 API keys, tokens and passwords are pasted into the form that uses them, stored encrypted, and listed here with where

@@ -121,6 +121,7 @@ class LLMConfig(Base):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=60)
     max_output_tokens: Mapped[int] = mapped_column(Integer, default=2000)
     daily_budget_usd: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("5"))
+    monthly_budget_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)  # None: no monthly limit
     max_concurrency: Mapped[int] = mapped_column(Integer, default=4)
     input_price_per_mtok: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0"))
     output_price_per_mtok: Mapped[Decimal] = mapped_column(Numeric(12, 4), default=Decimal("0"))
@@ -128,6 +129,16 @@ class LLMConfig(Base):
     embedding_options: Mapped[dict] = mapped_column(JSONB, default=dict)  # query/document prefixes, truncation, revision (moks/rag/embeddings.py)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LLMProviderBudget(Base):
+    """All of one provider's LLMs together, e.g. the credit on one Anthropic account. None: no limit. See llm/budget.py."""
+    __tablename__ = "llm_provider_budgets"
+    provider: Mapped[str] = mapped_column(String(30), primary_key=True)
+    daily_budget_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    monthly_budget_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class LLMUsage(Base):

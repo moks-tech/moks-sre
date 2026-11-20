@@ -5,13 +5,13 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import func, select, text, update
+from sqlalchemy import delete, func, select, text, update
 
 from moks.config import get_settings
 from moks.db import session_scope
 from moks.llm import budget
 from moks.llm.providers import LLMError, LLMResponse
-from moks.models import LLMConfig, LLMReservation, LLMUsage
+from moks.models import LLMConfig, LLMProviderBudget, LLMReservation, LLMUsage
 
 
 class Provider:
@@ -36,9 +36,10 @@ class Provider:
         return [[0.0] for _ in texts]
 
 
-async def _cfg(daily="1", in_price="1000", out_price="1000", concurrency=100):
+async def _cfg(daily="1", in_price="1000", out_price="1000", concurrency=100, monthly=None, provider="openai"):
     async with session_scope() as db:
-        cfg = LLMConfig(name=f"b-{uuid.uuid4().hex[:6]}", provider="openai", model="m", purpose="chat", daily_budget_usd=Decimal(daily),
+        cfg = LLMConfig(name=f"b-{uuid.uuid4().hex[:6]}", provider=provider, model="m", purpose="chat", daily_budget_usd=Decimal(daily),
+                        monthly_budget_usd=Decimal(monthly) if monthly is not None else None,
                         input_price_per_mtok=Decimal(in_price), output_price_per_mtok=Decimal(out_price), max_concurrency=concurrency, is_active=False)
         db.add(cfg)
         await db.flush()
@@ -194,3 +195,73 @@ async def test_embeddings_are_metered():
     cfg = await _cfg()
     out = await budget.embed(Provider(cfg), cfg, ["some text to embed"], purpose="indexing")
     assert out == [[0.0]] and await _spent(cfg) > 0
+
+
+async def test_a_monthly_budget_counts_the_whole_month_but_not_last_month():
+    cfg = await _cfg(daily="100", monthly="0.6")
+    await _call(Provider(cfg, tokens=(500, 500)))  # $1.00, though it was admitted at its ~$0.50 estimate
+    with pytest.raises(budget.BudgetDenied) as e:
+        await _call(Provider(cfg))
+    assert e.value.reason == "monthly" and e.value.kind == "budget"
+    assert f"monthly LLM budget of {cfg.name}" in e.value.message and "resets at" in e.value.message and "Settings" in e.value.message
+    async with session_scope() as db:
+        for table in ("llm_usage", "llm_reservations"):
+            await db.execute(text(f"UPDATE {table} SET created_at = date_trunc('month', now(), 'UTC') - interval '1 minute' WHERE llm_config_id = :c"), {"c": cfg.id})
+    await _call(Provider(cfg))
+
+
+async def test_no_monthly_budget_is_no_monthly_limit():
+    cfg = await _cfg(daily="100")
+    for _ in range(3):
+        await _call(Provider(cfg, tokens=(500, 500)))
+
+
+async def _total(provider, **limits):
+    """Sets the provider's total to what it already spent (this period) plus the given headroom."""
+    async with session_scope() as db:
+        await db.execute(delete(LLMProviderBudget).where(LLMProviderBudget.provider == provider))
+        row = LLMProviderBudget(provider=provider)
+        for unit, headroom in limits.items():
+            base = await budget._committed(db, budget._of_provider(provider), unit=unit)
+            setattr(row, f"{'daily' if unit == 'day' else 'monthly'}_budget_usd", base + Decimal(headroom))
+        db.add(row)
+
+
+async def _no_total(provider):
+    async with session_scope() as db:
+        await db.execute(delete(LLMProviderBudget).where(LLMProviderBudget.provider == provider))
+
+
+@pytest.mark.parametrize("unit,reason", [("month", "total_monthly"), ("day", "total_daily")])
+async def test_a_provider_total_caps_all_of_its_llms_together(unit, reason):
+    a, b = await _cfg(daily="100", provider="gemini"), await _cfg(daily="100", provider="gemini")
+    other = await _cfg(daily="100", provider="openai")
+    await _total("gemini", **{unit: "0.6"})
+    try:
+        await _call(Provider(a, tokens=(500, 500)))
+        with pytest.raises(budget.BudgetDenied) as e:
+            await _call(Provider(b))  # b spent nothing itself
+        assert e.value.reason == reason and "all gemini LLMs" in e.value.message
+        await _call(Provider(other))  # another provider's LLMs are not counted
+    finally:
+        await _no_total("gemini")
+    await _call(Provider(b))  # no total, no limit beyond each LLM's own
+
+
+async def test_overview_reports_spend_against_every_budget():
+    cfg = await _cfg(daily="100", monthly="50", provider="gemini")
+    await _call(Provider(cfg, tokens=(500, 500)))
+    async with session_scope() as db:
+        o = await budget.overview(db)
+    mine = o["llms"][str(cfg.id)]
+    assert Decimal(mine["spent_today_usd"]) == Decimal(mine["spent_month_usd"]) == Decimal("1")
+    gemini = next(p for p in o["providers"] if p["provider"] == "gemini")
+    assert Decimal(gemini["spent_month_usd"]) >= 1 and Decimal(gemini["forecast_month_usd"]) >= Decimal(gemini["spent_month_usd"])
+    assert gemini["monthly_budget_usd"] is None and o["month_resets_at"] >= o["day_resets_at"]
+
+
+async def test_the_provider_refusing_for_money_gives_the_hold_back():
+    cfg = await _cfg(daily="100")
+    with pytest.raises(LLMError) as e:
+        await _call(Provider(cfg, fail="budget"))
+    assert e.value.kind == "budget" and await _held(cfg, "released") == 1

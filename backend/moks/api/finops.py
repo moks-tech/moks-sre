@@ -91,7 +91,23 @@ async def llm_spend(days: int = Query(30, ge=1, le=365), environment: str = "all
         raise HTTPException(403, "You need finops.read")
     envs = None if ctx.principal.can(P.ADMIN_LLM, "*", "*") and environment == "all" else [e for e in allowed if environment in ("all", e)]
     rows = await _llm_rows(db, days, envs)
-    return _llm_out(rows, days)
+    out = _llm_out(rows, days)
+    if ctx.principal.can(P.ADMIN_LLM, "*", "*"):  # budgets cover every environment, so only LLM administrators see them
+        out["budgets"] = await _llm_budgets(db)
+    return out
+
+
+async def _llm_budgets(db: AsyncSession) -> dict:
+    """Each LLM's daily and monthly budget and each provider's totals, against what was spent today and this month (UTC)."""
+    from ..llm import budget
+    from ..models import LLMConfig
+
+    o = await budget.overview(db)
+    configs = (await db.execute(select(LLMConfig).order_by(LLMConfig.provider, LLMConfig.name))).scalars().all()
+    llms = [{"name": c.name, "provider": c.provider, "model": c.model, "purpose": c.purpose, "is_active": c.is_active,
+             "daily_budget_usd": str(c.daily_budget_usd), "monthly_budget_usd": str(c.monthly_budget_usd) if c.monthly_budget_usd is not None else None,
+             **o["llms"].get(str(c.id), {})} for c in configs]
+    return {"llms": llms, "providers": o["providers"], "month_start": o["month_start"], "day_resets_at": o["day_resets_at"], "month_resets_at": o["month_resets_at"]}
 
 
 def _llm_out(rows, days: int) -> dict:

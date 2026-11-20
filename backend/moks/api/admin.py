@@ -26,7 +26,7 @@ from ..connectors.base import describe_credential_ref
 from ..db import get_db
 from ..llm import budget, catalog
 from ..llm.providers import LLMError, provider_for
-from ..models import AuditEvent, Connector, EmbeddingIndex, Environment, LLMConfig, RoleBinding, User
+from ..models import AuditEvent, Connector, EmbeddingIndex, Environment, LLMConfig, LLMProviderBudget, RoleBinding, User
 from ..rag import embeddings
 from ..rbac import ROLES, P
 from .common import flush_unique
@@ -201,6 +201,7 @@ class LLMIn(BaseModel):
     timeout_seconds: int = Field(default=60, ge=1, le=600)
     max_output_tokens: int = Field(default=2000, ge=100, le=16000)
     daily_budget_usd: Decimal = Field(default=Decimal("5"), ge=0, le=10000)
+    monthly_budget_usd: Decimal | None = Field(default=None, ge=0, le=100000)  # None: no monthly limit
     input_price_per_mtok: Decimal = Field(default=Decimal("0"), ge=0, le=1000)
     output_price_per_mtok: Decimal = Field(default=Decimal("0"), ge=0, le=1000)
     embedding_dimensions: int | None = Field(default=None, ge=8, le=8192)
@@ -231,10 +232,18 @@ class ModelsIn(BaseModel):
     fresh: bool = False
 
 
-def llm_out(c: LLMConfig, spent: Decimal | None = None) -> dict[str, Any]:
+class ProviderTotalIn(BaseModel):
+    """All of one provider's LLMs together. Empty (None) is no limit; both empty removes the total."""
+    daily_budget_usd: Decimal | None = Field(default=None, ge=0, le=10000)
+    monthly_budget_usd: Decimal | None = Field(default=None, ge=0, le=100000)
+
+
+def llm_out(c: LLMConfig, spent: Decimal | None = None, period: dict[str, Any] | None = None) -> dict[str, Any]:
     return {"id": str(c.id), "name": c.name, "purpose": c.purpose, "provider": c.provider, "model": c.model, "endpoint": c.endpoint,
             "region": c.region, "credential": describe_credential_ref(c.credential_ref), "credential_ref": c.credential_ref,
             "timeout_seconds": c.timeout_seconds, "max_output_tokens": c.max_output_tokens, "daily_budget_usd": str(c.daily_budget_usd),
+            "monthly_budget_usd": str(c.monthly_budget_usd) if c.monthly_budget_usd is not None else None,
+            "spent_today_usd": (period or {}).get("spent_today_usd"), "spent_month_usd": (period or {}).get("spent_month_usd"),
             "input_price_per_mtok": str(c.input_price_per_mtok), "output_price_per_mtok": str(c.output_price_per_mtok),
             "embedding_dimensions": c.embedding_dimensions, "embedding_options": c.embedding_options or {}, "is_active": c.is_active,
             "model_key": embeddings.model_key(c) if c.purpose == "embedding" else None,
@@ -251,7 +260,8 @@ async def list_llm(ctx: AuthContext = Depends(needs(P.ADMIN_LLM)), db: AsyncSess
     since = datetime.now(timezone.utc) - timedelta(days=1)
     spent = dict((await db.execute(select(LLMUsage.llm_config_id, func.sum(LLMUsage.cost_usd)).where(LLMUsage.created_at >= since)
                                    .group_by(LLMUsage.llm_config_id))).all())
-    return [llm_out(r, spent.get(r.id, Decimal(0))) for r in rows]
+    periods = (await budget.overview(db))["llms"]
+    return [llm_out(r, spent.get(r.id, Decimal(0)), periods.get(str(r.id))) for r in rows]
 
 
 @router.post("/llm", status_code=201)
@@ -277,6 +287,34 @@ async def llm_models(body: ModelsIn, ctx: AuthContext = Depends(needs(P.ADMIN_LL
     cfg = LLMConfig(provider=body.provider, model="", endpoint=body.endpoint or None, region=body.region if body.provider == "bedrock" else None,
                     credential_ref=body.credential_ref.model_dump(exclude_none=True), timeout_seconds=int(catalog.TIMEOUT))
     return await catalog.list_models(cfg, fresh=body.fresh)
+
+
+@router.get("/llm/totals")
+async def llm_totals(ctx: AuthContext = Depends(needs(P.ADMIN_LLM)), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """Every provider in use with its optional daily and monthly total, what all its LLMs spent today and this month
+    (UTC) and a month-end forecast. Declared before /llm/{lid}, which would otherwise take "totals" as an id."""
+    return await budget.overview(db)
+
+
+@router.put("/llm/totals/{provider}")
+async def set_llm_total(provider: Providers, body: ProviderTotalIn, ctx: AuthContext = Depends(needs(P.ADMIN_LLM)),
+                        db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    row = await db.get(LLMProviderBudget, provider)
+    before = {"daily_budget_usd": str(row.daily_budget_usd) if row and row.daily_budget_usd is not None else None,
+              "monthly_budget_usd": str(row.monthly_budget_usd) if row and row.monthly_budget_usd is not None else None}
+    if body.daily_budget_usd is None and body.monthly_budget_usd is None:
+        if row is not None:
+            await db.delete(row)
+    else:
+        if row is None:
+            row = LLMProviderBudget(provider=provider)
+            db.add(row)
+        row.daily_budget_usd, row.monthly_budget_usd, row.updated_by = body.daily_budget_usd, body.monthly_budget_usd, ctx.user.id
+    await db.flush()
+    await audit.record(db, action="llm.total.update", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="llm_provider_budget",
+                       resource_id=provider, details={"before": before, "after": body.model_dump(mode="json")})
+    return next((p for p in (await budget.overview(db))["providers"] if p["provider"] == provider),
+                {"provider": provider, "llms": 0, "daily_budget_usd": None, "monthly_budget_usd": None})
 
 
 @router.put("/llm/{lid}")

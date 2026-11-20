@@ -66,6 +66,35 @@ class LLMError(Exception):
         self.message = message
 
 
+class BudgetDenied(LLMError):
+    """A call refused for money: one of MOKS's own budgets (llm/budget.py), or the provider's account limit (reason
+    "provider_account"). Nothing was billed for it, and waiting does not help until the period resets."""
+
+    def __init__(self, reason: str, message: str):
+        super().__init__("budget", message)
+        self.reason = reason
+
+
+def anthropic_spend_limit(exc: Any) -> str | None:
+    """Why Anthropic refused to bill this account any further, or None when the error is about something else.
+
+    A spend limit set in the Claude Console is HTTP 400 invalid_request_error whose message starts "You have reached
+    your specified (workspace) API usage limits"; the usage tier's monthly cap is HTTP 429 with error.details.error_code
+    "enforced_spend_limit_reached" and no retry-after; a billing problem is HTTP 402 billing_error. Anthropic's own
+    message says when access resumes, so it is kept."""
+    body = getattr(exc, "body", None)
+    err = body.get("error", body) if isinstance(body, dict) else None
+    err = err if isinstance(err, dict) else {}
+    details = err.get("details") if isinstance(err.get("details"), dict) else {}
+    message = " ".join(str(err.get("message") or getattr(exc, "message", "") or "").split())
+    if getattr(exc, "status_code", None) == 402 or err.get("type") == "billing_error":
+        return f"Anthropic refused the call for a billing problem on the account: {message[:300]}"
+    if details.get("error_code") == "enforced_spend_limit_reached" or "You have reached your specified" in message \
+            or "You have reached your API usage limits" in message or "credit balance is too low" in message:
+        return f"The Anthropic account's spend limit is reached: {message[:300]}"
+    return None
+
+
 @dataclass
 class LLMResponse:
     text: str
@@ -305,13 +334,15 @@ class AnthropicProvider(Provider):
                     data = await client.messages.create(**args)
         except (anthropic.AuthenticationError, anthropic.PermissionDeniedError) as exc:
             raise LLMError("auth", f"{self.name} rejected the credentials (HTTP {exc.status_code})") from None
-        except anthropic.RateLimitError:
-            raise LLMError("rate_limited", f"{self.name} rate limited the request (HTTP 429)") from None
         except anthropic.APITimeoutError:
             raise LLMError("timeout", f"{self.name} did not answer within {self.cfg.timeout_seconds}s") from None
         except anthropic.APIConnectionError as exc:
             raise LLMError("unavailable", f"cannot reach {self.name} ({type(exc).__name__})") from None
-        except anthropic.APIStatusError as exc:
+        except anthropic.APIStatusError as exc:  # RateLimitError (429) is one of these
+            if (why := anthropic_spend_limit(exc)) is not None:
+                raise BudgetDenied("provider_account", why) from None
+            if exc.status_code == 429:
+                raise LLMError("rate_limited", f"{self.name} rate limited the request (HTTP 429)") from None
             raise LLMError("unavailable" if exc.status_code >= 500 else "bad_response", f"{self.name} returned HTTP {exc.status_code}: {str(exc.message)[:300]}") from None
         if data.stop_reason == "refusal":
             raise LLMError("refused", f"{self.name} declined this request (safety classifier)")
