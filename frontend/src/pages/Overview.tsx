@@ -114,8 +114,8 @@ function EnvCard({ env, live }: { env: EnvOverview; live: boolean }) {
         <div className="stack">
           <div className="stat-row">
             {nodesReady && <Stat value={nodesReady} label="nodes ready" />}
-            <Stat value={health.unhealthy_pods.length} label="pods needing attention (last hour)" />
-            {firing !== null && <Stat value={firing} label="firing alerts" />}
+            <Stat value={health.unhealthy_pods.length} label="pods needing attention (last hour)" tone={health.unhealthy_pods.length ? "warn" : undefined} />
+            {firing !== null && <Stat value={firing} label="firing alerts" tone={firing ? "bad" : undefined} />}
           </div>
           <div className="small muted">collected <Time iso={health.collected_at} /></div>
           {health.unhealthy_pods.length > 0 && <DataTable label={`Pods needing attention in ${env.display_name}`} rows={health.unhealthy_pods.slice(0, 8)} rowKey={(p: any) => p.namespace + p.name} cols={[

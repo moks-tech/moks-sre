@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, API, qs } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, ErrorBox, Loading, PageHead, ScopePicker, StatusBadge, Time, useInterval, useLoad } from "../components";
+import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, Loading, PageHead, ScopePicker, StatusBadge, Time, useInterval, useLoad } from "../components";
 import { type Chip, FilterPanel, useUrlFilters } from "../filters";
 import { Empty, Truncate, useFeedback } from "../ui";
 
@@ -25,22 +25,13 @@ export function Incidents() {
     ...(f.environment ? [{ key: "e", label: f.environment, onRemove: () => set({ environment: "" }) }] : []), ...(f.q ? [{ key: "q", label: `title has ${f.q}`, onRemove: () => set({ q: "" }) }] : []),
   ];
   const alerts = useLoad(() => api<any[]>("/alerts/events"), []);
-  const [env, setEnv] = useState("");
-  const [ns, setNs] = useState("");
-  const [form, setForm] = useState({ title: "", severity: "sev3", summary: "" });
-  const [error, setError] = useState<unknown>();
-  const onEnv = useCallback((e: string) => setEnv(e), []);
-  const onNs = useCallback((n: string) => setNs(n), []);
-  async function create(e: FormEvent) {
-    e.preventDefault();
-    try {
-      const inc = await api<any>("/incidents", { method: "POST", body: { ...form, environment: env, namespace: ns || "*" } });
-      nav(`/incidents/${inc.id}`);
-    } catch (err) { setError(err); }
-  }
+  const [opening, setOpening] = useState(false);
   return (
     <>
-      <PageHead title="Incidents" sub="Incident workspaces: timeline, evidence, hypotheses, actions and validation" />
+      <PageHead title="Incidents" sub="Incident workspaces: timeline, evidence, hypotheses, actions and validation">
+        {can("incident.write") && <button onClick={() => setOpening(true)}>Open incident</button>}
+      </PageHead>
+      {opening && <OpenIncident onClose={() => setOpening(false)} onOpened={(id) => nav(`/incidents/${id}`)} />}
       <FilterPanel chips={chips} onClear={clear}
         search={<input type="search" className="grow" aria-label="Search incidents" value={f.q} onChange={(e) => set({ q: e.target.value })} placeholder="Search titles" />}>
         <label>Status<select aria-label="Filter by status" value={f.status} onChange={(e) => set({ status: e.target.value })}><option value="">All</option>{["open", "mitigated", "resolved", "closed"].map((s) => <option key={s}>{s}</option>)}</select></label>
@@ -49,7 +40,7 @@ export function Incidents() {
       </FilterPanel>
       <div className="card mt">
         <Loading load={list} rows={5} />
-        {list.data && <DataTable label="Incidents" rows={rows} rowKey={(i) => i.id} empty={<Empty title={chips.length ? "No incidents match." : "No incidents."}>{chips.length ? "Clear a filter to see more." : "Open one below, or enable detection on an environment."}</Empty>} cols={[
+        {list.data && <DataTable label="Incidents" rows={rows} rowKey={(i) => i.id} empty={<Empty title={chips.length ? "No incidents match." : "No incidents."}>{chips.length ? "Clear a filter to see more." : "Use Open incident, or turn on detection for an environment."}</Empty>} cols={[
           { key: "t", head: "Incident", primary: true, cell: (i) => <><Link className="clamp-2" title={i.title} to={`/incidents/${i.id}`}>{i.title}</Link>{i.postmortem_status !== "none" && <span className="small muted">postmortem {i.postmortem_status}</span>}</> },
           { key: "sev", head: "Severity", status: true, cell: (i) => <Badge kind={SEV[i.severity]}>{i.severity}</Badge> },
           { key: "st", head: "Status", status: true, cell: (i) => <Badge kind={i.status === "open" ? "bad" : i.status === "mitigated" ? "warn" : "ok"}>{i.status}</Badge> },
@@ -58,19 +49,6 @@ export function Incidents() {
           { key: "at", head: "Updated", cell: (i) => <Time iso={i.updated_at} /> },
         ]} />}
       </div>
-      {can("incident.write") && (
-        <form className="card stack" style={{ marginTop: 14 }} onSubmit={create}>
-          <h2>Open an incident</h2>
-          <div className="row">
-            <ScopePicker env={env} ns={ns} onEnv={onEnv} onNs={onNs} allowAll />
-            <label>Severity<select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })}>{["sev1", "sev2", "sev3", "sev4"].map((s) => <option key={s}>{s}</option>)}</select></label>
-          </div>
-          <label>Title<input required minLength={3} value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Checkout returning 502s" /></label>
-          <label>Summary<textarea rows={2} value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} /></label>
-          <ErrorBox error={error} />
-          <div className="form-foot"><button>Open incident</button></div>
-        </form>
-      )}
       <div className="card" style={{ marginTop: 14 }}>
         <h2>Recent alerts</h2>
         {alerts.data && <DataTable label="Recent alerts" rows={alerts.data.slice(0, 30)} rowKey={(a) => a.id}
@@ -83,6 +61,41 @@ export function Incidents() {
         ]} />}
       </div>
     </>
+  );
+}
+
+const SEVERITIES = ["sev1", "sev2", "sev3", "sev4"];
+
+function OpenIncident({ onClose, onOpened }: { onClose: () => void; onOpened: (id: string) => void }) {
+  const [env, setEnv] = useState("");
+  const [ns, setNs] = useState("");
+  const [form, setForm] = useState({ title: "", severity: "sev3", summary: "" });
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const onEnv = useCallback((e: string) => setEnv(e), []);
+  const onNs = useCallback((n: string) => setNs(n), []);
+  async function create(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const inc = await api<any>("/incidents", { method: "POST", body: { ...form, environment: env, namespace: ns || "*" } });
+      onOpened(inc.id);
+    } catch (err) { setError(err); setBusy(false); }
+  }
+  return (
+    <FormDrawer title="Open an incident" submit="Open incident" busyLabel="Opening…" busy={busy} error={error} onSubmit={create} onClose={onClose}>
+      <FormSection title="What is happening">
+        <label>Title<input required minLength={3} autoFocus value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} placeholder="Checkout returning 502s" /></label>
+        <div className="form-grid fill">
+          <label>Severity<select value={form.severity} onChange={(e) => setForm({ ...form, severity: e.target.value })}>{SEVERITIES.map((x) => <option key={x}>{x}</option>)}</select></label>
+        </div>
+        <label>Summary<textarea rows={4} value={form.summary} onChange={(e) => setForm({ ...form, summary: e.target.value })} placeholder="What people see, since when, and what has been tried" /></label>
+      </FormSection>
+      <FormSection title="Where" help="The workspace collects evidence from this environment and namespace.">
+        <ScopePicker env={env} ns={ns} onEnv={onEnv} onNs={onNs} allowAll />
+      </FormSection>
+    </FormDrawer>
   );
 }
 
@@ -334,42 +347,24 @@ export function PlanForm({ env, ns, initial, onDone }: { env: string; ns: string
 export function Diagnostics() {
   const cat = useLoad(() => api<any>("/diagnostics/catalog"), []);
   const list = useLoad(() => api<any[]>("/diagnostics/sessions"), []);
-  const [env, setEnv] = useState("");
-  const [ns, setNs] = useState("");
-  const [f, setF] = useState({ image: "netshoot", packages: [] as string[], ttl_minutes: 30, reason: "" });
-  const [error, setError] = useState<unknown>();
+  const [starting, setStarting] = useState(false);
   const nav = useNavigate();
-  const onEnv = useCallback((e: string) => setEnv(e), []);
-  const onNs = useCallback((n: string) => setNs(n), []);
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    try { const s = await api<any>("/diagnostics/sessions", { method: "POST", body: { ...f, environment: env } }); nav(`/diagnostics/${s.id}`); } catch (err) { setError(err); }
-  }
   const [d, set, clear] = useUrlFilters({ status: "" });
   const statuses = [...new Set((list.data ?? []).map((s) => s.status as string))].sort();
   const sessions = (list.data ?? []).filter((s) => !d.status || s.status === d.status);
   const chips: Chip[] = d.status ? [{ key: "s", label: d.status, onRemove: () => set({ status: "" }) }] : [];
-  const pkgs = Object.entries(cat.data?.packages ?? {}).filter(([, p]: any) => p.images.includes(f.image));
   return (
     <>
-      <PageHead title="Diagnostic sessions" sub="Disposable, time-limited pods for testing DNS, ports, certificates and HTTP from inside the cluster. No shell; commands are templates with validated arguments." />
-      <form className="card stack" onSubmit={submit}>
-        <div className="row"><ScopePicker env={env} ns={ns} onEnv={onEnv} onNs={onNs} />
-          <label>Image<select value={f.image} onChange={(e) => setF({ ...f, image: e.target.value, packages: [] })}>{Object.entries(cat.data?.images ?? {}).map(([k, v]: any) => <option key={k} value={k}>{k} — {v.description}</option>)}</select></label>
-          <label>TTL (min)<input type="number" min={5} max={240} value={f.ttl_minutes} onChange={(e) => setF({ ...f, ttl_minutes: Number(e.target.value) })} /></label></div>
-        {pkgs.length > 0 && <div className="row">{pkgs.map(([k, p]: any) => <label key={k} className="inline"><input type="checkbox" checked={f.packages.includes(k)}
-          onChange={(e) => setF({ ...f, packages: e.target.checked ? [...f.packages, k] : f.packages.filter((x) => x !== k) })} /> {p.spec} {p.elevated && <Badge kind="warn">elevated</Badge>}</label>)}</div>}
-        <label>Reason<input required minLength={5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></label>
-        <ErrorBox error={error} />
-        <div className="small muted">The pod starts right away, with no approval. Elevated packages run as root inside the pod. Everything is recorded in the audit log.</div>
-        <div className="form-foot"><button>Start session</button></div>
-      </form>
+      <PageHead title="Diagnostic sessions" sub="Disposable, time-limited pods for testing DNS, ports, certificates and HTTP from inside the cluster. No shell; commands are templates with validated arguments.">
+        <button onClick={() => setStarting(true)}>Start session</button>
+      </PageHead>
+      {starting && <StartDiagnostic cat={cat.data} onClose={() => setStarting(false)} onStarted={(id) => nav(`/diagnostics/${id}`)} />}
       <FilterPanel chips={chips} onClear={clear}>
         <label>Status<select value={d.status} onChange={(e) => set({ status: e.target.value })}><option value="">All</option>{statuses.map((s) => <option key={s}>{s}</option>)}</select></label>
       </FilterPanel>
       <div className="card mt">
         <Loading load={list} rows={4} />
-        {list.data && <DataTable label="Diagnostic sessions" rows={sessions} rowKey={(s) => s.id} empty={<Empty title={chips.length ? "No sessions match." : "No diagnostic sessions yet."} />} cols={[
+        {list.data && <DataTable label="Diagnostic sessions" rows={sessions} rowKey={(s) => s.id} empty={<Empty title={chips.length ? "No sessions match." : "No diagnostic sessions yet."}>{chips.length ? "Clear a filter to see more." : "Use Start session to check DNS, ports, certificates or HTTP from inside a cluster."}</Empty>} cols={[
           { key: "r", head: "Session", primary: true, cell: (s) => <Link className="clamp-2" title={s.reason} to={`/diagnostics/${s.id}`}>{s.reason}</Link> },
           { key: "st", head: "Status", status: true, cell: (s) => <Badge kind={s.status === "ready" ? "ok" : s.status === "failed" ? "bad" : "neutral"}>{s.status}</Badge> },
           { key: "i", head: "Image", cell: (s) => <Truncate text={s.image} mono />, meta: (s) => s.image },
@@ -377,6 +372,40 @@ export function Diagnostics() {
         ]} />}
       </div>
     </>
+  );
+}
+
+function StartDiagnostic({ cat, onClose, onStarted }: { cat: any; onClose: () => void; onStarted: (id: string) => void }) {
+  const [env, setEnv] = useState("");
+  const [ns, setNs] = useState("");
+  const [f, setF] = useState({ image: "netshoot", packages: [] as string[], ttl_minutes: 30, reason: "" });
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const onEnv = useCallback((e: string) => setEnv(e), []);
+  const onNs = useCallback((n: string) => setNs(n), []);
+  const pkgs = Object.entries(cat?.packages ?? {}).filter(([, p]: any) => p.images.includes(f.image));
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try { const s = await api<any>("/diagnostics/sessions", { method: "POST", body: { ...f, environment: env } }); onStarted(s.id); } catch (err) { setError(err); setBusy(false); }
+  }
+  return (
+    <FormDrawer title="Start a diagnostic session" submit="Start session" busyLabel="Starting…" busy={busy} error={error} onSubmit={submit} onClose={onClose}>
+      <FormSection title="Where"><ScopePicker env={env} ns={ns} onEnv={onEnv} onNs={onNs} /></FormSection>
+      <FormSection title="Image and tools">
+        <div className="form-grid">
+          <label>Image<select value={f.image} onChange={(e) => setF({ ...f, image: e.target.value, packages: [] })}>{Object.entries(cat?.images ?? {}).map(([k, v]: any) => <option key={k} value={k}>{k} — {v.description}</option>)}</select></label>
+          <label>Ends after (minutes)<input type="number" min={5} max={240} value={f.ttl_minutes} onChange={(e) => setF({ ...f, ttl_minutes: Number(e.target.value) })} /></label>
+        </div>
+        {pkgs.length > 0 && <div className="stack tight" role="group" aria-label="Extra packages">{pkgs.map(([k, p]: any) => <label key={k} className="inline"><input type="checkbox" checked={f.packages.includes(k)}
+          onChange={(e) => setF({ ...f, packages: e.target.checked ? [...f.packages, k] : f.packages.filter((x) => x !== k) })} /> {p.spec} {p.elevated && <Badge kind="warn">elevated</Badge>}</label>)}</div>}
+      </FormSection>
+      <FormSection title="Why">
+        <label>Reason<input required minLength={5} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} placeholder="What you are checking" /></label>
+        <div className="alert info small">The pod starts right away, with no approval. Elevated packages run as root inside the pod. Everything is recorded in the audit log.</div>
+      </FormSection>
+    </FormDrawer>
   );
 }
 

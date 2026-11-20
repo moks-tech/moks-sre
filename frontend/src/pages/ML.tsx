@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import { api, API, qs } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, EnvNsFilter, ErrorBox, Loading, PageHead, Time, useLoad, useScopes, type Col } from "../components";
+import { Badge, DataTable, EnvNsFilter, ErrorBox, FormDrawer, FormSection, Loading, PageHead, ScopePicker, Time, useLoad, useScopes, type Col } from "../components";
 import { Drawer, Empty, useFeedback } from "../ui";
 
 const MODE_TONE: Record<string, "ok" | "info" | "neutral"> = { enabled: "ok", shadow: "info", disabled: "neutral" };
@@ -111,31 +111,45 @@ export function MLInsights() {
   </div>;
 }
 
-function CapabilityForm({ name, c, onSaved }: { name: string; c: any; onSaved: () => void }) {
+function Capability({ name, c, onSaved }: { name: string; c: any; onSaved: () => void }) {
+  const [changing, setChanging] = useState(false);
+  const title = name.replace(/_/g, " ");
+  return <section className="card tight stack" aria-label={`${title} mode`}>
+    <div className="row between"><span className="row tight"><strong>{title}</strong><Badge kind={MODE_TONE[c.mode] ?? "neutral"}>{c.mode}</Badge></span>
+      <button className="ghost small" disabled={c.forced_off} onClick={() => setChanging(true)}>Change mode</button></div>
+    <div className="small muted">{c.describe}</div>
+    {c.forced_off && <div className="small muted">MOKS_ML_DISABLED is set for this deployment: every capability is off whatever is saved here.</div>}
+    {changing && <ChangeMode name={name} c={c} onClose={() => setChanging(false)} onSaved={() => { setChanging(false); onSaved(); }} />}
+  </section>;
+}
+
+function ChangeMode({ name, c, onClose, onSaved }: { name: string; c: any; onClose: () => void; onSaved: () => void }) {
   const { toast } = useFeedback();
-  const [mode, setMode] = useState(c.mode);
+  const [mode, setMode] = useState(c.allowed.find((m: string) => m !== c.mode) ?? c.mode);
   const [reason, setReason] = useState("");
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const title = name.replace(/_/g, " ");
   const save = async (e: FormEvent) => {
     e.preventDefault();
+    setBusy(true);
+    setError(null);
     try {
       await api(`/ml/capabilities/${name}`, { method: "PUT", body: { mode, reason } });
-      toast(`${name} is now ${mode}.`);
-      setReason("");
+      toast(`${title} is now ${mode}.`);
       onSaved();
-    } catch (err: any) {
-      toast(err?.message ?? "Could not change the mode", "bad");
-    }
+    } catch (err) { setError(err); setBusy(false); }
   };
-  return <form className="card tight stack" onSubmit={save} aria-label={`${name} mode`}>
-    <div className="row tight"><strong>{name.replace(/_/g, " ")}</strong><Badge kind={MODE_TONE[c.mode] ?? "neutral"}>{c.mode}</Badge></div>
-    <div className="small muted">{c.describe}</div>
-    <div className="row wrap">
-      <label>Mode<select value={mode} onChange={(e) => setMode(e.target.value)}>{c.allowed.map((m: string) => <option key={m} value={m}>{m}</option>)}</select></label>
-      <label className="grow">Reason (audited)<input value={reason} onChange={(e) => setReason(e.target.value)} minLength={3} required /></label>
-      <button type="submit" disabled={c.forced_off || mode === c.mode}>Save</button>
-    </div>
-    {c.forced_off && <div className="small muted">MOKS_ML_DISABLED is set for this deployment: every capability is off whatever is saved here.</div>}
-  </form>;
+  return <FormDrawer title={`Change ${title}`} submit="Save mode" busy={busy} blocked={mode === c.mode} error={error} onSubmit={save} onClose={onClose}>
+    <FormSection title="Mode" help={c.describe}>
+      <div className="stack tight" role="radiogroup" aria-label="Mode">
+        {c.allowed.map((m: string) => <label key={m} className="inline"><input type="radio" name="ml-mode" value={m} checked={mode === m} onChange={() => setMode(m)} /> {m}{m === c.mode && <span className="muted"> (current)</span>}</label>)}
+      </div>
+    </FormSection>
+    <FormSection title="Why">
+      <label>Reason (audited)<input value={reason} onChange={(e) => setReason(e.target.value)} minLength={3} required autoFocus /></label>
+    </FormSection>
+  </FormDrawer>;
 }
 
 function Models() {
@@ -160,36 +174,43 @@ function Models() {
     { key: "sha", head: "Artifact", wide: true, cell: (m) => <span className="mono small">{m.artifact_sha256?.slice(0, 12)}</span> },
     { key: "at", head: "Trained", cell: (m) => <Time iso={m.created_at} /> },
   ];
-  return <>
-    <h2>Models</h2>
-    {models.data ? <DataTable label="Models" rows={models.data} cols={cols} rowKey={(m) => m.id} empty={<Empty title="No models yet.">Train a namespace below. Training registers candidates and promotes nothing.</Empty>}
+  const [training, setTraining] = useState(false);
+  return <section className="card stack">
+    <div className="row between"><h2>Models</h2><button className="small" onClick={() => setTraining(true)}>Train models</button></div>
+    {training && <Train onClose={() => setTraining(false)} />}
+    {models.data ? <DataTable label="Models" rows={models.data} cols={cols} rowKey={(m) => m.id} empty={<Empty title="No models yet.">Use Train models on a namespace. Training registers candidates and promotes nothing.</Empty>}
       menu={(m) => ({ label: `Actions for ${m.cohort} v${m.version}`, items: [
         { label: "Run as challenger (shadow)", disabled: m.status === "shadow" || m.status === "champion", run: () => act(`/ml/models/${m.id}/promote`, { to: "shadow" }, "Running as challenger.") },
         { label: "Make champion", disabled: !m.gates_passed || m.status === "champion", run: () => act(`/ml/models/${m.id}/promote`, { to: "champion" }, "Champion changed. The previous one is kept for rollback.") },
         { label: "Roll back this cohort", disabled: m.status !== "champion", run: async () => { if (await confirm({ title: "Roll back", body: "The champion steps down and the previously promoted model returns. With none, this cohort shows no observations.", action: "Roll back" })) act("/ml/rollback", { capability: m.capability, cohort: m.cohort }, "Rolled back."); } },
         { label: "Reject", danger: true, disabled: m.status === "rejected", run: () => act(`/ml/models/${m.id}/reject`, { note: "rejected by an ML administrator" }, "Rejected.") },
       ] })} /> : <Loading load={models} />}
-  </>;
+  </section>;
 }
 
-function Train() {
+function Train({ onClose }: { onClose: () => void }) {
   const { toast } = useFeedback();
   const [environment, setEnv] = useState("");
   const [namespace, setNs] = useState("");
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const onEnv = useCallback((e: string) => setEnv(e), []);
+  const onNs = useCallback((n: string) => setNs(n), []);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    setBusy(true);
+    setError(null);
     try {
       const r = await api("/ml/train", { method: "POST", body: { environment, namespace } });
-      toast(r.queued ? "Training queued. Candidates appear above when it finishes." : "A training run for this namespace is already queued.");
-    } catch (err: any) {
-      toast(err?.message ?? "Could not queue training", "bad");
-    }
+      toast(r.queued ? "Training queued. Candidates appear under Models when it finishes." : "A training run for this namespace is already queued.");
+      onClose();
+    } catch (err) { setError(err); setBusy(false); }
   };
-  return <form className="row wrap" onSubmit={submit} aria-label="Train anomaly models">
-    <label>Environment<input value={environment} onChange={(e) => setEnv(e.target.value)} required pattern="[a-z0-9-]+" /></label>
-    <label>Namespace<input value={namespace} onChange={(e) => setNs(e.target.value)} required pattern="[a-z0-9]([-a-z0-9]*[a-z0-9])?" /></label>
-    <button type="submit">Train</button>
-  </form>;
+  return <FormDrawer title="Train anomaly models" submit="Train" busyLabel="Queuing…" busy={busy} blocked={!environment || !namespace} error={error} onSubmit={submit} onClose={onClose}>
+    <FormSection title="Namespace" help="Fits on the earlier 80% of the history and evaluates on the rest. Needs at least 7 days of usable history by default. Training promotes nothing.">
+      <ScopePicker env={environment} ns={namespace} onEnv={onEnv} onNs={onNs} />
+    </FormSection>
+  </FormDrawer>;
 }
 
 function Review() {
@@ -213,7 +234,7 @@ function Review() {
     { key: "out", head: "Outcome", cell: (r) => `investigation ${r.outcome?.investigation_status}; resolution ${r.outcome?.resolution}` },
     { key: "at", head: "When", cell: (r) => <Time iso={r.created_at} /> },
   ];
-  return <>
+  return <section className="card stack">
     <h2>Confirm outcomes</h2>
     <div className="small muted">A completed investigation is not a resolved incident. Only what you confirm here becomes a label.</div>
     {recs.data ? <DataTable label="Unreviewed learning records" rows={recs.data} cols={cols} rowKey={(r) => r.id} onRow={setOpen} empty={<Empty title="Nothing waiting for review." />} /> : <Loading load={recs} />}
@@ -227,41 +248,48 @@ function Review() {
         <div className="small muted">Skills run: {(open.skills?.executed ?? []).map((x: any) => `${x.skill} (${x.outcome.replace("_", " ")})`).join(", ") || "none"}. Running a skill is not the same as it helping.</div>
       </div>
     </Drawer>}
-  </>;
+  </section>;
 }
 
 function Datasets() {
   const { toast } = useFeedback();
   const sets = useLoad(() => api<any[]>("/ml/learning/datasets"), []);
-  const [name, setName] = useState("");
-  const [purpose, setPurpose] = useState("incident_similarity");
-  const [method, setMethod] = useState("grouped");
-  const build = async (e: FormEvent) => {
-    e.preventDefault();
-    try {
-      const d = await api("/ml/learning/datasets", { method: "POST", body: { name, purpose, method } });
-      toast(`Built ${d.name} v${d.version}: ${d.counts.train} train, ${d.counts.eval} eval.`);
-      sets.reload();
-    } catch (err: any) {
-      toast(err?.message ?? "Could not build the dataset", "bad");
-    }
-  };
-  return <>
-    <h2>Datasets</h2>
+  const [building, setBuilding] = useState(false);
+  return <section className="card stack">
+    <div className="row between"><h2>Datasets</h2><button className="small" onClick={() => setBuilding(true)}>Build dataset</button></div>
+    {building && <BuildDataset onClose={() => setBuilding(false)} onBuilt={(d) => { setBuilding(false); toast(`Built ${d.name} v${d.version}: ${d.counts.train} train, ${d.counts.eval} eval.`); sets.reload(); }} />}
     <div className="small muted">Built from approved records only, de-duplicated, with every incident, deployment and document family kept on one side of the split. Exports carry features and labels, never evidence text. A dataset is frozen when built: later label edits make a new version, and a withdrawn or deleted record invalidates it.</div>
-    <form className="row wrap" onSubmit={build} aria-label="Build a dataset">
-      <label>Name<input value={name} onChange={(e) => setName(e.target.value)} required pattern="[a-z0-9][a-z0-9-]+" /></label>
-      <label>Purpose<select value={purpose} onChange={(e) => setPurpose(e.target.value)}>{["incident_similarity", "skill_ranking", "retrieval", "anomaly"].map((p) => <option key={p}>{p}</option>)}</select></label>
-      <label>Split<select value={method} onChange={(e) => setMethod(e.target.value)}><option value="grouped">grouped</option><option value="chronological">chronological</option></select></label>
-      <button type="submit">Build</button>
-    </form>
     {sets.data ? <ul className="small">{sets.data.map((d) => <li key={d.id}><strong>{d.name} v{d.version}</strong> {d.purpose} · {d.counts.train} train / {d.counts.eval} eval · {d.split.duplicates_dropped} duplicates dropped ·
       <span className="mono"> {d.checksum.slice(0, 12)}</span>
       {d.provenance === "snapshot" && <> · <Badge kind="ok">frozen</Badge></>}
       {d.provenance === "legacy_live_records" && <> · <span title={d.reason}><Badge kind="warn">legacy: not reproducible</Badge></span></>}
       {d.provenance === "invalidated" ? <> · <Badge kind="bad">invalidated</Badge> <span className="muted">{d.reason}</span></>
         : <> · <a href={`${API}/ml/learning/datasets/${d.id}/export`}>Export JSONL</a></>}</li>)}</ul> : <Loading load={sets} />}
-  </>;
+    {sets.data && !sets.data.length && <Empty title="No datasets yet.">Use Build dataset once records have been approved under Confirm outcomes.</Empty>}
+  </section>;
+}
+
+function BuildDataset({ onClose, onBuilt }: { onClose: () => void; onBuilt: (d: any) => void }) {
+  const [name, setName] = useState("");
+  const [purpose, setPurpose] = useState("incident_similarity");
+  const [method, setMethod] = useState("grouped");
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const build = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try { onBuilt(await api("/ml/learning/datasets", { method: "POST", body: { name, purpose, method } })); } catch (err) { setError(err); setBusy(false); }
+  };
+  return <FormDrawer title="Build a dataset" submit="Build" busyLabel="Building…" busy={busy} error={error} onSubmit={build} onClose={onClose}>
+    <FormSection title="Dataset" help="Built from approved records only, and frozen when built: later label edits make a new version.">
+      <div className="form-grid">
+        <label>Name<input value={name} onChange={(e) => setName(e.target.value)} required pattern="[a-z0-9][a-z0-9-]+" autoFocus placeholder="similarity-nov" /></label>
+        <label>Purpose<select value={purpose} onChange={(e) => setPurpose(e.target.value)}>{["incident_similarity", "skill_ranking", "retrieval", "anomaly"].map((x) => <option key={x}>{x}</option>)}</select></label>
+        <label>Split<select value={method} onChange={(e) => setMethod(e.target.value)}><option value="grouped">grouped</option><option value="chronological">chronological</option></select></label>
+      </div>
+    </FormSection>
+  </FormDrawer>;
 }
 
 /** Technical configuration: modes, training, promotion and rollback, reviews and datasets. */
@@ -270,9 +298,9 @@ export function MLAdmin() {
   const status = useLoad(() => api("/ml/status"), []);
   return <div className="stack">
     <PageHead title="Machine learning" sub="Switches, models and data. Every change here is audited; none of it grants infrastructure access." />
-    {status.error ? <ErrorBox error={status.error} onRetry={status.reload} /> : status.data ? <div className="grid cards">{Object.entries(status.data.capabilities).map(([n, c]: any) =>
-      <CapabilityForm key={n} name={n} c={c} onSaved={status.reload} />)}</div> : <Loading load={status} />}
-    {can("ml.admin") && <><Models /><h2>Train</h2><div className="small muted">Fits on the earlier 80% of the history and evaluates on the rest. Needs {">"}= 7 days of usable history by default.</div><Train /></>}
+    {status.error ? <ErrorBox error={status.error} onRetry={status.reload} /> : status.data ? <div className="grid cols-3">{Object.entries(status.data.capabilities).map(([n, c]: any) =>
+      <Capability key={n} name={n} c={c} onSaved={status.reload} />)}</div> : <Loading load={status} />}
+    {can("ml.admin") && <Models />}
     {can("learning.review") && <Review />}
     {can("learning.export") && <Datasets />}
   </div>;

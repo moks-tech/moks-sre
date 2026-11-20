@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
 import { api, ApiError, qs } from "./api";
-import { ActionMenu, CopyButton, Drawer, Empty, type MenuItem, Skeleton, useIsMobile } from "./ui";
+import { ActionMenu, CopyButton, Drawer, Empty, Icon, type MenuItem, Skeleton, useIsMobile } from "./ui";
+import { StateView } from "./states";
 
 /** A table row that opens something. It stays a row for layout, and keyboards can reach it. */
 export function rowAction(fn: () => void) {
@@ -219,18 +220,48 @@ export function EnvNsFilter({ scopes, env, ns, onEnv, onNs, noNamespace = false 
 }
 
 /** Per-environment/namespace failures: the rest of the view still renders. */
-export function PartialErrors({ errors }: { errors?: Multi["errors"] }) {
+export function PartialErrors({ errors }: { errors?: { environment: string; namespace?: string | null; error: string }[] }) {
   if (!errors?.length) return null;
+  const n = errors.length;
   return (
-    <details className="alert warn small" style={{ marginBottom: 10 }}>
-      <summary>{errors.length} source{errors.length > 1 ? "s" : ""} returned partial data</summary>
-      {errors.slice(0, 40).map((e, i) => <div key={i}><span className="mono">{e.environment}{e.namespace ? `/${e.namespace}` : ""}</span>: {e.error}</div>)}
-    </details>
+    <StateView kind="partial" title={`${n} source${n > 1 ? "s" : ""} returned partial data`} why="What the other sources returned is shown."
+      next="Try again, or ask an administrator to check the connector under Admin, Connectors.">
+      <details className="small"><summary>Which source{n > 1 ? "s" : ""}, and why</summary>
+        <ul className="plain">{errors.slice(0, 40).map((e, i) => <li key={i}><span className="mono">{e.environment}{e.namespace ? `/${e.namespace}` : ""}</span>: {e.error}</li>)}</ul>
+      </details>
+    </StateView>
   );
 }
 
-export function Stat({ value, label }: { value: ReactNode; label: ReactNode }) {
-  return <div className="stat-tile"><div className="stat">{value}</div><div className="small muted">{label}</div></div>;
+/** A KPI tile. The value stays on one line (the full text is in its title), words are set smaller than
+ *  numbers so a row of tiles lines up, and the label wraps to two lines at most. */
+export function Stat({ value, label, tone }: { value: ReactNode; label: ReactNode; tone?: "ok" | "warn" | "bad" | "info" }) {
+  const text = typeof value === "string" || typeof value === "number" ? String(value) : undefined;
+  const words = !!text && /[a-z]{3}/i.test(text) && text.length > 6;
+  return (
+    <div className={`stat-tile${tone ? ` ${tone}` : ""}`}>
+      <div className={`stat${words ? " words" : ""}`} title={text}>{value}</div>
+      <div className="stat-label">{label}</div>
+    </div>
+  );
+}
+
+/** The line above a list: how many rows are shown, of how many, and a refresh that keeps what is on screen. */
+export function ListHeader({ shown, total, noun, load, children }: {
+  shown: number; total?: number; noun: [string, string]; load?: { loading: boolean; reload: () => void }; children?: ReactNode;
+}) {
+  const all = total ?? shown;
+  const count = (k: number) => `${k.toLocaleString()} ${k === 1 ? noun[0] : noun[1]}`;
+  return (
+    <div className="list-head">
+      <span className="small muted" role="status">{shown === all ? count(all) : `${shown.toLocaleString()} of ${count(all)}`}</span>
+      <div className="row tight">
+        {children}
+        {load && <button type="button" className="ghost small" onClick={load.reload} disabled={load.loading} aria-label={`Refresh ${noun[1]}`}>
+          <Icon name="refresh" size={14} />{load.loading ? "Refreshing…" : "Refresh"}</button>}
+      </div>
+    </div>
+  );
 }
 
 export interface Env { name: string; display_name: string; kind: string; is_production: boolean; can_investigate?: boolean; grafana_url?: string | null }

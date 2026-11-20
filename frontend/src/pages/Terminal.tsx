@@ -5,7 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "re
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, ErrorBox, Loading, PageHead, StatusBadge, Time, useLoad } from "../components";
+import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, Loading, PageHead, StatusBadge, Time, useLoad } from "../components";
 import { TerminalSocket, TerminalState } from "../terminalSocket";
 import { Empty, useFeedback, useIsMobile } from "../ui";
 
@@ -21,7 +21,7 @@ function minutesLeft(iso: string | null | undefined, now: number): number | null
   return iso ? Math.max(0, Math.ceil((new Date(iso).getTime() - now) / 60_000)) : null;
 }
 
-function NewSession({ options, onOpen }: { options: Options; onOpen: (id: string) => void }) {
+function NewSession({ options, onOpen, onClose }: { options: Options; onOpen: (id: string) => void; onClose: () => void }) {
   const environments = useMemo(() => [...new Set(options.profiles.map((p) => p.environment))], [options]);
   const [environment, setEnvironment] = useState("");
   const [name, setName] = useState("");
@@ -43,22 +43,23 @@ function NewSession({ options, onOpen }: { options: Options; onOpen: (id: string
   }
   // Nothing is preselected: each part of the scope is a choice someone made on purpose.
   return (
-    <form className="card stack" onSubmit={open}>
-      <h2>Open a terminal</h2>
-      {error ? <ErrorBox error={error} /> : null}
-      <div className="row">
-        <label>Environment<select required value={environment} onChange={(e) => { setEnvironment(e.target.value); setName(""); setRegion(""); setCluster(""); }}><option value="">choose…</option>{environments.map((n) => <option key={n}>{n}</option>)}</select></label>
-        <label>AWS account and role<select required disabled={!environment} value={name} onChange={(e) => { setName(e.target.value); setRegion(""); setCluster(""); }}><option value="">choose…</option>
-          {options.profiles.filter((p) => p.environment === environment).map((p) => <option key={p.name} value={p.name}>{p.account} ({p.label})</option>)}</select></label>
-        <label>Region<select required disabled={!profile} value={region} onChange={(e) => setRegion(e.target.value)}><option value="">choose…</option>{profile?.regions.map((r) => <option key={r}>{r}</option>)}</select></label>
-        <label>Kubernetes cluster<select disabled={!profile || !profile.clusters.length} value={cluster} onChange={(e) => setCluster(e.target.value)}><option value="">none</option>{profile?.clusters.map((c) => <option key={c}>{c}</option>)}</select></label>
-        <label>Maximum time<select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[15, 30, 45, 60, 90, 120].filter((m) => m >= options.min_minutes && m <= options.max_minutes).map((m) => <option key={m} value={m}>{m} minutes</option>)}</select></label>
-      </div>
-      {profile && <div className="small muted">Role <span className="mono">{profile.role_arn}</span></div>}
-      <label>Purpose<textarea required minLength={10} maxLength={2000} rows={2} value={purpose} placeholder="Why you need a shell; it stays in the audit log" onChange={(e) => setPurpose(e.target.value)} /></label>
-      <div className="alert info small">A terminal runs any command you type, inside a disposable pod. Its IAM role and Kubernetes RBAC are read-only and decide what it can do. Changes to production go through an action plan. {options.recording.text} It ends after {options.idle_minutes} minutes without input.</div>
-      <div className="row"><button disabled={busy || !profile || !region || purpose.trim().length < 10}>{busy ? "Starting…" : "Open terminal"}</button></div>
-    </form>
+    <FormDrawer title="Open a terminal" submit="Open terminal" busyLabel="Starting…" busy={busy} blocked={!profile || !region || purpose.trim().length < 10} error={error} onSubmit={open} onClose={onClose}>
+      <FormSection title="Where">
+        <div className="form-grid">
+          <label>Environment<select required value={environment} onChange={(e) => { setEnvironment(e.target.value); setName(""); setRegion(""); setCluster(""); }}><option value="">choose…</option>{environments.map((n) => <option key={n}>{n}</option>)}</select></label>
+          <label>AWS account and role<select required disabled={!environment} value={name} onChange={(e) => { setName(e.target.value); setRegion(""); setCluster(""); }}><option value="">choose…</option>
+            {options.profiles.filter((p) => p.environment === environment).map((p) => <option key={p.name} value={p.name}>{p.account} ({p.label})</option>)}</select></label>
+          <label>Region<select required disabled={!profile} value={region} onChange={(e) => setRegion(e.target.value)}><option value="">choose…</option>{profile?.regions.map((r) => <option key={r}>{r}</option>)}</select></label>
+          <label>Kubernetes cluster<select disabled={!profile || !profile.clusters.length} value={cluster} onChange={(e) => setCluster(e.target.value)}><option value="">none</option>{profile?.clusters.map((c) => <option key={c}>{c}</option>)}</select></label>
+          <label>Maximum time<select value={minutes} onChange={(e) => setMinutes(Number(e.target.value))}>{[15, 30, 45, 60, 90, 120].filter((m) => m >= options.min_minutes && m <= options.max_minutes).map((m) => <option key={m} value={m}>{m} minutes</option>)}</select></label>
+        </div>
+        {profile && <div className="small muted">Role <span className="mono">{profile.role_arn}</span></div>}
+      </FormSection>
+      <FormSection title="Why">
+        <label>Purpose<textarea required minLength={10} maxLength={2000} rows={3} value={purpose} placeholder="Why you need a shell; it stays in the audit log" onChange={(e) => setPurpose(e.target.value)} /></label>
+        <div className="alert info small">A terminal runs any command you type, inside a disposable pod. Its IAM role and Kubernetes RBAC are read-only and decide what it can do. Changes to production go through an action plan. {options.recording.text} It ends after {options.idle_minutes} minutes without input.</div>
+      </FormSection>
+    </FormDrawer>
   );
 }
 
@@ -67,20 +68,22 @@ export function Terminals() {
   const nav = useNavigate();
   const options = useLoad(() => api<Options>("/terminal/options"), []);
   const list = useLoad(() => api<any[]>("/terminal/sessions"), []);
+  const [opening, setOpening] = useState(false);
   if (options.error instanceof ApiError && options.error.status === 404) {
     return <><PageHead title="Terminal" /><Empty title="Terminals are not enabled here">Set terminal.enabled in the Helm values; see docs/TERMINAL.md.</Empty></>;
   }
   if (!options.data) return <><PageHead title="Terminal" /><Loading load={options} /></>;
   return (
     <>
-      <PageHead title="Terminal" sub="A disposable Bash shell with AWS CLI and kubectl, on short-lived read-only credentials" />
+      <PageHead title="Terminal" sub="A disposable Bash shell with AWS CLI and kubectl, on short-lived read-only credentials">
+        {can("terminal.use") && options.data.profiles.length > 0 && <button onClick={() => setOpening(true)}>New terminal</button>}
+      </PageHead>
+      {opening && <NewSession options={options.data} onOpen={(id) => nav(`/terminal/${id}`)} onClose={() => setOpening(false)} />}
       <div className="stack">
-        {can("terminal.use") && (options.data.profiles.length
-          ? <NewSession options={options.data} onOpen={(id) => nav(`/terminal/${id}`)} />
-          : <Empty title="No terminal profile for your access">A terminal needs a profile in the Helm values for an environment where you hold the terminal role.</Empty>)}
+        {can("terminal.use") && !options.data.profiles.length && <Empty title="No terminal profile for your access">A terminal needs a profile in the Helm values for an environment where you hold the terminal role.</Empty>}
         <div className="card">
           <h2>Sessions</h2>
-          <DataTable label="Terminal sessions" rows={list.data ?? []} rowKey={(s) => s.id} onRow={(s) => nav(`/terminal/${s.id}`)} empty="No terminal sessions yet."
+          <DataTable label="Terminal sessions" rows={list.data ?? []} rowKey={(s) => s.id} onRow={(s) => nav(`/terminal/${s.id}`)} empty={<Empty title="No terminal sessions yet.">{can("terminal.use") && options.data.profiles.length ? "Use New terminal to open one." : null}</Empty>}
             cols={[
               { key: "status", head: "Status", status: true, cell: (s: any) => <StatusBadge status={s.status} /> },
               { key: "owner", head: "Owner", cell: (s: any) => s.owner },

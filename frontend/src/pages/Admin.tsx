@@ -1,7 +1,7 @@
 import { Fragment, useState, type FormEvent } from "react";
 import { api, qs } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, Loading, PageHead, Time, useLoad } from "../components";
+import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, ListHeader, Loading, PageHead, Time, useLoad } from "../components";
 import { type Chip, FilterPanel } from "../filters";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
 
@@ -206,6 +206,7 @@ export function Environments() {
       </PageHead>
       <div className="card">
         <Loading load={list} rows={3} />
+        {list.data && <ListHeader shown={list.data.length} noun={["environment", "environments"]} load={list} />}
         {list.data && <DataTable label="Environments" rows={list.data as any[]} rowKey={(e) => e.name} onRow={edit} empty={<Empty title="No environments yet.">Use Add environment to connect the first cluster.</Empty>}
           menu={(e) => ({ label: `Actions for ${e.name}`, items: [{ label: "Edit", run: () => edit(e) }] })}
           cols={[
@@ -365,6 +366,7 @@ export function Connectors() {
       </div>}
       <div className="card">
         <Loading load={list} rows={4} />
+        {list.data && <ListHeader shown={connectors.length} total={list.data.length} noun={["connector", "connectors"]} load={list} />}
         {list.data && <DataTable label="Connectors" rows={connectors} rowKey={(c) => c.id} onRow={edit} empty={<Empty title="No connectors yet.">Use Add connector, and MOKS tests it when you save.</Empty>}
           menu={(c) => ({ label: `Actions for ${c.name}`, items: [{ label: "Test", run: () => test(c.id, c.name) }, { label: "Edit", run: () => edit(c) }, { label: "Delete", danger: true, run: () => remove(c) }] })}
           cols={[
@@ -465,6 +467,7 @@ export function LLMProviders() {
       {!open && <ErrorBox error={a.error} />}
       <div className="card">
         <Loading load={list} rows={3} />
+        {list.data && list.data.length > 0 && <ListHeader shown={list.data.length} noun={["provider", "providers"]} load={list} />}
         {list.data && <DataTable label="LLM providers" rows={list.data as any[]} rowKey={(c) => c.id} onRow={edit} empty={<Empty title="No LLM configured.">Investigations use rule-based diagnosis only.</Empty>}
           menu={(c) => ({ label: `Actions for ${c.name}`, items: [
             { label: "Test", run: () => test(c.id, c.name) },
@@ -581,6 +584,7 @@ export function Users() {
       <div className="card stack">
         <label>Find a user<input type="search" value={text} onChange={(e) => setText(e.target.value)} placeholder="name or email" /></label>
         <Loading load={list} rows={4} />
+        {list.data && <ListHeader shown={list.data.filter((u) => matchesUser(u, text)).length} total={list.data.length} noun={["user", "users"]} load={list} />}
         {list.data && <DataTable label="Users" rows={list.data.filter((u) => matchesUser(u, text))} rowKey={(u) => u.id} onRow={manage} empty={<Empty title={text ? "No users match." : "No users yet."} />}
           menu={(u) => ({ label: `Actions for ${u.email}`, items: [{ label: "Manage access", run: () => manage(u) }] })}
           cols={[
@@ -702,6 +706,7 @@ export function Audit() {
       </form>
       <div className="card mt">
         <Loading load={list} rows={8} />
+        {list.data && <ListHeader shown={events.length} noun={["record", "records"]} load={list} />}
         {list.data && <DataTable label="Audit records" rows={events} rowKey={(e) => String(e.id)} onRow={setOpen} empty={<Empty title="No records match." />} cols={[
           { key: "a", head: "Action", primary: true, cell: (e) => <Truncate text={e.action} mono /> },
           { key: "d", head: "Decision", status: true, cell: (e) => (e.decision === "deny" ? <Badge kind="bad">deny</Badge> : e.decision === "allow" ? <Badge kind="ok">allow</Badge> : <span className="muted small">—</span>) },
