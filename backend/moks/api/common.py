@@ -26,12 +26,25 @@ async def env_or_404(db: AsyncSession, name: str) -> Environment:
     return env
 
 
+UNIQUE_VIOLATION = "23505"
+
+
+def sqlstate(exc: IntegrityError) -> str | None:
+    """PostgreSQL's error code, from whichever layer of the driver's exception carries it."""
+    orig = getattr(exc, "orig", None)
+    return getattr(orig, "sqlstate", None) or getattr(getattr(orig, "__cause__", None), "sqlstate", None)
+
+
 async def flush_unique(db: AsyncSession, conflict: str) -> None:
-    """Flushes pending writes; a unique-constraint clash becomes a 409 with `conflict` instead of a 500."""
+    """Flushes pending writes; a unique-constraint clash becomes a 409 with `conflict` instead of a 500.
+    Any other integrity error (a check or foreign key the request did not satisfy) is not a clash, so it is raised
+    as it is rather than reported as a duplicate name."""
     try:
         await db.flush()
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
+        if sqlstate(exc) != UNIQUE_VIOLATION:
+            raise
         raise HTTPException(409, conflict) from None
 
 
