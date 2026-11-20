@@ -36,7 +36,7 @@ summary prints the commit and image digest.
 ```sh
 kubectl --context mk4 create namespace moks-sre
 # Secret harbor-pull (read-only robot$k8s-pull, never expires), from the tools repository:
-python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-sre --namespace moks-sre-terminals --namespace moks-sre-diagnostics
+python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-sre
 ```
 
 Nothing refreshes it, because it does not expire. Fill a namespace that lacks it with tools `deploy/minikube/harbor/registry.py pull-secrets`.
@@ -194,13 +194,15 @@ Sync the grafana, prometheus and loki Argo apps after committing; they have no a
 
 ## 10. Demo lab
 
-See [../lab/README.md](../lab/README.md). It applies to namespace `moks-sre-lab`, and
-`kubectl delete namespace moks-sre-lab` removes it.
+Optional, and not deployed on mk4. See [../lab/README.md](../lab/README.md). Its broken workloads get a namespace of
+their own, `moks-sre-lab`, created when you apply the lab and removed by `kubectl delete namespace moks-sre-lab`: MOKS
+must never be allowed to change its own namespace, so the lab cannot live in `moks-sre`. To let MOKS fix it, add
+`moks-sre-lab` to `executor.namespaces` (and `terminal.kubernetes.namespaces`) and to the AppProject while it exists.
 
 ## 11. Phases 2–4: what changes on mk4 and in what order
 
 The chart changes in this release add pods and RBAC. Review `argocd app diff` for each child, then
-sync **without prune**. Apply the AppProject first (it now allows `moks-sre-diagnostics`, `moks-sre-lab`,
+sync **without prune**. Apply the AppProject first (it now allows
 `ResourceQuota`, `LimitRange` and `Role`):
 
 ```sh
@@ -224,7 +226,7 @@ The API's init container runs migration `0002` automatically. Take a backup firs
 3. **FinOps:** set the real monthly server price in `values-hetzner.yaml` (`cost_model.monthly_cost_usd`).
    For AWS spend: `terraform apply` (with `finops_enabled = true`), run `scripts/create-runtime-key.sh mk4`,
    then uncomment the `aws_cost` connector. See [FINOPS.md](FINOPS.md).
-4. **Remediation:** the executor acts only in `executor.namespaces` (default `[moks-sre-lab]`). To let
+4. **Remediation:** the executor acts only in `executor.namespaces` (on mk4 `[]`: nothing yet). To let
    MOKS act elsewhere, add the namespace there **and** to the AppProject destinations. Set the
    environment's policy under **Environments** (`max_replicas`, scale-to-zero, plan TTL).
    `mk4` is marked production, so every action needs a second person with the approver role, unless a global administrator requests it (recorded as `action.approval_waived`):
@@ -235,7 +237,7 @@ The API's init container runs migration `0002` automatically. Take a backup firs
    `kubectl -n moks-sre patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_ALERT_WEBHOOK_TOKEN":"'$(openssl rand -hex 24)'"}}'`
    and point the webhook at `https://jithendar.com/moks/api/alerts/webhook/mk4` with header
    `Authorization: Bearer <token>`.
-6. **Diagnostic sessions:** the chart creates `moks-sre-diagnostics` (quota, limits, egress policy).
+6. **Diagnostic sessions:** they run in `moks-sre` (egress policy by label, the shared `moks-sessions` quota).
    Start sessions under **Diagnostics**. They need no approval. **Quick check** tests DNS, the port, the certificate and HTTP for one target.
 7. **SRE skills:** 51 built-in skills ship in the image. Add your own through `customSkills` in the values
    ([SKILLS.md](SKILLS.md)).
@@ -297,56 +299,50 @@ The OpenSearch generations stay in `embedding_indexes` as history; nothing reads
 
 ## Moving to namespace moks-sre
 
-On 2026-11-20 everything MOKS runs moved from `moks` to `moks-sre`, and the session and lab namespaces took the same
-prefix: `moks-sre-diagnostics`, `moks-sre-terminals` and `moks-sre-lab`. Those three stay separate on purpose.
-Kubernetes scopes quotas, LimitRanges, Pod Security levels and RBAC by namespace, and it cannot narrow `pods/exec` to
-some pods. The terminal gateway and the executor may create pods and exec into them in the session namespaces; in
-`moks-sre` the same Role would reach moks-api and every Secret it mounts.
+On 2026-11-20 everything MOKS runs moved from `moks` to `moks-sre`, and then the diagnostic and terminal sessions moved
+into `moks-sre` too: MOKS has one namespace. Sessions keep what works inside a shared namespace (a NetworkPolicy by
+label, no Istio sidecar, the `moks-sessions` quota scoped to session pods) and give up what Kubernetes only offers per
+namespace: a Pod Security level, a LimitRange, and Roles that cannot reach MOKS's own pods, since `pods/exec` cannot be
+narrowed to some pods ([TERMINAL.md](TERMINAL.md#limitations), [SECURITY.md](SECURITY.md#diagnostic-sessions)).
+`diagnostics.namespace` and `terminal.namespace` bring separate namespaces back. The optional lab keeps its own
+([10. Demo lab](#10-demo-lab)).
 
 Nothing in the namespace holds data (the database is CloudNativePG in `postgres-db`, crew memory is on R2), so the move
 is a second copy, a route switch and a delete. The route is the Istio gateway's delegation of `/moks`, which lives in
 the kubernetes repository, so the old copy keeps serving until that change is applied.
 
-1. **Before the merge** (only adds; the running portal is untouched): the namespaces, the hand-made Secrets and the
-   new destinations in the live AppProject. The executor writes Roles into `moks-sre-terminals` and `moks-sre-lab`, so
-   those must exist before Argo CD syncs. `postgres-db-credentials` is left to Terraform (step 4), which would refuse
-   to create a Secret that already exists.
+1. **Before the first merge** (done on mk4; only adds): the namespace, the hand-made Secrets, and the destination in
+   the live AppProject, patched last. That AppProject is the gate: until it lists `moks-sre`, the Applications only
+   report a destination that is not permitted. `postgres-db-credentials` is left to Terraform (step 4), which would
+   refuse to create a Secret that already exists.
 
    ```sh
    kubectl create namespace moks-sre
    kubectl label namespace moks-sre app.kubernetes.io/part-of=moks istio-injection=enabled \
      pod-security.kubernetes.io/enforce=baseline pod-security.kubernetes.io/warn=restricted
-   kubectl create namespace moks-sre-diagnostics
-   kubectl create namespace moks-sre-terminals
-   kubectl apply -f lab/00-namespace.yaml
    copy() { kubectl -n moks get secret "$1" -o json \
      | jq --arg ns "$2" '{apiVersion, kind, type, data, metadata: {name: .metadata.name, namespace: $ns}}' | kubectl create -f -; }
    for s in harbor-pull moks-secrets moks-reranker-secrets moks-terminal-secrets moks-secret-sync; do copy "$s" moks-sre; done
-   copy harbor-pull moks-sre-terminals; copy harbor-pull moks-sre-diagnostics
-   for ns in moks-sre moks-sre-diagnostics moks-sre-terminals moks-sre-lab; do
-     kubectl -n argocd patch appproject moks --type json \
-       -p "[{\"op\":\"add\",\"path\":\"/spec/destinations/-\",\"value\":{\"server\":\"https://kubernetes.default.svc\",\"namespace\":\"$ns\"}}]"
-   done
+   kubectl -n argocd patch appproject moks --type json \
+     -p '[{"op":"add","path":"/spec/destinations/-","value":{"server":"https://kubernetes.default.svc","namespace":"moks-sre"}}]'
    ```
 
-   The AppProject is the gate: merged before it lists `moks-sre`, the Applications only report a destination that is
-   not permitted, and nothing moves. Patch it last, once the namespaces and Secrets are there.
-
-2. **Merge.** Argo CD syncs every Application into `moks-sre` and the chart labels the session namespaces. The old
-   objects in `moks` stay, because nothing prunes, and the old API keeps answering `/moks`. The ClusterRoleBindings and
-   the RoleBindings in other namespaces now name the new ServiceAccounts, so the old pods' Kubernetes reads fail from
-   here on: keep steps 2 to 4 short.
+2. **Argo CD syncs into `moks-sre`.** The old objects in `moks` stay, because nothing prunes, and the old API keeps
+   answering `/moks`. The ClusterRoleBindings and the RoleBindings in other namespaces now name the new
+   ServiceAccounts, so the old pods' Kubernetes reads fail from here on: keep steps 2 to 4 short.
 3. **Wait** for `kubectl -n moks-sre get deploy` to show every Deployment ready, then stop the old background
    workers so no job runs twice: `kubectl -n moks scale deploy/moks-worker deploy/moks-executor deploy/moks-crewai --replicas=0`.
 4. **Apply the kubernetes change** (its CI applies on merge): the gateway delegates `/moks` to `moks-sre/moks`,
    Prometheus scrapes `moks-metrics.moks-sre`, bge-m3 and the mesh policies accept `moks-sre`, and Terraform moves
    `postgres-db-credentials` to `moks-sre`.
 5. **Check** that `/moks` answers and an investigation completes, then run `scripts/deploy-hetzner.sh`: it applies
-   the AppProject from git, which drops the old namespaces, and waits for every Application to be Synced and Healthy.
-6. **Delete the old namespaces**, and the PV that the retired OpenSearch claim kept (reclaim policy Retain):
+   the AppProject from git, which leaves `moks-sre` (and the other namespaces MOKS has Roles in) as the only
+   destinations, and waits for every Application to be Synced and Healthy.
+6. **Delete the old namespaces**: the four from before, and the two session namespaces made on the way (nothing runs
+   in them once sessions moved into `moks-sre`). Then the PV that the retired OpenSearch claim kept (reclaim policy Retain):
 
    ```sh
-   kubectl delete namespace moks moks-diagnostics moks-terminals moks-lab
+   kubectl delete namespace moks moks-diagnostics moks-terminals moks-lab moks-sre-diagnostics moks-sre-terminals
    kubectl get pv | grep data-moks-opensearch-0          # delete it by name
    ```
 
@@ -477,7 +473,7 @@ for Deployments. **Services → Manage…** edits the selector or session affini
 
 Each option creates an action plan, so the usual review applies: production plans need a second person unless an administrator requests them,
 and nothing changes until it is executed. Execution only works in the namespaces listed in
-`executor.namespaces`, which on mk4 is `moks-sre-lab`. Add a namespace there to manage it. StatefulSets and
+`executor.namespaces`, which on mk4 is empty. Add a namespace there to manage it. StatefulSets and
 DaemonSets can be viewed and investigated but have no actions yet.
 
 ## Detection

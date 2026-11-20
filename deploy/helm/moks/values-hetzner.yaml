@@ -129,20 +129,19 @@ rag:
 
 executor:
   enabled: true
-  namespaces: [moks-sre-lab]   # add namespaces (e.g. roboshop-ai) only when you want MOKS to act there
+  namespaces: []   # add namespaces (e.g. roboshop-ai) only when you want MOKS to act there; never moks-sre
 
 databaseBackups:
   enabled: true
   namespaces: [moks-sre, jithendar, roboshop-ai]   # namespaces must exist
 
 diagnostics:
-  enabled: true
-  namespace: moks-sre-diagnostics
+  enabled: true   # sessions run in moks-sre (values.yaml diagnostics.namespace)
 
 # Web terminal (docs/TERMINAL.md). Sessions run moks-terminal:latest from Harbor (values.yaml terminal.image).
 terminal:
   enabled: true
-  imagePullSecrets: [harbor-pull]   # in moks-sre-terminals: tools deploy/minikube/harbor/registry.py pull-secrets
+  imagePullSecrets: [harbor-pull]   # in moks-sre, where sessions run: tools deploy/minikube/harbor/registry.py pull-secrets
   profiles:
     - name: mk4-readonly
       label: mk4, read-only
@@ -153,7 +152,7 @@ terminal:
       eksClusters: []
       inCluster: true
   kubernetes:
-    namespaces: [moks-sre-lab]       # add namespaces only when a shell should read them
+    namespaces: []       # add namespaces only when a shell should read them
   network:
     apiServer: true
     egress:                      # AWS needs HTTPS, so sessions reach any public HTTPS host
@@ -205,5 +204,4 @@ reranker:
 secretsSync:
   enabled: true
   allowDelete: true   # delete verb on Secrets, for reviewed deletion plans (always someone else's approval); AWS deletion is the connector's allow_delete
-  namespaces: [harbor, jithendar, moks-sre, observability,
-               moks-sre-diagnostics, moks-sre-lab, moks-sre-terminals, monitoring, roboshop-ai ]
+  namespaces: [harbor, jithendar, moks-sre, observability, monitoring, roboshop-ai]

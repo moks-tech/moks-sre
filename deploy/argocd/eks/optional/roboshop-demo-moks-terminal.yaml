@@ -1,5 +1,5 @@
-# The terminal gateway, session identities and the moks-sre-terminals namespace with its quota and
-# default-deny NetworkPolicy. Optional: apply this file by hand, once docs/TERMINAL.md's steps are done.
+# The terminal gateway, session identities and the shells' default-deny NetworkPolicy, in moks-sre with
+# everything else (the shared session quota is moks-foundation's). Optional: apply this file by hand, once docs/TERMINAL.md's steps are done.
 # Manual sync, never with prune (docs/ARGOCD_APP_SPLIT.md).
 apiVersion: argoproj.io/v1alpha1
 kind: Application

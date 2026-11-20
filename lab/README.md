@@ -5,6 +5,11 @@ authorized fix. All images are multi-arch (arm64 works on mk4), every pod runs n
 read-only root filesystem (`restricted` Pod Security), and the whole lab uses under 0.5 CPU and
 400 MiB.
 
+**Optional, and not deployed on mk4**, where MOKS runs in `moks-sre` alone. The broken workloads need a namespace of
+their own, because MOKS must never be allowed to change its own: applying the lab creates `moks-sre-lab`. While it
+exists, add it to `executor.namespaces` and `terminal.kubernetes.namespaces` in `values-hetzner.yaml` and to the
+AppProject, so MOKS can fix and shells can read it; take it out again before `kubectl delete namespace moks-sre-lab`.
+
 ```sh
 kubectl --context mk4 apply -f lab/00-namespace.yaml
 kubectl --context mk4 apply -f lab/alloy-logs-role.yaml   # optional: Loki evidence (also add moks-sre-lab to Alloy's namespaces)

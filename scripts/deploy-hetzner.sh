@@ -31,9 +31,6 @@ curl -fsS -o /dev/null https://registry.jithendar.com/api/v2.0/ping || die "Harb
 echo ok
 [[ "$MODE" == --check ]] && exit 0
 
-step "Namespaces the chart writes into"
-kc apply -f "$REPO/lab/00-namespace.yaml"
-
 step "Projects and root"
 kc apply -f "$REPO/deploy/argocd/project-root.yaml" -f "$REPO/deploy/argocd/hetzner/project.yaml" -f "$REPO/deploy/argocd/hetzner/root.yaml"
 kc -n argocd annotate application moks-root argocd.argoproj.io/refresh=hard --overwrite > /dev/null

@@ -1,5 +1,6 @@
 {{- if .Values.terminal.enabled }}
-{{- $ns := .Values.terminal.namespace }}
+{{- $ns := include "moks.terminalNamespace" . }}
+{{- $own := ne $ns .Release.Namespace }}
 {{- $t := .Values.terminal }}
 {{- if and $t.image.digest (not (regexMatch "^sha256:[0-9a-f]{64}$" (toString $t.image.digest))) }}{{- fail "terminal.image.digest must be sha256:<64 hex characters>; use terminal.image.tag for a tag" }}{{- end }}
 {{- if not (or $t.image.digest $t.image.tag) }}{{- fail "terminal.image.tag or terminal.image.digest is required" }}{{- end }}
@@ -7,6 +8,10 @@
 {{- if include "moks.inGroup" (dict "root" . "group" "terminal") }}
 # One disposable pod per session, reached only through the moks-terminal gateway. A shell is arbitrary
 # code in here: these limits, the session's IAM role and its RBAC are the controls. See docs/TERMINAL.md.
+# By default sessions run in the release namespace: the policy below selects them by label and sessions.quota
+# (sessions.yaml) caps them. Only terminal.namespace set to a namespace of their own adds a quota, a LimitRange and
+# restricted Pod Security for shells alone, since all three apply to a whole namespace.
+{{- if $own }}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -39,6 +44,7 @@ spec:
       max: {cpu: {{ $t.resources.cpu | quote }}, memory: {{ $t.resources.memory | quote }}, ephemeral-storage: 512Mi}
       default: {cpu: 250m, memory: 256Mi, ephemeral-storage: 256Mi}
       defaultRequest: {cpu: 50m, memory: 128Mi, ephemeral-storage: 64Mi}
+{{- end }}
 ---
 # Default deny. Nothing connects in: the shell is reached by exec through the API server. Going out
 # there is DNS, the API server when a profile needs it, and exactly what terminal.network.egress lists.
@@ -47,7 +53,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata: {name: terminals, namespace: {{ $ns }}}
 spec:
-  podSelector: {}
+  podSelector: {{ if $own }}{}{{ else }}{matchLabels: {app: moks-terminal}}{{ end }}
   policyTypes: [Ingress, Egress]
   ingress: []
   egress:

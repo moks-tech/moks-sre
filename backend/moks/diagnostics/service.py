@@ -38,7 +38,7 @@ def pod_manifest(sess: DiagnosticSession, ns: str) -> dict:
     return {
         "apiVersion": "v1", "kind": "Pod",
         "metadata": {"name": f"moks-diag-{str(sess.id)[:8]}", "namespace": ns,
-                     "labels": {"app": "moks-diagnostic", "moks.io/session": str(sess.id)},
+                     "labels": {"app": "moks-diagnostic", "moks.io/session": str(sess.id), "sidecar.istio.io/inject": "false"},  # unmeshed: no mesh identity
                      "annotations": {"moks.io/requested-by": str(sess.requested_by), "moks.io/expires-at": sess.expires_at.isoformat()}},
         "spec": {
             "restartPolicy": "Never", "automountServiceAccountToken": False, "enableServiceLinks": False,

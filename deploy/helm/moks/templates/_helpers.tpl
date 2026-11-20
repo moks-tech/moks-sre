@@ -11,6 +11,10 @@
 {{- if or (eq $selected "all") (eq $selected .group) -}}true{{- end -}}
 {{- end -}}
 
+{{- /* Where diagnostic and terminal session pods run. Empty (the default) is the release namespace. */ -}}
+{{- define "moks.diagnosticsNamespace" -}}{{ default .Release.Namespace .Values.diagnostics.namespace }}{{- end -}}
+{{- define "moks.terminalNamespace" -}}{{ default .Release.Namespace .Values.terminal.namespace }}{{- end -}}
+
 {{- define "moks.labels" -}}
 app.kubernetes.io/name: moks
 app.kubernetes.io/instance: {{ .Release.Name }}
