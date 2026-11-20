@@ -1101,6 +1101,26 @@ class MLObservation(Base):
     fingerprint: Mapped[str] = mapped_column(String(64), unique=True)
 
 
+class MLCorrelation(Base):
+    """Anomalies grouped as one probable problem (moks/ml/correlate.py). Candidate explanations are unvalidated leads."""
+    __tablename__ = "ml_correlations"
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=_uuid)
+    environment: Mapped[str] = mapped_column(String(100))
+    namespaces: Mapped[list] = mapped_column(JSONB, default=list)
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open | closed
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    members: Mapped[list] = mapped_column(JSONB, default=list)
+    links: Mapped[list] = mapped_column(JSONB, default=list)
+    hypotheses: Mapped[list] = mapped_column(JSONB, default=list)
+    context: Mapped[dict] = mapped_column(JSONB, default=dict)
+    engine_version: Mapped[str] = mapped_column(String(40))
+    mode: Mapped[str] = mapped_column(String(20))
+    feedback: Mapped[dict] = mapped_column(JSONB, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class MLCapability(Base):
     """disabled | shadow | enabled. Read on every use, so switching to disabled is the kill switch."""
     __tablename__ = "ml_capabilities"

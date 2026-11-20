@@ -22,8 +22,8 @@ from .. import audit, jobs
 from ..auth.deps import get_auth, needs, require
 from ..auth.sessions import AuthContext
 from ..db import get_db
-from ..ml import CAPABILITIES, anomaly, learning, modes, registry, similar
-from ..models import Environment, Investigation, LearningDataset, LearningJudgment, LearningRecord, MLCapability, MLModel, MLObservation
+from ..ml import CAPABILITIES, anomaly, correlate, history, learning, modes, registry, similar
+from ..models import Environment, Investigation, LearningDataset, LearningJudgment, LearningRecord, MLCapability, MLCorrelation, MLModel, MLObservation
 from ..rbac import P
 
 router = APIRouter(prefix="/ml", tags=["ml"])
@@ -104,6 +104,67 @@ async def observation_feedback(oid: uuid.UUID, body: FeedbackIn, request: Reques
     return anomaly.observation_out(o)
 
 
+# ---- correlation groups -----------------------------------------------------------------------------------------
+
+
+@router.get("/correlations")
+async def correlations(environment: str | None = None, status_: Literal["open", "closed", "all"] = "all", hours: int = 48, limit: int = 100,
+                       ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """Groups of anomalies that probably belong to one problem, newest first, each shown only when every namespace it
+    spans is readable."""
+    since = datetime.now(timezone.utc) - timedelta(hours=min(max(hours, 1), 24 * 30))
+    q = select(MLCorrelation).where(MLCorrelation.last_seen >= since).order_by(MLCorrelation.last_seen.desc()).limit(min(limit, 500) * 4)
+    if environment:
+        q = q.where(MLCorrelation.environment == environment)
+    if status_ != "all":
+        q = q.where(MLCorrelation.status == status_)
+    rows = [g for g in (await db.execute(q)).scalars().all() if correlate.readable(ctx.principal, g)][: min(limit, 500)]
+    return {"groups": [correlate.group_out(g) for g in rows], "mode": (await modes(db))["anomaly_detection"], "note": correlate.NOTE}
+
+
+@router.get("/correlations/{gid}")
+async def correlation(gid: uuid.UUID, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    """One group, with similar past incidents and recurring history for its workloads looked up now, under the reader's access."""
+    g = await db.get(MLCorrelation, gid)
+    if g is None or not correlate.readable(ctx.principal, g):
+        raise HTTPException(404, "Group not found")
+    services = sorted({m["workload"] for m in g.members if m["namespace"] != "_node"})
+    ns = sorted({m["namespace"] for m in g.members if m["namespace"] != "_node"})
+    text = " ".join(sorted({f.replace("_", " ") for m in g.members for f in m.get("features") or []}))
+    sim = await similar.find(db, ctx.principal, {"services": services}, environment=g.environment, namespace=ns[0] if len(ns) == 1 else None, text=text, k=3)
+    hist = await history.summarize(db, ctx.principal, environment=g.environment, namespace=ns[0] if len(ns) == 1 else None, days=180, limit=3)
+    return {**correlate.group_out(g), "similar_incidents": sim, "history": {k: hist.get(k) for k in ("recurring", "what_worked", "runbooks", "records", "note")}}
+
+
+class GroupFeedbackIn(BaseModel):
+    verdict: Literal["correct", "wrong_grouping", "partly", "unsure"]
+    note: str = Field(default="", max_length=2000)
+
+
+@router.post("/correlations/{gid}/feedback")
+async def correlation_feedback(gid: uuid.UUID, body: GroupFeedbackIn, request: Request, ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    g = await db.get(MLCorrelation, gid)
+    if g is None or not correlate.readable(ctx.principal, g):
+        raise HTTPException(404, "Group not found")
+    for ns in g.namespaces or ["*"]:
+        await require(request, ctx, P.ML_FEEDBACK, g.environment, None if ns == "_node" else ns)
+    ns = (g.namespaces or ["*"])[0] if len(g.namespaces or []) == 1 else "*"
+    j = await learning.judge(db, ctx.user.id, target_kind="correlation_group", target_id=str(g.id), verdict=body.verdict, note=body.note, environment=g.environment, namespace=ns)
+    g.feedback = {"verdict": body.verdict, "judgment": str(j.id), "at": datetime.now(timezone.utc).isoformat()}
+    return correlate.group_out(g)
+
+
+# ---- history ------------------------------------------------------------------------------------------------
+
+
+@router.get("/history")
+async def incident_history(request: Request, environment: str | None = None, namespace: str | None = None, service: str | None = None, days: int = 180,
+                           ctx: AuthContext = Depends(get_auth), db: AsyncSession = Depends(get_db, scope="function")) -> dict[str, Any]:
+    if not ctx.principal.can_anywhere(P.ML_READ):
+        await require(request, ctx, P.ML_READ)
+    return await history.summarize(db, ctx.principal, environment=environment, namespace=_ns(namespace), service=service, days=min(max(days, 7), 730))
+
+
 # ---- similar incidents ---------------------------------------------------------------------------------------
 
 
@@ -149,6 +210,29 @@ async def promote(mid: uuid.UUID, body: PromoteIn, ctx: AuthContext = Depends(ne
     return out
 
 
+@router.get("/models/{mid}/health")
+async def model_health(mid: uuid.UUID, days: int = 7, ctx: AuthContext = Depends(needs(P.ML_ADMIN)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    m = await db.get(MLModel, mid)
+    if m is None:
+        raise HTTPException(404, "Model not found")
+    return await anomaly.health(db, m, days=min(max(days, 1), 30))
+
+
+@router.post("/models/{mid}/reproduce")
+async def model_reproduce(mid: uuid.UUID, ctx: AuthContext = Depends(needs(P.ML_ADMIN)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
+    """Refits the model from its frozen training snapshot and compares the result with the registered state."""
+    m = await db.get(MLModel, mid)
+    if m is None:
+        raise HTTPException(404, "Model not found")
+    try:
+        out = await anomaly.reproduce(mid)
+    except (ValueError, anomaly.artifacts.ArtifactError) as exc:
+        raise HTTPException(409, str(exc)) from None
+    await audit.record(db, action="ml.reproduce", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="ml_model", resource_id=str(mid), decision="allow",
+                       details={"reproducible": out.get("reproducible"), "state_sha256": out.get("state_sha256")})
+    return out
+
+
 class RejectIn(BaseModel):
     note: str = Field(min_length=3, max_length=500)
 
@@ -181,20 +265,24 @@ async def rollback(body: RollbackIn, ctx: AuthContext = Depends(needs(P.ML_ADMIN
 
 class TrainIn(BaseModel):
     environment: str = Field(pattern=r"^[a-z0-9-]{1,100}$")
-    namespace: str = Field(pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+    namespace: str | None = Field(default=None, pattern=r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
+    level: Literal["workload", "node"] = "workload"  # node: every node of the environment (the infrastructure level)
 
 
 @router.post("/train", status_code=202)
 async def train(body: TrainIn, ctx: AuthContext = Depends(needs(P.ML_ADMIN)), db: AsyncSession = Depends(get_db, scope="function")) -> dict:
     if (await db.execute(select(Environment).where(Environment.name == body.environment))).scalar_one_or_none() is None:
         raise HTTPException(404, "Environment not found")
+    if body.level == "workload" and not body.namespace:
+        raise HTTPException(422, "a namespace is needed to train workload models")
+    ns = "_node" if body.level == "node" else body.namespace
     try:
-        job = await jobs.enqueue("ml_anomaly_train", {"environment": body.environment, "namespace": body.namespace, "created_by": str(ctx.user.id)},
-                                 dedupe_key=f"ml_anomaly_train:{body.environment}:{body.namespace}", created_by=ctx.user.id)
+        job = await jobs.enqueue("ml_anomaly_train", {"environment": body.environment, "namespace": ns, "created_by": str(ctx.user.id)},
+                                 dedupe_key=f"ml_anomaly_train:{body.environment}:{ns}", created_by=ctx.user.id)
     except jobs.QueueFull as exc:
         raise HTTPException(429, str(exc)) from None
     await audit.record(db, action="ml.train", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="ml_capability", resource_id="anomaly_detection", decision="allow",
-                       environment=body.environment, namespace=body.namespace)
+                       environment=body.environment, namespace=ns)
     return {"job_id": str(job) if job else None, "queued": job is not None}
 
 

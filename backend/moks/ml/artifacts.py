@@ -5,8 +5,11 @@ is no upload path, and a pickle is refused by construction. Before a model score
   - the bytes hash to the SHA-256 the registry recorded (tampering, truncation, the wrong object)
   - the format and library version are ones this build reads
   - the algorithm, feature schema, feature list and sampling step match what the caller is about to feed it
-  - the algorithm's state has the expected structure and bounds
+  - the algorithm's state has the expected structure and bounds (detectors.validate)
 Any failure raises ArtifactError, and the caller falls back to the deterministic path.
+
+moks_ml 2.0 (feature schema metrics-anomaly/2, seven algorithms) cannot read 1.x artifacts, and the reverse: a
+model trained before the upgrade is reported as stale_schema and must be retrained.
 
 Storage is PostgreSQL by default (bodies are a few KB to a few hundred KB). `ml.artifactStore: s3` uses the same
 S3-compatible client as backups (Cloudflare R2 on mk4), keyed by checksum, and keeps only the URI here.
@@ -22,12 +25,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
 from ..models import MLArtifact
-from . import iforest
+from . import detectors
 
 FORMAT = "moks-ml-artifact"
 FORMAT_VERSION = 1
-LIBRARY = {"moks_ml": "1.0"}  # the code that reads the state; a major change means retraining
-ALGORITHMS = ("seasonal_baseline", "isolation_forest")
+LIBRARY = {"moks_ml": "2.0"}  # the code that reads the state; a major change means retraining
+ALGORITHMS = detectors.NAMES
 MEDIA_TYPE = "application/vnd.moks.ml-artifact+json"
 
 
@@ -118,14 +121,10 @@ def decode(body: bytes, sha: str, *, algorithm: str, feature_schema: str, featur
         raise ArtifactError("artifact was trained on a different feature schema")
     if doc.get("step_seconds") != step:
         raise ArtifactError(f"artifact was trained at a {doc.get('step_seconds')} s step, not {step} s")
-    state = doc.get("state")
-    if algorithm == "isolation_forest":
-        try:
-            iforest.validate(state, len(features))
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ArtifactError(f"isolation forest state is invalid: {exc}") from None
-    elif not isinstance(state, dict) or set(state) != set(features):
-        raise ArtifactError("baseline state does not cover the features")
+    try:
+        detectors.validate(algorithm, doc.get("state"), list(features))
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise ArtifactError(f"{algorithm.replace('_', ' ')} state is invalid: {exc}") from None
     return doc
 
 

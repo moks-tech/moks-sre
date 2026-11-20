@@ -41,7 +41,8 @@ POINT_IN_TIME = {"k8s_triage", "k8s_workloads", "k8s_list_pods", "k8s_describe_p
 # the cluster's state, logs, metrics, changes, dependencies or documentation.
 SIGNAL = {"k8s_pod_logs": "logs", "loki_search": "logs", "k8s_rollout_history": "changes", "git_recent_commits": "changes", "git_compare_deployment": "changes",
           "k8s_argocd_status": "changes", "k8s_config_audit": "configuration", "datastore_clusters": "dependencies", "pg_overview": "dependencies",
-          "redis_overview": "dependencies", "kb_search": "documentation", "similar_incidents": "documentation"}
+          "redis_overview": "dependencies", "kb_search": "documentation", "similar_incidents": "documentation", "incident_history": "documentation",
+          "ml_anomalies": "model"}
 
 
 def signal_of(tool: str) -> str:
@@ -184,7 +185,9 @@ def _live(entry: dict[str, Any]) -> bool:
 
 
 def _documentation(entry: dict[str, Any]) -> bool:
-    return bool(entry.get("ok")) and entry.get("kind") in (ev.DOCUMENTATION, ev.HISTORICAL)
+    """A lead: documentation, an earlier observation, or what an ML model inferred. It can make something a possible
+    explanation, never a confirmed observation or a strongly supported hypothesis: those need live reads."""
+    return bool(entry.get("ok")) and entry.get("kind") in (ev.DOCUMENTATION, ev.HISTORICAL, ev.MODEL_OUTPUT)
 
 
 def _score(criteria: list[Criterion]) -> float:

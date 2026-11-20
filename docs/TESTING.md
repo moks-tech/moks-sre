@@ -51,6 +51,21 @@ CVE-2026-85091); the image now upgrades its OS packages when it is built. Backen
 requests, was 77% on that run. Among the least covered files are the two that talk to a cluster, which the fakes
 replace: `connectors/kubernetes.py` at 35% and `actions/writer.py` at 40%.
 
+## SRE intelligence engine (2026-11-20)
+
+Local only: PostgreSQL on 55432, Python 3.11 venv, Node 26, Helm. Nothing ran against mk4, a real Prometheus, Loki or
+a chat model. Every series is synthetic.
+
+| Check | Result |
+|---|---|
+| Backend suite | 1636 passed, 1 failed, 48 skipped. The failure is `test_datastores.py::test_postgres_errors_are_actionable`, which fails the same way on `origin/master` here (the local server trusts every connection) |
+| New: `test_ml_intelligence.py` | 38 passed: every feature, probe, call-graph, alert and dashboard query parses (`promql-parser`); utilization counts only limited containers; one traffic source per cohort and the pinned one at inference; undersampled counters are not used; the probe skips absent metrics and says why; node cohorts; all seven detectors have JSON state that validates and fits deterministically; online scores never depend on later points; direction (lower latency is not flagged, lower traffic is); one-point blips are not anomalies; exact event scoring; correlation accuracy on pairs; the benchmark; injected faults; grouping by calls, node, rollout and time, and not by namespace alone; groups stored, updated in place, closed, hidden from readers of only some of their namespaces, judged; history from reviewed readable records only; reproduction from the snapshot and a changed snapshot refused; approved incidents masked out of training; a schema-1 model reported `stale_schema`; observations carrying type, confidence, validation and provenance; `model_output` never an observation; the crew demoting ML-only findings and capping ML-only causes; the crew tool bound to its target; the incident crew grading an ML signal as a possible explanation, never a confirmed observation; the signals tool filtered by `ml.read`; the `anomaly` eval kind |
+| Updated: `test_ml_anomaly_skills.py`, `test_ml_telemetry_integrity.py` | 35 passed: the fake Prometheus now answers the v2 queries and the probe; training registers all seven algorithms with the new gates; the seasonal model passes every gate on the fake data |
+| Synthetic benchmark, seeds 7, 11, 23 | see [ML.md](ML.md#benchmark-synthetic). Best F1 0.91–0.92 (robust z-score, LOF), worst 0.60 (Isolation Forest); correlation pairwise F1 0.95–1.0. Synthetic data the detectors were refined against: not a quality measure |
+| Frontend suite, `tsc --noEmit`, `vite build` | 246 passed, clean, built. ML page chunk 9.4 KB gzip |
+| `helm lint` and `helm template` (values-hetzner) | clean; the new `MOKS_ML_*` keys render |
+| `ruff --select F,E9` on changed files | clean |
+
 ## Secret sync with AWS Secrets Manager (2026-11-07)
 
 Local only: PostgreSQL 17, Python 3.15 venv, Node 26, Helm. No real cluster, AWS account, KMS key or IAM policy was

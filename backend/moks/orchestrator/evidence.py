@@ -21,8 +21,10 @@ TOOL_ERROR = "tool_error"
 ACCESS_DENIED = "access_denied"
 DOCUMENTATION = "documentation"  # what someone wrote down, not the state of the system
 HISTORICAL = "historical"        # true when collected; collected before this run resumed or in an earlier one
+MODEL_OUTPUT = "model_output"    # what a model inferred from telemetry: a lead to check, never an observation or a cause
 
-DOCUMENTATION_TOOLS = {"kb_search", "git_read_file", "similar_incidents"}  # a past incident is a record, not the state of anything now
+DOCUMENTATION_TOOLS = {"kb_search", "git_read_file", "similar_incidents", "incident_history"}  # a past incident is a record, not the state of anything now
+MODEL_TOOLS = {"ml_anomalies"}
 LIVE = {OBSERVATION, INCOMPLETE}
 FAILED = {TOOL_ERROR, ACCESS_DENIED}
 
@@ -52,6 +54,8 @@ def classify(*, ok: bool, tool: str, denied: bool = False, truncated: bool = Fal
         return TOOL_ERROR
     if tool in DOCUMENTATION_TOOLS:
         return DOCUMENTATION
+    if tool in MODEL_TOOLS:
+        return MODEL_OUTPUT
     return INCOMPLETE if truncated or partial else OBSERVATION
 
 
@@ -256,6 +260,10 @@ def judge(statement: str, refs: list[str], ledger: Ledger, findings: list[dict],
         if documents:
             reasons.append("documentation describes intent, not the current state")
             return Verdict("hypothesis", "documentation", [e.ref for e in documents], reasons)
+        inferred = [e for e in entries if e.kind == MODEL_OUTPUT]
+        if inferred:
+            reasons.append("an ML signal is a statistical lead from a shadow-mode model, not an observation of the system; confirm it with live evidence")
+            return Verdict("hypothesis", MODEL_OUTPUT, [e.ref for e in inferred], reasons)
         if history and not is_health:
             return Verdict("qualified", "historical", [e.ref for e in history], reasons + ["observed earlier and not collected again"])
         if history:

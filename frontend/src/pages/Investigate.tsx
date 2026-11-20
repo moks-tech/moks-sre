@@ -307,6 +307,7 @@ const EVIDENCE_KINDS: Record<string, { label: string; tone: "ok" | "warn" | "bad
   access_denied: { label: "access denied", tone: "bad" },
   documentation: { label: "documentation", tone: "info" },
   historical: { label: "historical", tone: "neutral" },
+  model_output: { label: "ML signal (unvalidated)", tone: "info" },
 };
 
 export function EvidenceKind({ kind, ok }: { kind?: string; ok: boolean }) {
@@ -314,7 +315,7 @@ export function EvidenceKind({ kind, ok }: { kind?: string; ok: boolean }) {
   return <Badge kind={k.tone}>{k.label}</Badge>;
 }
 
-const FACT_KINDS: Record<string, string> = { collection: "about collection", documentation: "from documentation", historical: "earlier observation" };
+const FACT_KINDS: Record<string, string> = { collection: "about collection", documentation: "from documentation", historical: "earlier observation", model_output: "ML signal, not observed" };
 const VERIFIED: [string, string, string][] = [
   ["configuration_defect", "Verified configuration defects", "A check read the wrong setting from the object itself."],
   ["observed_failure", "Observed failures", "These happened. Why they happened is still open, so see the suspected causes."],

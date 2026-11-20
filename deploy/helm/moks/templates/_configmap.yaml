@@ -62,6 +62,19 @@ data:
   MOKS_ML_ANOMALY_CONCURRENCY: {{ .Values.ml.anomaly.concurrency | quote }}
   MOKS_ML_ANOMALY_INTERVAL_MINUTES: {{ .Values.ml.anomaly.intervalMinutes | quote }}
   MOKS_ML_ANOMALY_MAX_FLAGS_PER_DAY: {{ .Values.ml.anomaly.maxFlagsPerDay | quote }}
+  MOKS_ML_ANOMALY_RATE_WINDOW_SECONDS: {{ .Values.ml.anomaly.rateWindowSeconds | quote }}
+  MOKS_ML_ANOMALY_LOOKBACK_HOURS: {{ .Values.ml.anomaly.lookbackHours | quote }}
+  MOKS_ML_ANOMALY_PERSIST_POINTS: {{ .Values.ml.anomaly.persistPoints | quote }}
+  MOKS_ML_ANOMALY_MIN_SYNTHETIC_RECALL: {{ .Values.ml.anomaly.minSyntheticRecall | quote }}
+  MOKS_ML_ANOMALY_MAX_DETECTION_DELAY_MINUTES: {{ .Values.ml.anomaly.maxDetectionDelayMinutes | quote }}
+  MOKS_ML_ANOMALY_REQUEST_METRIC: {{ .Values.ml.anomaly.requestMetric | quote }}
+  MOKS_ML_ANOMALY_DURATION_METRIC: {{ .Values.ml.anomaly.durationMetric | quote }}
+  MOKS_ML_ANOMALY_QUEUE_DEPTH_METRIC: {{ .Values.ml.anomaly.queueDepthMetric | quote }}
+  MOKS_ML_ANOMALY_DB_CONNECTIONS_METRIC: {{ .Values.ml.anomaly.dbConnectionsMetric | quote }}
+  MOKS_ML_CORRELATION_WINDOW_MINUTES: {{ .Values.ml.correlation.windowMinutes | quote }}
+  MOKS_ML_CORRELATION_LOOKBACK_MINUTES: {{ .Values.ml.correlation.lookbackMinutes | quote }}
+  MOKS_ML_CORRELATION_CLOSE_AFTER_MINUTES: {{ .Values.ml.correlation.closeAfterMinutes | quote }}
+  MOKS_ML_CORRELATION_MAX_NAMESPACES: {{ .Values.ml.correlation.maxNamespaces | quote }}
   MOKS_ML_ARTIFACT_STORE: {{ .Values.ml.artifactStore | quote }}
   {{- if eq .Values.ml.artifactStore "s3" }}
   MOKS_ML_ARTIFACT_BUCKET: {{ required "ml.artifactStore s3 needs ml.artifactBucket" .Values.ml.artifactBucket | quote }}

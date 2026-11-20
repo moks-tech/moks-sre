@@ -521,11 +521,36 @@ async def _ml(a) -> dict:
     from .models import Environment, Incident
 
     if a.ml_cmd == "train":
-        pairs = [(a.environment, a.namespace)] if a.environment and a.namespace else [
+        if a.nodes and not a.environment:
+            raise SystemExit("--nodes needs --environment")
+        pairs = [(a.environment, "_node")] if a.nodes else [(a.environment, a.namespace)] if a.environment and a.namespace else [
             tuple(x.strip().split(":", 1)) for x in get_settings().ml_anomaly_namespaces.split(",") if ":" in x]
         if not pairs:
-            raise SystemExit("give --environment and --namespace, or set MOKS_ML_ANOMALY_NAMESPACES (env:namespace,...)")
+            raise SystemExit("give --environment and --namespace (or --nodes), or set MOKS_ML_ANOMALY_NAMESPACES (env:namespace,...; env:_node for nodes)")
         return {"trained": [await anomaly.train(env, ns) for env, ns in pairs]}
+    if a.ml_cmd == "benchmark":
+        import asyncio as _asyncio
+
+        from .ml import benchmark
+
+        out = await _asyncio.to_thread(benchmark.run, a.seed)
+        for alg in out["algorithms"].values():
+            alg.pop("skipped", None) if not alg.get("skipped") else None
+        return out
+    if a.ml_cmd == "reproduce":
+        import uuid as _uuid
+
+        return await anomaly.reproduce(_uuid.UUID(a.model_id))
+    if a.ml_cmd == "correlate":
+        from .ml import correlate
+
+        return await correlate.run(a.environment)
+    if a.ml_cmd == "history":
+        from .alerts import automation_principal
+        from .ml import history
+
+        async with session_scope() as db:  # as the automation principal: only what it may read
+            return await history.summarize(db, await automation_principal(db), environment=a.environment, namespace=a.namespace, service=a.service, days=a.days)
     if a.ml_cmd == "evaluate-similar":
         from .ml import evaluation
 
@@ -613,7 +638,19 @@ def main(argv: list[str] | None = None) -> None:
     mt = ml.add_parser("train", help="offline anomaly training for one namespace, or every namespace in MOKS_ML_ANOMALY_NAMESPACES; registers candidates, promotes nothing")
     mt.add_argument("--environment")
     mt.add_argument("--namespace")
-    ml.add_parser("tick", help="score every active anomaly model once (shadow output only)")
+    mt.add_argument("--nodes", action="store_true", help="train node models (the infrastructure level) for --environment")
+    ml.add_parser("tick", help="score every active anomaly model once and regroup the anomalies (shadow output only)")
+    mb = ml.add_parser("benchmark", help="every detector and the correlation engine on synthetic incidents with known answers (no cluster, no database writes)")
+    mb.add_argument("--seed", type=int, default=7)
+    mr = ml.add_parser("reproduce", help="refit a model from its frozen training snapshot and compare the state")
+    mr.add_argument("model_id")
+    mc = ml.add_parser("correlate", help="group one environment's recent anomalies now")
+    mc.add_argument("--environment", required=True)
+    mh = ml.add_parser("history", help="recurring failures, infrastructure problems, runbooks and what worked, as the automation principal may read them")
+    mh.add_argument("--environment")
+    mh.add_argument("--namespace")
+    mh.add_argument("--service")
+    mh.add_argument("--days", type=int, default=180)
     ml.add_parser("index-incidents", help="write learning records for postmortems approved before learning records existed")
     ml.add_parser("purge", help="apply learning-record and dataset retention")
     ml.add_parser("evaluate-similar", help="similar-incident retrieval measured on reviewed operator judgments (read-only)")

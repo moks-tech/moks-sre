@@ -139,7 +139,7 @@ async def test_nonzero_errors_are_a_ratio():
 async def test_a_fully_failed_error_query_is_unknown():
     fr = await collect(RangePrometheus(fail={"errors_rate": None}), DAY0, DAY0 + timedelta(hours=2))
     assert ratios(fr) == [None] * 24 and fr.quality["coverage"]["error_ratio"] == 0.0
-    assert fr.quality["chunks"]["errors_rate"] == {"success": 0, "failed": 1, "partial": 0} and "errors_rate" in fr.quality["incomplete_queries"]
+    assert fr.quality["chunks"]["errors_rate"] == {"success": 0, "failed": 1, "partial": 0, "absent": 0} and "errors_rate" in fr.quality["incomplete_queries"]
     assert fr.quality["coverage"]["request_rate"] == 1.0  # request volume was there all along
     assert all(row[1] is None for _, row in fr.rows())  # nothing to train or score on, and no zeros
 
@@ -157,7 +157,7 @@ async def test_mixed_chunks_keep_the_successful_ones_and_drop_only_the_failed():
     r = ratios(fr)
     assert r[:n] == [0.0] * n and r[n:] == [None] * (2 * n)
     assert fr.quality["coverage"]["error_ratio"] == round(1 / 3, 3)  # failed and partial chunks never raise coverage
-    assert fr.quality["chunks"]["errors_rate"] == {"success": 1, "failed": 1, "partial": 1}
+    assert fr.quality["chunks"]["errors_rate"] == {"success": 1, "failed": 1, "partial": 1, "absent": 0}
     assert fr.quality["unknown_error_points"] == 2 * n
 
 
