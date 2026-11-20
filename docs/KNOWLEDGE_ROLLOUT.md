@@ -40,7 +40,7 @@ This follows [RELEASES.md](RELEASES.md). An Argo CD sync does not start a releas
 
 1. Check embedding budget and the OpenSearch disk, which was at 96% when last measured. Rewriting every document needs room, and the flood-stage block stops writes.
 2. Push, and wait for CI to move `latest`.
-3. `kubectl --context mk4 -n moks rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor`. Migration 0031 runs as the new API pods start. With `secrets.split` on, it runs in the `moks-migrate` Job, followed by `moks db-grants`. With it off, nothing runs `db-grants` and nothing needs it.
+3. `kubectl --context mk4 -n moks-sre rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor`. Migration 0031 runs as the new API pods start. With `secrets.split` on, it runs in the `moks-migrate` Job, followed by `moks db-grants`. With it off, nothing runs `db-grants` and nothing needs it.
 4. Confirm: `curl https://jithendar.com/moks/api/health` shows the commit. Open **Knowledge Explorer**. As an admin, check Index health, and that outbox and vector coverage move during the next sync.
 5. Check the Skills page says every process is current. Built-in skill files did not change, so `moks skills release` has nothing to publish for this work. Publish nothing using the new contract fields until every pod runs this build: an older process cannot parse them, keeps its last valid generation and reports it.
 6. Grant the new roles to whoever should have them.

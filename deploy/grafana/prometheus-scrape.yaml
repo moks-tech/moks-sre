@@ -3,7 +3,7 @@
 - job_name: moks
   metrics_path: /metrics
   dns_sd_configs:
-    - names: [moks-metrics.moks.svc.cluster.local]
+    - names: [moks-metrics.moks-sre.svc.cluster.local]
       type: A
       port: 9464
   relabel_configs:
@@ -22,4 +22,4 @@
     ca_file: /etc/prometheus/moks-search/ca.crt
     server_name: moks-search
   static_configs:
-    - targets: [moks-search.moks.svc.cluster.local:9200]
+    - targets: [moks-search.moks-sre.svc.cluster.local:9200]

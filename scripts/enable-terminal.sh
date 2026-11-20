@@ -9,10 +9,10 @@ set -euo pipefail
 EMAIL="${1:-team@jithendar.com}"
 CONTEXT="${2:-mk4}"
 ENVIRONMENT="${3:-$CONTEXT}"
-TERMINALS=moks-terminals
+TERMINALS=moks-sre-terminals
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 kc() { kubectl --context "$CONTEXT" "$@"; }
-k() { kc -n moks "$@"; }
+k() { kc -n moks-sre "$@"; }
 
 k get deploy moks-terminal >/dev/null || { echo "Deployment moks-terminal missing: set terminal.enabled, then sync moks-terminal." >&2; exit 1; }
 kc get namespace "$TERMINALS" >/dev/null

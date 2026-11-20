@@ -12,7 +12,7 @@ executions:
   - id: crashloop-really-runs-its-steps
     skill: crashloop-triage
     question: Why is payments crashing?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture: &crashloop
       pods:
         - {name: payments-5c4-z9, labels: {app: payments}, waiting: CrashLoopBackOff, last: Error, exit_code: 78, restarts: 9}
@@ -25,14 +25,14 @@ executions:
   - id: required-evidence-missing-prevents-verification
     skill: crashloop-triage
     question: Why is payments crashing?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fail_tools: [pod_logs]
     fixture: *crashloop
     expect: {skipped: [k8s_pod_logs], outcome: incomplete, withheld: [crashloop], never_authorizes: true}
   - id: a-skill-that-does-not-apply-does-not-run
     skill: oomkilled-memory
     question: Why is payments crashing?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture: *crashloop
     expect: {not_selected: true}
 cases:

@@ -11,10 +11,10 @@
 set -euo pipefail
 CONTEXT="${1:-mk4}"
 USER_NAME="${IAM_USER:-moks-mk4-runtime}"
-k() { kubectl --context "$CONTEXT" -n moks "$@"; }
+k() { kubectl --context "$CONTEXT" -n moks-sre "$@"; }
 
 aws iam get-user --user-name "$USER_NAME" >/dev/null || { echo "IAM user $USER_NAME not found; run terraform apply in deploy/terraform first." >&2; exit 1; }
-k get secret moks-secrets >/dev/null || { echo "Secret moks/moks-secrets missing; run scripts/create-secrets.sh first." >&2; exit 1; }
+k get secret moks-secrets >/dev/null || { echo "Secret moks-sre/moks-secrets missing; run scripts/create-secrets.sh first." >&2; exit 1; }
 
 OLD_KEYS="$(aws iam list-access-keys --user-name "$USER_NAME" --query 'AccessKeyMetadata[].AccessKeyId' --output text)"
 if [[ -n "$OLD_KEYS" && "${ROTATE:-0}" != "1" ]]; then
@@ -28,7 +28,7 @@ trap 'rm -f "$PATCH"' EXIT
 aws iam create-access-key --user-name "$USER_NAME" --output json \
   | python3 -c 'import json,sys; k=json.load(sys.stdin)["AccessKey"]; json.dump({"stringData":{"AWS_ACCESS_KEY_ID":k["AccessKeyId"],"AWS_SECRET_ACCESS_KEY":k["SecretAccessKey"]}}, sys.stdout)' > "$PATCH"
 k patch secret moks-secrets --type merge --patch-file "$PATCH" >/dev/null
-echo "→ Stored a new key for $USER_NAME in moks/moks-secrets"
+echo "→ Stored a new key for $USER_NAME in moks-sre/moks-secrets"
 
 k rollout restart deploy/moks-api deploy/moks-worker 2>/dev/null && echo "→ Restarted MOKS to load it" || echo "→ MOKS not deployed yet; it will read the key at first start"
 

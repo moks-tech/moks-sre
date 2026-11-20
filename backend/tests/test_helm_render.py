@@ -12,7 +12,7 @@ pytestmark = pytest.mark.skipif(not shutil.which("helm"), reason="helm is not in
 
 
 def render(values_file: str, *sets: str) -> list[dict]:
-    args = ["helm", "template", "moks", str(CHART), "-n", "moks", "-f", str(CHART / values_file)] + ([] if values_file == "values-hetzner.yaml" else ["--set", "image.tag=test"])
+    args = ["helm", "template", "moks", str(CHART), "-n", "moks-sre", "-f", str(CHART / values_file)] + ([] if values_file == "values-hetzner.yaml" else ["--set", "image.tag=test"])
     for s in sets:
         args += ["--set", s]
     return [d for d in yaml.safe_load_all(subprocess.run(args, check=True, capture_output=True, text=True).stdout) if d]
@@ -140,7 +140,7 @@ def test_istio_sends_terminal_traffic_to_the_gateway_first():
     route = next(d for d in render("values-eks.yaml", *TERMINAL) if d["kind"] == "VirtualService")
     first, second = route["spec"]["http"]
     assert first["match"] == [{"uri": {"prefix": "/moks/api/terminal"}}] and second["match"] == [{"uri": {"prefix": "/moks"}}]
-    assert first["route"][0]["destination"]["host"] == "moks-terminal.moks.svc.cluster.local"
+    assert first["route"][0]["destination"]["host"] == "moks-terminal.moks-sre.svc.cluster.local"
 
 
 def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
@@ -168,7 +168,7 @@ def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
     assert legacy["moks-opensearch-dashboards-edge"]["portLevelMtls"] == {5601: {"mode": "PERMISSIVE"}}
     policy = next(d for d in docs if d["kind"] == "AuthorizationPolicy")
     assert policy["metadata"]["annotations"] == {"istio.io/dry-run": "true"}
-    assert policy["spec"] == {"action": "ALLOW", "rules": [{"from": [{"source": {"namespaces": ["moks", "istio-ingress", "monitoring"]}}]}]}
+    assert policy["spec"] == {"action": "ALLOW", "rules": [{"from": [{"source": {"namespaces": ["moks-sre", "istio-ingress", "monitoring"]}}]}]}
     policies = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "NetworkPolicy"}
     assert "traefik" not in str(policies)
 
@@ -204,7 +204,7 @@ def test_eks_is_strict_and_denies_by_default():
     api, db = policies["moks"]["rules"][0], policies["moks-postgres"]["rules"][0]
     assert api["from"][0]["source"]["principals"] == ["cluster.local/ns/istio-ingress/sa/istio-ingressgateway"]
     assert api["to"][0]["operation"]["ports"] == ["8080"]
-    assert db["from"][0]["source"]["namespaces"] == ["moks"] and db["to"][0]["operation"]["ports"] == ["5432"]
+    assert db["from"][0]["source"]["namespaces"] == ["moks-sre"] and db["to"][0]["operation"]["ports"] == ["5432"]
 
 
 def test_meshed_postgres_can_reach_istiod_when_policy_is_enforced():
@@ -281,7 +281,7 @@ def test_velero_project_allows_everything_the_chart_renders():
     assert rendered <= allowed, rendered - allowed
 
 
-TERMINAL = ("terminal.enabled=true", "terminal.image.digest=sha256:" + "a" * 64, "terminal.profiles[0].name=ro", "terminal.kubernetes.namespaces={moks-lab}", "terminal.network.apiServer=true")
+TERMINAL = ("terminal.enabled=true", "terminal.image.digest=sha256:" + "a" * 64, "terminal.profiles[0].name=ro", "terminal.kubernetes.namespaces={moks-sre-lab}", "terminal.network.apiServer=true")
 
 
 def of(docs, kind, name):
@@ -327,7 +327,7 @@ def test_mk4_pulls_every_moks_image_from_harbor_as_latest():
 def test_mk4_opts_into_the_terminal_with_https_only():
     """mk4 runs terminals: moks-terminal:latest from Harbor, one read-only profile, and egress to public HTTPS only."""
     docs = render("values-hetzner.yaml")
-    assert of(docs, "Namespace", "moks-terminals")["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == "restricted"
+    assert of(docs, "Namespace", "moks-sre-terminals")["metadata"]["labels"]["pod-security.kubernetes.io/enforce"] == "restricted"
     policy = of(docs, "NetworkPolicy", "terminals")["spec"]
     public = [r for r in policy["egress"] for t in r["to"] if t.get("ipBlock", {}).get("cidr") == "0.0.0.0/0"]
     assert [r["ports"] for r in public] == [[{"port": 443, "protocol": "TCP"}]]
@@ -338,8 +338,8 @@ def test_the_gateway_is_routed_under_the_base_path_and_keeps_to_its_own_identity
     docs = render("values-hetzner.yaml", *TERMINAL)
     terminal, portal = of(docs, "VirtualService", "moks")["spec"]["http"]
     # Both narrow the routing table's /moks prefix, so Istio's delegation accepts them.
-    assert terminal["match"] == [{"uri": {"prefix": "/moks/api/terminal"}}] and terminal["route"][0]["destination"]["host"] == "moks-terminal.moks.svc.cluster.local"
-    assert portal["match"] == [{"uri": {"prefix": "/moks"}}] and portal["route"][0]["destination"]["host"] == "moks-api.moks.svc.cluster.local"
+    assert terminal["match"] == [{"uri": {"prefix": "/moks/api/terminal"}}] and terminal["route"][0]["destination"]["host"] == "moks-terminal.moks-sre.svc.cluster.local"
+    assert portal["match"] == [{"uri": {"prefix": "/moks"}}] and portal["route"][0]["destination"]["host"] == "moks-api.moks-sre.svc.cluster.local"
     plain = render("values-hetzner.yaml", *TERMINAL, "istio.enabled=false", "ingress.enabled=true", "rag.opensearch.publicRoute.enabled=false", "rag.opensearch.dashboards.enabled=false")
     paths = of(plain, "Ingress", "moks")["spec"]["rules"][0]["http"]["paths"]
     assert paths[0]["path"] == "/moks/api/terminal" and paths[0]["backend"]["service"]["name"] == "moks-terminal"
@@ -351,7 +351,7 @@ def test_the_gateway_is_routed_under_the_base_path_and_keeps_to_its_own_identity
 
 def test_the_gateway_can_touch_only_the_terminal_namespace():
     docs = render("values-hetzner.yaml", *TERMINAL)
-    assert not [d for d in docs if d["kind"] in ("ClusterRoleBinding", "RoleBinding") and any(s["name"] == "moks-terminal" for s in d.get("subjects", [])) and d["metadata"].get("namespace") != "moks-terminals"]
+    assert not [d for d in docs if d["kind"] in ("ClusterRoleBinding", "RoleBinding") and any(s["name"] == "moks-terminal" for s in d.get("subjects", [])) and d["metadata"].get("namespace") != "moks-sre-terminals"]
     rules = of(docs, "Role", "moks-terminal-gateway")["rules"]
     assert {r for rule in rules for r in rule["resources"]} == {"pods", "pods/exec", "serviceaccounts/token"}
     assert next(r for r in rules if "serviceaccounts/token" in r["resources"])["resourceNames"] == ["moks-terminal-session"]
@@ -363,13 +363,13 @@ def test_the_session_identity_is_read_only_and_never_sees_secrets():
     assert {v for r in rules for v in r["verbs"]} == {"get", "list", "watch"}
     assert not {"secrets", "configmaps", "pods/exec", "pods/attach", "pods/portforward"} & {x for r in rules for x in r["resources"]}
     binding = of(docs, "RoleBinding", "moks-terminal-reader")
-    assert binding["metadata"]["namespace"] == "moks-lab" and binding["subjects"][0]["name"] == "moks-terminal-session"
+    assert binding["metadata"]["namespace"] == "moks-sre-lab" and binding["subjects"][0]["name"] == "moks-terminal-session"
     assert not [d for d in docs if d["kind"] == "ClusterRoleBinding" and "terminal" in d["metadata"]["name"]]
 
 
 def test_the_terminal_namespace_is_restricted_and_closed_by_default():
     docs = render("values.yaml", *TERMINAL)
-    ns = of(docs, "Namespace", "moks-terminals")["metadata"]["labels"]
+    ns = of(docs, "Namespace", "moks-sre-terminals")["metadata"]["labels"]
     assert ns["pod-security.kubernetes.io/enforce"] == "restricted"
     policy = of(docs, "NetworkPolicy", "terminals")["spec"]
     assert policy["podSelector"] == {} and policy["ingress"] == [] and set(policy["policyTypes"]) == {"Ingress", "Egress"}
@@ -393,9 +393,14 @@ def test_reranking_is_absent_when_off():
     assert not [k for d in docs if d["kind"] == "ConfigMap" for k in (d.get("data") or {}) if "RERANK" in k]
 
 
+def test_moks_knows_its_own_namespace_and_sandboxes():
+    config = next(d for d in render("values-hetzner.yaml") if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "moks-config")["data"]
+    assert config["MOKS_OWN_NAMESPACE"] == "moks-sre" and config["MOKS_DIAGNOSTICS_NAMESPACE"] == "moks-sre-diagnostics"
+
+
 def test_deploying_the_service_does_not_turn_it_on_for_search():
     config = next(d for d in render("values-hetzner.yaml", *RERANKER, "reranker.client.enabled=false") if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "moks-config")["data"]
-    assert config["MOKS_RAG_RERANK_ENABLED"] == "false" and config["MOKS_RAG_RERANK_REVISION"] and config["MOKS_RAG_RERANK_URL"].startswith("http://moks-reranker.moks.svc")
+    assert config["MOKS_RAG_RERANK_ENABLED"] == "false" and config["MOKS_RAG_RERANK_REVISION"] and config["MOKS_RAG_RERANK_URL"].startswith("http://moks-reranker.moks-sre.svc")
 
 
 def test_the_reranker_has_no_public_route_and_runs_restricted():
@@ -433,7 +438,7 @@ def test_an_unusable_image_reference_is_refused(bad):
 def test_the_mesh_allows_only_the_callers():
     docs = render("values-eks.yaml", *RERANKER)
     rule = of(docs, "AuthorizationPolicy", "moks-reranker")["spec"]["rules"][0]
-    assert rule["to"][0]["operation"]["ports"] == ["8090"] and all(p.startswith("cluster.local/ns/moks/sa/") for p in rule["from"][0]["source"]["principals"])
+    assert rule["to"][0]["operation"]["ports"] == ["8090"] and all(p.startswith("cluster.local/ns/moks-sre/sa/") for p in rule["from"][0]["source"]["principals"])
 
 
 def test_opensearch_public_route_is_a_delegate_that_strips_its_prefix():
@@ -443,7 +448,7 @@ def test_opensearch_public_route_is_a_delegate_that_strips_its_prefix():
     assert "hosts" not in route and "gateways" not in route
     (http,) = route["http"]
     assert "match" not in http and http["rewrite"] == {"uriRegexRewrite": {"match": "^/opensearch/?", "rewrite": "/"}}
-    assert http["route"][0]["destination"] == {"host": "moks-opensearch.moks.svc.cluster.local", "port": {"number": 9200}}
+    assert http["route"][0]["destination"] == {"host": "moks-opensearch.moks-sre.svc.cluster.local", "port": {"number": 9200}}
     assert not any(d["apiVersion"].startswith("traefik.io/") for d in docs)
     rules = of(docs, "NetworkPolicy", "moks-opensearch")["spec"]["ingress"]
     assert {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "istio-ingress"}}} in rules[1]["from"]
@@ -466,7 +471,7 @@ def test_opensearch_dashboards_has_its_own_login_and_a_writable_config():
     assert not pod["containers"][0].get("volumeMounts") and pod["automountServiceAccountToken"] is False
     route = of(docs, "VirtualService", "moks-opensearch-dashboards")["spec"]
     assert "hosts" not in route and "rewrite" not in route["http"][0]   # Dashboards serves its base path itself
-    assert route["http"][0]["route"][0]["destination"]["host"] == "moks-opensearch-dashboards.moks.svc.cluster.local"
+    assert route["http"][0]["route"][0]["destination"]["host"] == "moks-opensearch-dashboards.moks-sre.svc.cluster.local"
     assert {"podSelector": {"matchLabels": {"app": "moks-opensearch-dashboards"}}} in of(docs, "NetworkPolicy", "moks-opensearch")["spec"]["ingress"][2]["from"]
 
 
@@ -678,7 +683,7 @@ def test_secured_dashboards_can_sit_behind_a_base_path():
     # The delegate the gateway's routing table uses for /opensearch; nothing strips the prefix.
     route = of(docs, "VirtualService", "moks-opensearch")["spec"]
     assert "hosts" not in route and "rewrite" not in route["http"][0]
-    assert route["http"][0]["route"][0]["destination"]["host"] == "moks-search-dashboards.moks.svc.cluster.local"
+    assert route["http"][0]["route"][0]["destination"]["host"] == "moks-search-dashboards.moks-sre.svc.cluster.local"
     assert of(docs, "NetworkPolicy", "moks-search-dashboards")["spec"]["ingress"]
 
 

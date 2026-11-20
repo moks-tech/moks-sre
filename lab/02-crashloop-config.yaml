@@ -1,14 +1,14 @@
 # Scenario 2: an invalid configuration value makes "payments" exit at start-up -> CrashLoopBackOff.
 apiVersion: v1
 kind: ConfigMap
-metadata: {name: payments-config, namespace: moks-lab}
+metadata: {name: payments-config, namespace: moks-sre-lab}
 data:
   PAYMENT_MODE: lve                     # BUG: must be "live" or "sandbox"
   PAYMENT_TIMEOUT_MS: "2000"
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: payments, namespace: moks-lab, labels: {app: payments}}
+metadata: {name: payments, namespace: moks-sre-lab, labels: {app: payments}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: payments}}

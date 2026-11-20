@@ -7,7 +7,7 @@ A shell is arbitrary code execution inside its sandbox. MOKS does not filter com
 ## How it fits together
 
 ```
-browser ── wss /moks/api/terminal/... ──> moks-terminal gateway ── pods/exec ──> session pod (moks-terminals)
+browser ── wss /moks/api/terminal/... ──> moks-terminal gateway ── pods/exec ──> session pod (moks-sre-terminals)
                                                │                                   ├─ AWS: role session, in memory
                                                └─ sts:AssumeRole                   └─ kubectl: token bound to the pod
 ```
@@ -138,14 +138,14 @@ Each step here is a change to AWS or to mk4, and is yours to run.
 2. **Image:** merge; CI pushes `moks-terminal:latest` to Harbor.
 3. **Migration:** take and verify a backup, then deploy so that migration 0023 runs. It adds `terminal_sessions` and widens the list of allowed roles.
 4. **Key, database role and Secret:** run `scripts/create-terminal-secrets.sh`. It creates a key for `moks-terminal-gateway`, sets the `moks_terminal` password and grants through `moks db-grants`, and writes `moks-terminal-secrets`. Add `ROTATE=1` to replace them. Do not reuse `moks-mk4-runtime`.
-5. **Pull secret:** once `moks-terminals` exists, write `harbor-pull` into it from the tools repository: `python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-terminals` (`scripts/enable-terminal.sh` does this too).
+5. **Pull secret:** once `moks-sre-terminals` exists, write `harbor-pull` into it from the tools repository: `python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-sre-terminals` (`scripts/enable-terminal.sh` does this too).
 6. **Values:** set `terminal.enabled`, `terminal.imagePullSecrets: [harbor-pull]`, `terminal.profiles`, `terminal.kubernetes.namespaces` and `terminal.network`.
 7. **Argo:** apply `deploy/argocd/hetzner/project.yaml`, then sync `moks-root`, `moks-terminal` and `moks-routing` without prune. `deploy/argocd/hetzner/apps/moks-terminal.yaml` is the only terminal Application. On EKS it is `deploy/argocd/eks/optional/roboshop-demo-moks-terminal.yaml`, applied by hand with `deploy/argocd/eks/project.yaml`. The VPC CNI there runs with network policy off, so on EKS the database and API lines of `moks-verify-isolation` can pass only through the mesh, and unmeshed Services stay reachable until enforcement is on.
-8. **Grant** the `terminal` role to one person, and open a session in `moks-lab`.
+8. **Grant** the `terminal` role to one person, and open a session in `moks-sre-lab`.
 9. **Verify on that cluster,** from inside the session:
 
 ```sh
-MOKS_VERIFY_BLOCKED="moks-postgres.moks.svc.cluster.local:5432 moks-api.moks.svc.cluster.local:8080" moks-verify-isolation
+MOKS_VERIFY_BLOCKED="moks-postgres.moks-sre.svc.cluster.local:5432 moks-api.moks-sre.svc.cluster.local:8080" moks-verify-isolation
 ```
 
 Every line must read `ok`, or `skip` with a reason. **Do not open terminals to others until the metadata and database lines pass:** that is what proves mk4's network plugin enforces this policy.

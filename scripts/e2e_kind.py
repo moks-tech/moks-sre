@@ -22,7 +22,7 @@ from typing import Any
 
 API = os.environ["MOKS_E2E_URL"].rstrip("/") + "/api"
 ENVIRONMENT = os.environ.get("MOKS_E2E_ENVIRONMENT", "kind")
-NAMESPACE = "moks-lab"
+NAMESPACE = "moks-sre-lab"
 INVESTIGATION_SECONDS = 300   # config.maxDurationSeconds is 180
 PLAN_SECONDS = 300            # the executor validates a rollout for up to 180 s
 PLAN_FINISHED = {"succeeded", "failed", "recovered", "reconciliation_required", "reconciled", "cancelled", "expired", "rejected"}

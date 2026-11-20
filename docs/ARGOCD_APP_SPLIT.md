@@ -105,36 +105,36 @@ Namespace `moks` itself is not rendered by the chart: the old Application's `man
 | executor | ClusterRole | (cluster) | `moks-executor-cluster-identity` | moks-portal | roboshop-demo-moks-portal |
 | executor | ClusterRoleBinding | (cluster) | `moks-executor-cluster-identity` | moks-portal | roboshop-demo-moks-portal |
 | executor | Deployment | moks | `moks-executor` | moks-portal | roboshop-demo-moks-portal |
-| executor | LimitRange | moks-diagnostics | `diagnostics` | moks-portal | roboshop-demo-moks-portal |
-| executor | Namespace | (cluster) | `moks-diagnostics` | moks-portal | roboshop-demo-moks-portal |
-| executor | NetworkPolicy | moks-diagnostics | `diagnostics` | moks-portal | roboshop-demo-moks-portal |
-| executor | ResourceQuota | moks-diagnostics | `diagnostics` | moks-portal | roboshop-demo-moks-portal |
+| executor | LimitRange | moks-sre-diagnostics | `diagnostics` | moks-portal | roboshop-demo-moks-portal |
+| executor | Namespace | (cluster) | `moks-sre-diagnostics` | moks-portal | roboshop-demo-moks-portal |
+| executor | NetworkPolicy | moks-sre-diagnostics | `diagnostics` | moks-portal | roboshop-demo-moks-portal |
+| executor | ResourceQuota | moks-sre-diagnostics | `diagnostics` | moks-portal | roboshop-demo-moks-portal |
 | executor | Role | jithendar | `moks-database-backup` | moks-portal | - |
 | executor | Role | moks | `moks-database-backup` | moks-portal | roboshop-demo-moks-portal |
-| executor | Role | moks-diagnostics | `moks-diagnostics` | moks-portal | roboshop-demo-moks-portal |
+| executor | Role | moks-sre-diagnostics | `moks-sre-diagnostics` | moks-portal | roboshop-demo-moks-portal |
 | executor | Role | roboshop-ai | `moks-database-backup` | moks-portal | roboshop-demo-moks-portal |
 | executor | Role | velero | `moks-executor-velero` | moks-portal | if enabled |
 | executor | RoleBinding | jithendar | `moks-database-backup` | moks-portal | - |
 | executor | RoleBinding | moks | `moks-database-backup` | moks-portal | roboshop-demo-moks-portal |
-| executor | RoleBinding | moks-diagnostics | `moks-diagnostics` | moks-portal | roboshop-demo-moks-portal |
-| executor | RoleBinding | moks-lab | `moks-executor` | moks-portal | - |
+| executor | RoleBinding | moks-sre-diagnostics | `moks-sre-diagnostics` | moks-portal | roboshop-demo-moks-portal |
+| executor | RoleBinding | moks-sre-lab | `moks-executor` | moks-portal | - |
 | executor | RoleBinding | roboshop-ai | `moks-database-backup` | moks-portal | roboshop-demo-moks-portal |
 | executor | RoleBinding | velero | `moks-executor-velero` | moks-portal | if enabled |
 | executor | ServiceAccount | moks | `moks-executor` | moks-portal | roboshop-demo-moks-portal |
 | terminal | ClusterRole | (cluster) | `moks-terminal-reader` | moks-portal | if enabled |
 | terminal | Deployment | moks | `moks-terminal` | moks-portal | if enabled |
-| terminal | LimitRange | moks-terminals | `terminals` | moks-portal | if enabled |
-| terminal | Namespace | (cluster) | `moks-terminals` | moks-portal | if enabled |
-| terminal | NetworkPolicy | moks-terminals | `terminals` | moks-portal | if enabled |
-| terminal | ResourceQuota | moks-terminals | `terminals` | moks-portal | if enabled |
-| terminal | Role | moks-terminals | `ecr-refresh` | moks-portal | - |
-| terminal | Role | moks-terminals | `moks-terminal-gateway` | moks-portal | if enabled |
-| terminal | RoleBinding | moks-lab | `moks-terminal-reader` | moks-portal | if enabled |
-| terminal | RoleBinding | moks-terminals | `ecr-refresh` | moks-portal | - |
-| terminal | RoleBinding | moks-terminals | `moks-terminal-gateway` | moks-portal | if enabled |
+| terminal | LimitRange | moks-sre-terminals | `terminals` | moks-portal | if enabled |
+| terminal | Namespace | (cluster) | `moks-sre-terminals` | moks-portal | if enabled |
+| terminal | NetworkPolicy | moks-sre-terminals | `terminals` | moks-portal | if enabled |
+| terminal | ResourceQuota | moks-sre-terminals | `terminals` | moks-portal | if enabled |
+| terminal | Role | moks-sre-terminals | `ecr-refresh` | moks-portal | - |
+| terminal | Role | moks-sre-terminals | `moks-terminal-gateway` | moks-portal | if enabled |
+| terminal | RoleBinding | moks-sre-lab | `moks-terminal-reader` | moks-portal | if enabled |
+| terminal | RoleBinding | moks-sre-terminals | `ecr-refresh` | moks-portal | - |
+| terminal | RoleBinding | moks-sre-terminals | `moks-terminal-gateway` | moks-portal | if enabled |
 | terminal | Service | moks | `moks-terminal` | moks-portal | if enabled |
 | terminal | ServiceAccount | moks | `moks-terminal` | moks-portal | if enabled |
-| terminal | ServiceAccount | moks-terminals | `moks-terminal-session` | moks-portal | if enabled |
+| terminal | ServiceAccount | moks-sre-terminals | `moks-terminal-session` | moks-portal | if enabled |
 | routing | AuthorizationPolicy | moks | `allow-nothing` | - | roboshop-demo-moks-portal |
 | routing | AuthorizationPolicy | moks | `moks` | - | roboshop-demo-moks-portal |
 | routing | AuthorizationPolicy | moks | `moks-postgres` | - | roboshop-demo-moks-portal |
@@ -171,7 +171,7 @@ export BACKUP="$HOME/moks-argocd-split/$ENV-$(date +%Y%m%d-%H%M%S)"; mkdir -p "$
 
 ```bash
 kubectl --context "$ARGO" -n argocd get application "$OLD" --ignore-not-found -o name
-kubectl --context "$CTX" -n moks get deploy,statefulset,pvc
+kubectl --context "$CTX" -n moks-sre get deploy,statefulset,pvc
 ```
 
 Back up the Application and the record of what exists, never the Secrets:
@@ -180,16 +180,16 @@ Back up the Application and the record of what exists, never the Secrets:
 kubectl --context "$ARGO" -n argocd get application "$OLD" -o json > "$BACKUP/old-app.json"
 jq .status.resources "$BACKUP/old-app.json" > "$BACKUP/old-resources.json"
 kubectl --context "$ARGO" -n argocd get appprojects moks moks-eks -o yaml > "$BACKUP/projects.yaml"
-kubectl --context "$CTX" get namespace moks -o yaml > "$BACKUP/namespace.yaml"
-kubectl --context "$CTX" -n moks get deploy,statefulset,service,configmap,serviceaccount,role,rolebinding,networkpolicy -o yaml > "$BACKUP/moks-resources.yaml"
+kubectl --context "$CTX" get namespace moks-sre -o yaml > "$BACKUP/namespace.yaml"
+kubectl --context "$CTX" -n moks-sre get deploy,statefulset,service,configmap,serviceaccount,role,rolebinding,networkpolicy -o yaml > "$BACKUP/moks-resources.yaml"
 
 identity() {   # generation moves if a spec changes; uid moves if an object is recreated
-  kubectl --context "$CTX" -n moks get deploy,statefulset,pvc -o json | jq -S '[.items[] | {kind, name: .metadata.name, uid: .metadata.uid, generation: .metadata.generation, volume: .spec.volumeName}]'
+  kubectl --context "$CTX" -n moks-sre get deploy,statefulset,pvc -o json | jq -S '[.items[] | {kind, name: .metadata.name, uid: .metadata.uid, generation: .metadata.generation, volume: .spec.volumeName}]'
 }
 identity > "$BACKUP/identity.json"
-kubectl --context "$CTX" get pv -o json | jq -S '[.items[] | select(.spec.claimRef.namespace == "moks") | {name: .metadata.name, claim: .spec.claimRef.name, reclaim: .spec.persistentVolumeReclaimPolicy}]' > "$BACKUP/volumes.json"
+kubectl --context "$CTX" get pv -o json | jq -S '[.items[] | select(.spec.claimRef.namespace == "moks-sre") | {name: .metadata.name, claim: .spec.claimRef.name, reclaim: .spec.persistentVolumeReclaimPolicy}]' > "$BACKUP/volumes.json"
 database() {
-  kubectl --context "$CTX" -n moks exec statefulset/moks-postgres -c postgres -- psql -U moks -d moks -Atc \
+  kubectl --context "$CTX" -n moks-sre exec statefulset/moks-postgres -c postgres -- psql -U moks -d moks -Atc \
     "select version_num from alembic_version; select count(*) from users; select pg_database_size('moks');"
 }
 database > "$BACKUP/database.txt"
@@ -215,7 +215,7 @@ scripts/validate-argocd-split.py
 argocd app diff "$OLD" --hard-refresh
 
 # No selector relies on the tracking label (the validator checks too)
-kubectl --context "$CTX" -n moks get deploy,statefulset,service -o json | jq -e '[.items[] | (.spec.selector | tostring) | select(test("instance"))] | length == 0'
+kubectl --context "$CTX" -n moks-sre get deploy,statefulset,service -o json | jq -e '[.items[] | (.spec.selector | tostring) | select(test("instance"))] | length == 0'
 ```
 
 `mk4` and `roboshop-demo` must both be reachable, and `argocd` logged in to mk4. The old Application's annotation `Prune=false,Delete=false` protects nothing here. That annotation only applies to a resource managed by another Application, and the old Applications have no parent. What makes retirement safe is that they have no finalizer.
@@ -310,7 +310,7 @@ adopt() {
 }
 
 adopt foundation    # then read the namespace labels back; see below
-kubectl --context "$CTX" get namespace moks --show-labels
+kubectl --context "$CTX" get namespace moks-sre --show-labels
 ```
 
 Then one at a time, with the readiness check that matters for that child. A Synced child proves nothing about the next one's dependencies.
@@ -318,27 +318,27 @@ Then one at a time, with the readiness check that matters for that child. A Sync
 ```bash
 # EKS only, at this point: STRICT and deny-by-default before anything else
 adopt routing
-kubectl --context "$CTX" -n moks get peerauthentication,authorizationpolicy,virtualservice
+kubectl --context "$CTX" -n moks-sre get peerauthentication,authorizationpolicy,virtualservice
 
 adopt database
-kubectl --context "$CTX" -n moks rollout status statefulset/moks-postgres --timeout=300s
-kubectl --context "$CTX" -n moks exec statefulset/moks-postgres -c postgres -- pg_isready -U moks -d moks
+kubectl --context "$CTX" -n moks-sre rollout status statefulset/moks-postgres --timeout=300s
+kubectl --context "$CTX" -n moks-sre exec statefulset/moks-postgres -c postgres -- pg_isready -U moks -d moks
 
 # If secrets.split is true: migrate goes here. See "Upgrades" below.
 
 adopt api
-kubectl --context "$CTX" -n moks rollout status deploy/moks-api --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-api --timeout=300s
 
 adopt worker
-kubectl --context "$CTX" -n moks get deploy -l app.kubernetes.io/component=worker
-kubectl --context "$CTX" -n moks rollout status deploy/moks-worker --timeout=300s    # each Deployment, with worker.pools
+kubectl --context "$CTX" -n moks-sre get deploy -l app.kubernetes.io/component=worker
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-worker --timeout=300s    # each Deployment, with worker.pools
 
 adopt executor
-kubectl --context "$CTX" -n moks rollout status deploy/moks-executor --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-executor --timeout=300s
 
 # mk4 only
 adopt terminal
-kubectl --context "$CTX" -n moks rollout status deploy/moks-terminal --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-terminal --timeout=300s
 adopt routing
 ```
 
@@ -361,7 +361,7 @@ If `moks-portal` is gone, as on 2026-11-01, nothing is adopted. This is a fresh 
 
 Three things block it:
 
-- **Namespace `moks-lab` is missing**, but `values-hetzner.yaml` writes Roles there (`executor.namespaces`, `terminal.kubernetes.namespaces`), so the executor and terminal syncs fail. `lab/00-namespace.yaml` creates it.
+- **Namespace `moks-sre-lab` is missing**, but `values-hetzner.yaml` writes Roles there (`executor.namespaces`, `terminal.kubernetes.namespaces`), so the executor and terminal syncs fail. `lab/00-namespace.yaml` creates it.
 - **`ecr-pull` has expired.** ECR tokens last 12 hours, and the refresher, `roboshop-ai/ecr-refresh` from the tools repository, is gone with its namespace. Recreate the namespace and `roboshop-secrets`, which hold only the refresher on mk4, then install the CronJob and run it once, or new pods will not pull.
 - **`data-moks-postgres-0` holds the only copy of the mk4 investigations, and its PV has reclaim policy `Delete`.** Deleting the claim or the namespace loses them. It binds to the new StatefulSet by name, on `mk4-m04`. Switch it to `Retain` first, as in section 2.
 
@@ -378,8 +378,8 @@ Then apply the projects and root as above, and sync foundation and database. **B
 ```bash
 adopt foundation
 adopt database                      # answer y; the diff is the whole StatefulSet
-kubectl --context mk4 -n moks rollout status statefulset/moks-postgres --timeout=300s
-kubectl --context mk4 -n moks get pvc data-moks-postgres-0 -o jsonpath='{.spec.volumeName}{"\n"}'    # still pvc-091ad61a-...
+kubectl --context mk4 -n moks-sre rollout status statefulset/moks-postgres --timeout=300s
+kubectl --context mk4 -n moks-sre get pvc data-moks-postgres-0 -o jsonpath='{.spec.volumeName}{"\n"}'    # still pvc-091ad61a-...
 database; scripts/backup.sh mk4 "$BACKUP"
 ```
 
@@ -392,14 +392,14 @@ After `adopt database`, and again at the end. A pass means the same StatefulSet,
 ```bash
 identity | diff "$BACKUP/identity.json" -       # uid and generation of moks-postgres, uid and volume of data-moks-postgres-0
 
-kubectl --context "$CTX" -n moks get statefulset moks-postgres -o json \
+kubectl --context "$CTX" -n moks-sre get statefulset moks-postgres -o json \
   | jq '{uid: .metadata.uid, serviceName: .spec.serviceName, selector: .spec.selector, claims: [.spec.volumeClaimTemplates[].metadata.name]}'
 # serviceName moks-postgres, selector {app: moks-postgres}, claims ["data"]
 
-kubectl --context "$CTX" -n moks get pvc data-moks-postgres-0 -o jsonpath='{.metadata.uid} {.spec.volumeName} {.status.phase}{"\n"}'
-kubectl --context "$CTX" -n moks get pod moks-postgres-0 -o jsonpath='{.metadata.uid} {.status.containerStatuses[0].restartCount}{"\n"}'
+kubectl --context "$CTX" -n moks-sre get pvc data-moks-postgres-0 -o jsonpath='{.metadata.uid} {.spec.volumeName} {.status.phase}{"\n"}'
+kubectl --context "$CTX" -n moks-sre get pod moks-postgres-0 -o jsonpath='{.metadata.uid} {.status.containerStatuses[0].restartCount}{"\n"}'
 
-kubectl --context "$CTX" get pv -o json | jq -S '[.items[] | select(.spec.claimRef.namespace == "moks") | {name: .metadata.name, claim: .spec.claimRef.name, reclaim: .spec.persistentVolumeReclaimPolicy}]' | diff "$BACKUP/volumes.json" -
+kubectl --context "$CTX" get pv -o json | jq -S '[.items[] | select(.spec.claimRef.namespace == "moks-sre") | {name: .metadata.name, claim: .spec.claimRef.name, reclaim: .spec.persistentVolumeReclaimPolicy}]' | diff "$BACKUP/volumes.json" -
 
 database | diff "$BACKUP/database.txt" -        # schema version and users match. Database size may grow a little
 ```
@@ -498,13 +498,13 @@ Pods read a ConfigMap only at start, so skipping a consumer leaves it on the old
 **With `secrets.split` false, as on both clusters today,** each API, worker and executor pod runs `moks migrate && moks seed` in its init container. `moks migrate` holds a PostgreSQL advisory lock, so concurrent pods are safe. No Job exists. The terminal gateway only waits in `wait-schema`. A release is a restart, in this order, so the schema moves before anything depends on it:
 
 ```bash
-kubectl --context "$CTX" -n moks exec statefulset/moks-postgres -c postgres -- pg_isready -U moks -d moks
-kubectl --context "$CTX" -n moks rollout restart deploy/moks-api
-kubectl --context "$CTX" -n moks rollout status deploy/moks-api --timeout=300s
-kubectl --context "$CTX" -n moks rollout restart deploy/moks-worker deploy/moks-executor
-kubectl --context "$CTX" -n moks rollout status deploy/moks-worker --timeout=300s
-kubectl --context "$CTX" -n moks rollout status deploy/moks-executor --timeout=300s
-kubectl --context "$CTX" -n moks rollout restart deploy/moks-terminal    # mk4
+kubectl --context "$CTX" -n moks-sre exec statefulset/moks-postgres -c postgres -- pg_isready -U moks -d moks
+kubectl --context "$CTX" -n moks-sre rollout restart deploy/moks-api
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-api --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout restart deploy/moks-worker deploy/moks-executor
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-worker --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-executor --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout restart deploy/moks-terminal    # mk4
 ```
 
 **With `secrets.split` true,** only `moks-migrate` holds the schema owner, and runtime pods wait in `wait-schema`. Move its file into `apps/`, and sync it before anything that waits on it.
@@ -516,13 +516,13 @@ The Job's name is `moks-migrate-<hash>`, and the hash covers only the image stri
 
 ```bash
 # mutable tag: every release. digest: change the digest in Git, then delete only the old Job.
-kubectl --context "$CTX" -n moks delete job -l app.kubernetes.io/component=migrate
+kubectl --context "$CTX" -n moks-sre delete job -l app.kubernetes.io/component=migrate
 argocd app sync "$PREFIX-migrate"          # never add --prune
-kubectl --context "$CTX" -n moks wait --for=condition=complete job -l app.kubernetes.io/component=migrate --timeout=900s
+kubectl --context "$CTX" -n moks-sre wait --for=condition=complete job -l app.kubernetes.io/component=migrate --timeout=900s
 
 # Then the runtime pods, which now find the schema ready
-kubectl --context "$CTX" -n moks rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor
-kubectl --context "$CTX" -n moks rollout status deploy/moks-api --timeout=300s
+kubectl --context "$CTX" -n moks-sre rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor
+kubectl --context "$CTX" -n moks-sre rollout status deploy/moks-api --timeout=300s
 ```
 
 A Job's pod template is immutable, so a chart change to it under an unchanged name also fails to sync until the old Job is deleted. Syncing `moks-api` before the Job finishes does no damage, but its pods crash-loop until the schema arrives.

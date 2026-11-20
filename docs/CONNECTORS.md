@@ -97,7 +97,7 @@ text, trace ID, request ID, errors only), escaping user text so it cannot close 
 `loki_query` accepts LogQL whose every selector pins a permitted namespace.
 
 On mk4, Alloy collects only the namespaces listed in the tools repository's `config.alloy` and
-forwards only allowlisted JSON fields. Logs from other namespaces (for example `moks-lab`) are not
+forwards only allowlisted JSON fields. Logs from other namespaces (for example `moks-sre-lab`) are not
 in Loki until they are added there. Pod logs through the Kubernetes API still work.
 
 EKS has no Loki, so `roboshop-demo` reads mk4's through `https://jithendar.com` with `auth: basic`.

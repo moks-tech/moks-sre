@@ -37,6 +37,6 @@ api:
 # binds a Role in each namespace listed here.
 executor:
   enabled: true
-  namespaces: [moks-lab]
+  namespaces: [moks-sre-lab]
 
 # networkPolicy.apiServer.cidrs is set by the script: the API server's addresses differ per cluster.

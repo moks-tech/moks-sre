@@ -1,4 +1,4 @@
-# AppProject for MOKS: only this repository, only namespace moks, and only the cluster-scoped
+# AppProject for MOKS: only this repository, only namespace moks-sre (and its sandboxes), and only the cluster-scoped
 # kinds the chart needs (its read-only ClusterRole/Binding and the namespace).
 # The child Applications in hetzner/apps run here. The root does not: it writes Applications, so it has
 # its own project (project-root.yaml) and this one never gains the argocd namespace.
@@ -13,13 +13,13 @@ spec:
     - https://github.com/mrjithendar/moks-sre.git
   destinations:
     - server: https://kubernetes.default.svc
-      namespace: moks
+      namespace: moks-sre
     - server: https://kubernetes.default.svc
-      namespace: moks-diagnostics      # diagnostic session namespace (chart-managed)
+      namespace: moks-sre-diagnostics      # diagnostic session namespace (chart-managed)
     - server: https://kubernetes.default.svc
-      namespace: moks-terminals        # terminal session namespace, when terminal.enabled is true (chart-managed)
+      namespace: moks-sre-terminals        # terminal session namespace, when terminal.enabled is true (chart-managed)
     - server: https://kubernetes.default.svc
-      namespace: moks-lab              # executor RoleBinding; add every namespace listed in executor.namespaces
+      namespace: moks-sre-lab              # executor RoleBinding; add every namespace listed in executor.namespaces
     - server: https://kubernetes.default.svc
       namespace: jithendar          # Role for database backups (databaseBackups.namespaces)
     - server: https://kubernetes.default.svc

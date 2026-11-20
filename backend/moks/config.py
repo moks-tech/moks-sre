@@ -182,10 +182,10 @@ class Settings(BaseSettings):
     process_role: Literal["api", "worker", "executor", "terminal"] = "api"
     sync_timezone: str = "UTC"  # shown beside knowledge sync schedules
     database_volume_gib: int = 10  # capacity of the database volume, for the size alert
-    diagnostics_namespace: str = "moks-diagnostics"
+    diagnostics_namespace: str = "moks-sre-diagnostics"
     velero_namespace: str = "velero"
     # Terminal gateway. Profiles are JSON from the chart, so a change of IAM role is a reviewed change.
-    terminal_namespace: str = "moks-terminals"
+    terminal_namespace: str = "moks-sre-terminals"
     terminal_image: str = ""
     terminal_image_pull_secrets: str = ""
     terminal_service_account: str = "moks-terminal-session"
@@ -207,7 +207,7 @@ class Settings(BaseSettings):
     job_queue_limit: int = 500          # queued jobs per class; beyond this new work is refused
     job_environment_limit: int = 2      # running jobs per environment within a class
     investigation_queue_limit: int = 200
-    own_namespace: str = "moks"  # never a restore target: restoring over MOKS would stop the restore
+    own_namespace: str = "moks-sre"  # never a restore target: restoring over MOKS would stop the restore
 
     # Alerts: shared secret for the Alertmanager / Grafana webhook (Authorization: Bearer ...)
     alert_webhook_token: str = Field(default="", repr=False)

@@ -4,7 +4,7 @@ image:
   # Same release flow as mk4: CI moves latest, and pods get it when they restart (docs/RELEASES.md).
   tag: latest
   pullPolicy: Always
-imagePullSecrets: [{name: harbor-pull}]   # create it in moks first: tools deploy/minikube/harbor/registry.py pull-secrets --context <eks> --namespace moks
+imagePullSecrets: [{name: harbor-pull}]   # create it in moks first: tools deploy/minikube/harbor/registry.py pull-secrets --context <eks> --namespace moks-sre
 
 publicUrl: https://eks.jithendar.com/moks
 basePath: /moks
@@ -90,18 +90,18 @@ executor:
 
 databaseBackups:
   enabled: true
-  namespaces: [moks, roboshop-ai]
+  namespaces: [moks-sre, roboshop-ai]
 
 diagnostics:
   enabled: true
-  namespace: moks-diagnostics
+  namespace: moks-sre-diagnostics
 
 # Off: session isolation depends on NetworkPolicy, which this cluster does not enforce (below).
 # Read-only shells. A push changes nothing here: the gateway exists after roboshop-demo-moks-terminal is
 # synced by hand, and docs/TERMINAL.md lists what must pass before anyone else is granted the role.
 terminal:
   enabled: false
-  imagePullSecrets: [harbor-pull]   # in the terminal namespace, like moks above
+  imagePullSecrets: [harbor-pull]   # in the terminal namespace, like moks-sre above
   profiles:
     - name: roboshop-demo-readonly
       label: roboshop-demo, read-only

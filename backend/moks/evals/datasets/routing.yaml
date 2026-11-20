@@ -5,7 +5,7 @@ name: routing
 cases:
   - id: conceptual-no-live-queries
     question: Explain Argo CD.
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: payments-5c4-z9, labels: {app: payments}, waiting: CrashLoopBackOff, last: Error, restarts: 9}
@@ -20,7 +20,7 @@ cases:
 
   - id: deployment-guidance-not-an-incident
     question: How do I deploy checkout?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: checkout-6d9f-a1, labels: {app: checkout}}
@@ -36,7 +36,7 @@ cases:
 
   - id: troubleshooting-starts-at-the-target
     question: Why is checkout returning 502 errors?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: checkout-6d9f-a1, labels: {app: checkout}}
@@ -51,7 +51,7 @@ cases:
 
   - id: execution-request-changes-nothing
     question: Restart checkout now.
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: checkout-6d9f-a1, labels: {app: checkout}}

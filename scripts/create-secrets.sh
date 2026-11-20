@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Create the MOKS Secrets in namespace moks with freshly generated values.
+# Create the MOKS Secrets in namespace moks-sre with freshly generated values.
 #   scripts/create-secrets.sh [kube-context]
 # Refuses to overwrite existing Secrets: rotating the PostgreSQL password needs ALTER ROLE too.
 set -euo pipefail
 CONTEXT="${1:-mk4}"
-NS=moks
+NS=moks-sre
 k() { kubectl --context "$CONTEXT" "$@"; }
 
 k get namespace "$NS" >/dev/null 2>&1 || k create namespace "$NS"

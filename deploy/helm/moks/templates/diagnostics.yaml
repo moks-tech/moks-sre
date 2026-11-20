@@ -56,15 +56,15 @@ spec:
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
-metadata: {name: moks-diagnostics, namespace: {{ $ns }}}
+metadata: {name: moks-sre-diagnostics, namespace: {{ $ns }}}
 rules:
   - {apiGroups: [""], resources: [pods], verbs: [create, get, list, delete]}
   - {apiGroups: [""], resources: [pods/exec], verbs: [create, get]}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
-metadata: {name: moks-diagnostics, namespace: {{ $ns }}}
-roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: moks-diagnostics}
+metadata: {name: moks-sre-diagnostics, namespace: {{ $ns }}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: moks-sre-diagnostics}
 subjects:
   - {kind: ServiceAccount, name: moks-executor, namespace: {{ .Release.Namespace }}}
 {{- end }}

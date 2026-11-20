@@ -84,10 +84,10 @@ jobs:
         run: |
           helm lint deploy/helm/moks -f deploy/helm/moks/values-hetzner.yaml
           helm lint deploy/helm/moks -f deploy/helm/moks/values-eks.yaml --set image.tag=ci
-          helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-hetzner.yaml > /dev/null
-          helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-hetzner.yaml --set secrets.split=true,backup.enabled=true,backup.bucket=ci,velero.enabled=true > /dev/null
-          helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-eks.yaml --set image.tag=ci,secrets.split=true > /dev/null
-          helm template moks deploy/helm/moks -n moks -f deploy/helm/moks/values-kind.yaml > /dev/null
+          helm template moks deploy/helm/moks -n moks-sre -f deploy/helm/moks/values-hetzner.yaml > /dev/null
+          helm template moks deploy/helm/moks -n moks-sre -f deploy/helm/moks/values-hetzner.yaml --set secrets.split=true,backup.enabled=true,backup.bucket=ci,velero.enabled=true > /dev/null
+          helm template moks deploy/helm/moks -n moks-sre -f deploy/helm/moks/values-eks.yaml --set image.tag=ci,secrets.split=true > /dev/null
+          helm template moks deploy/helm/moks -n moks-sre -f deploy/helm/moks/values-kind.yaml > /dev/null
       - name: Argo CD Applications add up to the chart
         run: |
           pip install pyyaml
@@ -333,7 +333,7 @@ jobs:
           set -euo pipefail
           for pair in worker:moks-worker api:moks-api executor:moks-executor terminal:moks-terminal; do
             app="moks-${pair%%:*}"; deploy="${pair#*:}"
-            argocd app actions run "$app" restart --kind Deployment --resource-name "$deploy" --namespace moks
+            argocd app actions run "$app" restart --kind Deployment --resource-name "$deploy" --namespace moks-sre
             argocd app wait "$app" --health --timeout 600
           done
       # moks-crewai runs moks-crewai:latest, so it restarts only when that image was pushed for this commit.
@@ -347,7 +347,7 @@ jobs:
           fi
           if ! argocd app get moks-crewai -o name > /dev/null 2>&1; then echo "moks-crewai does not exist; skipped"; exit 0; fi
           if ! argocd app resources moks-crewai | grep -q 'Deployment.*moks-crewai'; then echo "crewai.enabled is false: no moks-crewai Deployment"; exit 0; fi
-          argocd app actions run moks-crewai restart --kind Deployment --resource-name moks-crewai --namespace moks
+          argocd app actions run moks-crewai restart --kind Deployment --resource-name moks-crewai --namespace moks-sre
           argocd app wait moks-crewai --health --timeout 600
       - name: The site runs this commit
         run: |

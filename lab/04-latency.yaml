@@ -2,7 +2,7 @@
 # order; orders logs per-request latency and exposes a Prometheus histogram on :9100/metrics.
 apiVersion: v1
 kind: ConfigMap
-metadata: {name: lab-apps, namespace: moks-lab}
+metadata: {name: lab-apps, namespace: moks-sre-lab}
 data:
   inventory.py: |
     import http.server, json, os, time
@@ -24,7 +24,7 @@ data:
         while True:
             t = time.time(); status = 200
             try:
-                urllib.request.urlopen("http://inventory.moks-lab.svc.cluster.local/stock/rb-100", timeout=5).read()
+                urllib.request.urlopen("http://inventory.moks-sre-lab.svc.cluster.local/stock/rb-100", timeout=5).read()
             except Exception:
                 status = 504
             d = time.time() - t
@@ -50,7 +50,7 @@ data:
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: inventory, namespace: moks-lab, labels: {app: inventory}}
+metadata: {name: inventory, namespace: moks-sre-lab, labels: {app: inventory}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: inventory}}
@@ -71,14 +71,14 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: inventory, namespace: moks-lab}
+metadata: {name: inventory, namespace: moks-sre-lab}
 spec:
   selector: {app: inventory}
   ports: [{name: http, port: 80, targetPort: http}]
 ---
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: orders, namespace: moks-lab, labels: {app: orders}}
+metadata: {name: orders, namespace: moks-sre-lab, labels: {app: orders}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: orders}}
@@ -98,7 +98,7 @@ spec:
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: orders-metrics, namespace: moks-lab}
+metadata: {name: orders-metrics, namespace: moks-sre-lab}
 spec:
   clusterIP: None
   selector: {app: orders}

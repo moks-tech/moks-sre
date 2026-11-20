@@ -6,12 +6,12 @@
 #   scripts/opensearch-secrets.sh --files DIR           write them to DIR instead (tests)
 #
 # The human admin password is the one value you need later:
-#   kubectl -n moks get secret moks-search-admin-login -o jsonpath='{.data.password}' | base64 -d
+#   kubectl -n moks-sre get secret moks-search-admin-login -o jsonpath='{.data.password}' | base64 -d
 #
 # Certificates last CERT_DAYS (default 1095). docs/OPENSEARCH.md has rotation.
 set -euo pipefail
 CERT_DAYS="${CERT_DAYS:-1095}"
-NS=moks
+NS=moks-sre
 FILES=""
 CONTEXT=mk4
 if [[ "${1:-}" == --files ]]; then FILES="${2:?usage: $0 --files DIR}"; else CONTEXT="${1:-mk4}"; fi
@@ -40,7 +40,7 @@ issue() {  # name subject extensions. PKCS#8, the only key format OpenSearch rea
   openssl x509 -req -in "$1.csr" -CA ca.crt -CAkey ca.key -CAcreateserial -days "$CERT_DAYS" -sha256 -extfile "$1.ext" -out "$1.crt" 2> /dev/null
 }
 issue node "/O=moks/CN=moks-search" \
-  "subjectAltName=DNS:moks-search,DNS:moks-search.moks,DNS:moks-search.moks.svc,DNS:moks-search.moks.svc.cluster.local,DNS:moks-search-0.moks-search.moks.svc.cluster.local,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n"
+  "subjectAltName=DNS:moks-search,DNS:moks-search.moks-sre,DNS:moks-search.moks-sre.svc,DNS:moks-search.moks-sre.svc.cluster.local,DNS:moks-search-0.moks-search.moks-sre.svc.cluster.local,DNS:localhost,IP:127.0.0.1\nextendedKeyUsage=serverAuth,clientAuth\n"
 issue admin "/O=moks/CN=moks-search-admin" "extendedKeyUsage=clientAuth\n"
 
 password() { openssl rand -hex 32; }

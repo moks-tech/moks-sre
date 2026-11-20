@@ -34,7 +34,7 @@ it again afterwards so CI releases resume.
    Deployments that run `latest`. Without it, restart by hand:
 
    ```bash
-   kubectl --context mk4 -n moks rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor deploy/moks-terminal
+   kubectl --context mk4 -n moks-sre rollout restart deploy/moks-api deploy/moks-worker deploy/moks-executor deploy/moks-terminal
    ```
 
 4. Check the running build: `curl https://jithendar.com/moks/api/health` shows the commit, and the profile menu warns if components differ.

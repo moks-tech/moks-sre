@@ -176,9 +176,9 @@ async def test_usage_writes_namespace_regex_prometheus_can_parse():
         def connector(self, name):
             return Prom()
 
-    await phase2._usage(Ctx(), ["moks-lab", "kube-system"], 7)
+    await phase2._usage(Ctx(), ["moks-sre-lab", "kube-system"], 7)
     assert len(sent) == 5
-    assert all('namespace=~"^(moks\\\\-lab|kube\\\\-system)$"' in q for q in sent)  # a bare \- is a PromQL parse error
+    assert all('namespace=~"^(moks\\\\-sre\\\\-lab|kube\\\\-system)$"' in q for q in sent)  # a bare \- is a PromQL parse error
 
 
 async def test_rightsizing_refuses_to_treat_missing_usage_as_zero(monkeypatch):

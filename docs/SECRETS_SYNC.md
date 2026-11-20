@@ -420,7 +420,7 @@ to the cluster or to AWS is marked; run those yourself.
    ```
 2. **(cluster write)** Deploy with `secretsSync.enabled=true` and `secretsSync.namespaces=[moks-secret-smoke]`.
    Run `scripts/create-secret-sync-secret.sh` with an IAM user limited to `moks-smoke/*`, then
-   `kubectl --context mk4 -n moks rollout restart deploy/moks-executor`.
+   `kubectl --context mk4 -n moks-sre rollout restart deploy/moks-executor`.
 3. Add an `aws_secrets` connector with `allowed_prefixes: ["moks-smoke/"]`,
    `kubernetes_namespaces: ["moks-secret-smoke"]` and `allow_delete: true`, and grant yourself
    `secrets_operator` and a second account `secrets_approver`.
