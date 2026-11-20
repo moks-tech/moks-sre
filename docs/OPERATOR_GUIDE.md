@@ -34,9 +34,9 @@ summary prints the commit and image digest.
 ## 2. Namespace and pull secret
 
 ```sh
-kubectl --context mk4 create namespace moks
+kubectl --context mk4 create namespace moks-sre
 # Secret harbor-pull (read-only robot$k8s-pull, never expires), from the tools repository:
-python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks --namespace moks-terminals --namespace moks-diagnostics
+python3 deploy/minikube/harbor/registry.py pull-secrets --namespace moks-sre --namespace moks-sre-terminals --namespace moks-sre-diagnostics
 ```
 
 Nothing refreshes it, because it does not expire. Fill a namespace that lacks it with tools `deploy/minikube/harbor/registry.py pull-secrets`.
@@ -68,12 +68,12 @@ kubectl --context mk4 apply -f deploy/argocd/project-root.yaml -f deploy/argocd/
 argocd app sync moks-root            # or the Argo CD UI at https://jithendar.com/argocd
 argocd app sync moks-foundation      # never tick "Prune" for any of these
 argocd app sync moks-database
-kubectl --context mk4 -n moks rollout status statefulset/moks-postgres
+kubectl --context mk4 -n moks-sre rollout status statefulset/moks-postgres
 argocd app sync moks-api
-kubectl --context mk4 -n moks rollout status deploy/moks-api
+kubectl --context mk4 -n moks-sre rollout status deploy/moks-api
 argocd app sync moks-worker moks-executor
-kubectl --context mk4 -n moks rollout status deploy/moks-worker
-kubectl --context mk4 -n moks rollout status deploy/moks-executor
+kubectl --context mk4 -n moks-sre rollout status deploy/moks-worker
+kubectl --context mk4 -n moks-sre rollout status deploy/moks-executor
 argocd app sync moks-terminal moks-routing
 ```
 
@@ -102,9 +102,9 @@ argocd app sync roboshop-demo-moks-root
 argocd app sync roboshop-demo-moks-foundation     # never tick "Prune" for any of these
 argocd app sync roboshop-demo-moks-routing        # STRICT mTLS and deny-by-default before any pod
 argocd app sync roboshop-demo-moks-database
-kubectl --context roboshop-demo -n moks rollout status statefulset/moks-postgres
+kubectl --context roboshop-demo -n moks-sre rollout status statefulset/moks-postgres
 argocd app sync roboshop-demo-moks-api
-kubectl --context roboshop-demo -n moks rollout status deploy/moks-api
+kubectl --context roboshop-demo -n moks-sre rollout status deploy/moks-api
 argocd app sync roboshop-demo-moks-worker roboshop-demo-moks-executor
 ```
 
@@ -117,8 +117,8 @@ Prometheus has mesh metrics only,
 RAG is keyword-only, and the terminal is off because this cluster does not enforce NetworkPolicy.
 Releases work as in [RELEASES.md](RELEASES.md), with `--context roboshop-demo`.
 
-Every pod in `moks` has a sidecar and PeerAuthentication is STRICT. Port 8080 accepts only the ingress
-gateway and PostgreSQL only the `moks` namespace, so these rules are what protect both ports while
+Every pod in `moks-sre` has a sidecar and PeerAuthentication is STRICT. Port 8080 accepts only the ingress
+gateway and PostgreSQL only the `moks-sre` namespace, so these rules are what protect both ports while
 NetworkPolicy is off. The sidecar needs `NET_ADMIN`, so the namespace's enforced pod security level is
 `privileged`. `roboshop-demo-moks-foundation` is the only Application that sets those labels. Changing
 them means syncing `roboshop-demo-moks-root`, then foundation, and pods get sidecars only when they restart. Nothing scrapes port 9464 here; a scraper would need an ALLOW rule.
@@ -128,7 +128,7 @@ them means syncing `roboshop-demo-moks-root`, then foundation, and pods get side
 The site admits nobody until a user exists (local mode has no setup page):
 
 ```sh
-kubectl --context mk4 -n moks exec -it deploy/moks-api -c api -- \
+kubectl --context mk4 -n moks-sre exec -it deploy/moks-api -c api -- \
   moks create-user you@example.com --password-prompt --grant admin
 ```
 
@@ -140,7 +140,7 @@ To switch to OIDC (for example Google), create a web OAuth client with redirect 
 `config.bootstrapAdmins` in `values-hetzner.yaml`, and add the client secret:
 
 ```sh
-kubectl --context mk4 -n moks patch secret moks-secrets --type merge \
+kubectl --context mk4 -n moks-sre patch secret moks-secrets --type merge \
   -p '{"stringData":{"MOKS_OIDC_CLIENT_SECRET":"<secret>"}}'
 ```
 
@@ -162,8 +162,8 @@ on each connector.
 **Settings → LLM providers → Add** sets the provider, model, budget and prices, then
 **Test** and **Activate** it. Credentials:
 
-- OpenAI or Gemini: `kubectl -n moks patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_OPENAI_API_KEY":"..."}}'`,
-  then `kubectl -n moks rollout restart deploy/moks-api deploy/moks-worker`. Reference it as
+- OpenAI or Gemini: `kubectl -n moks-sre patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_OPENAI_API_KEY":"..."}}'`,
+  then `kubectl -n moks-sre rollout restart deploy/moks-api deploy/moks-worker`. Reference it as
   *environment variable* `MOKS_CRED_OPENAI_API_KEY`.
 - Bedrock on mk4: `scripts/create-runtime-key.sh mk4` creates the access key of the Terraform
   user `moks-mk4-runtime` (allowed to invoke one inference profile only) and writes it into
@@ -185,7 +185,7 @@ In the **tools** repository:
 2. Grafana: add [../deploy/grafana/moks-dashboard.json](../deploy/grafana/moks-dashboard.json)
    as a `grafana-dashboards-moks` ConfigMap, mounted the same way as `grafana-dashboards-jithendar`.
 3. Alloy: add `moks` to `discovery.kubernetes.pods.namespaces`. The chart already grants Alloy
-   read access in `moks`.
+   read access in `moks-sre`.
 
 MOKS sends traces to `otel-collector.observability:4318` (Jaeger). Logs are JSON with
 `level`/`event`/`route`/`status`/`durationMs`, which Alloy keeps.
@@ -194,21 +194,21 @@ Sync the grafana, prometheus and loki Argo apps after committing; they have no a
 
 ## 10. Demo lab
 
-See [../lab/README.md](../lab/README.md). It applies to namespace `moks-lab`, and
-`kubectl delete namespace moks-lab` removes it.
+See [../lab/README.md](../lab/README.md). It applies to namespace `moks-sre-lab`, and
+`kubectl delete namespace moks-sre-lab` removes it.
 
 ## 11. Phases 2–4: what changes on mk4 and in what order
 
 The chart changes in this release add pods and RBAC. Review `argocd app diff` for each child, then
-sync **without prune**. Apply the AppProject first (it now allows `moks-diagnostics`, `moks-lab`,
+sync **without prune**. Apply the AppProject first (it now allows `moks-sre-diagnostics`, `moks-sre-lab`,
 `ResourceQuota`, `LimitRange` and `Role`):
 
 ```sh
 kubectl --context mk4 apply -f deploy/argocd/hetzner/project.yaml
 argocd app diff moks-foundation && argocd app sync moks-foundation
 argocd app diff moks-executor && argocd app sync moks-executor
-kubectl --context mk4 -n moks rollout status deploy/moks-api deploy/moks-worker deploy/moks-executor
-kubectl --context mk4 -n moks rollout status statefulset/moks-opensearch     # rag.backend: opensearch
+kubectl --context mk4 -n moks-sre rollout status deploy/moks-api deploy/moks-worker deploy/moks-executor
+kubectl --context mk4 -n moks-sre rollout status statefulset/moks-opensearch     # rag.backend: opensearch
 ```
 
 The API's init container runs migration `0002` automatically. Take a backup first
@@ -216,15 +216,15 @@ The API's init container runs migration `0002` automatically. Take a backup firs
 
 1. **Knowledge:** the seed creates the `moks-docs` GitHub source, and the worker syncs it within a
    minute. Add sources under **Runbooks & knowledge** (GitHub repo or uploads). Add a token (needed for
-   private repos, and to avoid [rate limits](#github-rate-limits) on public ones): `kubectl -n moks patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_GITHUB_TOKEN":"…"}}'`.
+   private repos, and to avoid [rate limits](#github-rate-limits) on public ones): `kubectl -n moks-sre patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_GITHUB_TOKEN":"…"}}'`.
 2. **Grafana:** create a service account with the Viewer role in Grafana (Administration →
    Service accounts), add a token, then:
-   `kubectl -n moks patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_GRAFANA_TOKEN":"glsa_…"}}'`
+   `kubectl -n moks-sre patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_CRED_GRAFANA_TOKEN":"glsa_…"}}'`
    and restart the API and worker. **Connectors → Test** should then pass.
 3. **FinOps:** set the real monthly server price in `values-hetzner.yaml` (`cost_model.monthly_cost_usd`).
    For AWS spend: `terraform apply` (with `finops_enabled = true`), run `scripts/create-runtime-key.sh mk4`,
    then uncomment the `aws_cost` connector. See [FINOPS.md](FINOPS.md).
-4. **Remediation:** the executor acts only in `executor.namespaces` (default `[moks-lab]`). To let
+4. **Remediation:** the executor acts only in `executor.namespaces` (default `[moks-sre-lab]`). To let
    MOKS act elsewhere, add the namespace there **and** to the AppProject destinations. Set the
    environment's policy under **Environments** (`max_replicas`, scale-to-zero, plan TTL).
    `mk4` is marked production, so every action needs a second person with the approver role, unless a global administrator requests it (recorded as `action.approval_waived`):
@@ -232,10 +232,10 @@ The API's init container runs migration `0002` automatically. Take a backup firs
 5. **Alerts:** to investigate firing Prometheus alerts automatically, tick
    *investigate firing alerts automatically* on the environment; the worker polls every 60 s. For
    Alertmanager or Grafana contact points, set a token:
-   `kubectl -n moks patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_ALERT_WEBHOOK_TOKEN":"'$(openssl rand -hex 24)'"}}'`
+   `kubectl -n moks-sre patch secret moks-secrets --type merge -p '{"stringData":{"MOKS_ALERT_WEBHOOK_TOKEN":"'$(openssl rand -hex 24)'"}}'`
    and point the webhook at `https://jithendar.com/moks/api/alerts/webhook/mk4` with header
    `Authorization: Bearer <token>`.
-6. **Diagnostic sessions:** the chart creates `moks-diagnostics` (quota, limits, egress policy).
+6. **Diagnostic sessions:** the chart creates `moks-sre-diagnostics` (quota, limits, egress policy).
    Start sessions under **Diagnostics**. They need no approval. **Quick check** tests DNS, the port, the certificate and HTTP for one target.
 7. **SRE skills:** 51 built-in skills ship in the image. Add your own through `customSkills` in the values
    ([SKILLS.md](SKILLS.md)).
@@ -247,7 +247,7 @@ The API's init container runs migration `0002` automatically. Take a backup firs
    The embedding model is seeded: `bge-m3` (Ollama at `http://bge-m3.embeddings:11434`, 1024 dimensions), the
    cluster's shared deployment from miniKube `deploy/minikube/embeddings/bge-m3`. It is activated only when no
    embedding model is active. Press **Test**, then **Rebuild index** under **Runbooks & knowledge** (or
-   `kubectl -n moks exec deploy/moks-worker -- moks reindex`). Until the rebuild finishes, search is keyword-only.
+   `kubectl -n moks-sre exec deploy/moks-worker -- moks reindex`). Until the rebuild finishes, search is keyword-only.
    bge-m3 embeds about 0.7 chunks a second, so the rebuild takes about 25 minutes per 1,000 chunks. Deleting
    `bge-m3` in the portal does not last: the seed creates it again, inactive, at the next pod start.
 
@@ -271,7 +271,7 @@ next index build adds the `chunk_embeddings.embedding` column that migration `00
    `kubectl -n postgres-db get database postgres-cluster-moks -o jsonpath='{.status.extensions}'`.
 2. Argo CD syncs `moks-foundation`, so `MOKS_RAG_BACKEND` is `postgres` and the pods roll. Search is keyword-only and
    says so until the next step.
-3. Knowledge → **Rebuild index**, or `kubectl -n moks exec deploy/moks-worker -- moks reindex`. bge-m3 embeds about
+3. Knowledge → **Rebuild index**, or `kubectl -n moks-sre exec deploy/moks-worker -- moks reindex`. bge-m3 embeds about
    0.7 chunks a second, so about 2,000 chunks take most of an hour; search stays on the keyword index until the switch.
 4. Check on the Knowledge page that the `postgres` index is active with full vector coverage, and that a search
    answers in hybrid mode.
@@ -288,10 +288,67 @@ next index build adds the `chunk_embeddings.embedding` column that migration `00
    kubectl get pv | grep data-moks-opensearch-0          # reclaim policy Retain: delete the PV by name
    ```
 
+   These ran in the old namespace `moks`. On mk4 only the claim was still there on 2026-11-20, and deleting `moks`
+   ([Moving to namespace moks-sre](#moving-to-namespace-moks-sre)) removes it; the PV still has to be deleted by name.
    A Retain local-path volume leaves its directory on the node
    (`/var/local-path-provisioner/pvc-…_moks_data-moks-opensearch-0` on worker2): remove it there to get the disk back.
 
 The OpenSearch generations stay in `embedding_indexes` as history; nothing reads them while the backend is `postgres`.
+
+## Moving to namespace moks-sre
+
+On 2026-11-20 everything MOKS runs moved from `moks` to `moks-sre`, and the session and lab namespaces took the same
+prefix: `moks-sre-diagnostics`, `moks-sre-terminals` and `moks-sre-lab`. Those three stay separate on purpose.
+Kubernetes scopes quotas, LimitRanges, Pod Security levels and RBAC by namespace, and it cannot narrow `pods/exec` to
+some pods. The terminal gateway and the executor may create pods and exec into them in the session namespaces; in
+`moks-sre` the same Role would reach moks-api and every Secret it mounts.
+
+Nothing in the namespace holds data (the database is CloudNativePG in `postgres-db`, crew memory is on R2), so the move
+is a second copy, a route switch and a delete. The route is the Istio gateway's delegation of `/moks`, which lives in
+the kubernetes repository, so the old copy keeps serving until that change is applied.
+
+1. **Before the merge** (only adds; the running portal is untouched): the namespaces, the hand-made Secrets and the
+   new destinations in the live AppProject. The executor writes Roles into `moks-sre-terminals` and `moks-sre-lab`, so
+   those must exist before Argo CD syncs. `postgres-db-credentials` is left to Terraform (step 4), which would refuse
+   to create a Secret that already exists.
+
+   ```sh
+   kubectl create namespace moks-sre
+   kubectl label namespace moks-sre app.kubernetes.io/part-of=moks istio-injection=enabled \
+     pod-security.kubernetes.io/enforce=baseline pod-security.kubernetes.io/warn=restricted
+   kubectl create namespace moks-sre-diagnostics
+   kubectl create namespace moks-sre-terminals
+   kubectl apply -f lab/00-namespace.yaml
+   copy() { kubectl -n moks get secret "$1" -o json \
+     | jq --arg ns "$2" '{apiVersion, kind, type, data, metadata: {name: .metadata.name, namespace: $ns}}' | kubectl create -f -; }
+   for s in harbor-pull moks-secrets moks-reranker-secrets moks-terminal-secrets moks-secret-sync; do copy "$s" moks-sre; done
+   copy harbor-pull moks-sre-terminals; copy harbor-pull moks-sre-diagnostics
+   for ns in moks-sre moks-sre-diagnostics moks-sre-terminals moks-sre-lab; do
+     kubectl -n argocd patch appproject moks --type json \
+       -p "[{\"op\":\"add\",\"path\":\"/spec/destinations/-\",\"value\":{\"server\":\"https://kubernetes.default.svc\",\"namespace\":\"$ns\"}}]"
+   done
+   ```
+
+   The AppProject is the gate: merged before it lists `moks-sre`, the Applications only report a destination that is
+   not permitted, and nothing moves. Patch it last, once the namespaces and Secrets are there.
+
+2. **Merge.** Argo CD syncs every Application into `moks-sre` and the chart labels the session namespaces. The old
+   objects in `moks` stay, because nothing prunes, and the old API keeps answering `/moks`. The ClusterRoleBindings and
+   the RoleBindings in other namespaces now name the new ServiceAccounts, so the old pods' Kubernetes reads fail from
+   here on: keep steps 2 to 4 short.
+3. **Wait** for `kubectl -n moks-sre get deploy` to show every Deployment ready, then stop the old background
+   workers so no job runs twice: `kubectl -n moks scale deploy/moks-worker deploy/moks-executor deploy/moks-crewai --replicas=0`.
+4. **Apply the kubernetes change** (its CI applies on merge): the gateway delegates `/moks` to `moks-sre/moks`,
+   Prometheus scrapes `moks-metrics.moks-sre`, bge-m3 and the mesh policies accept `moks-sre`, and Terraform moves
+   `postgres-db-credentials` to `moks-sre`.
+5. **Check** that `/moks` answers and an investigation completes, then run `scripts/deploy-hetzner.sh`: it applies
+   the AppProject from git, which drops the old namespaces, and waits for every Application to be Synced and Healthy.
+6. **Delete the old namespaces**, and the PV that the retired OpenSearch claim kept (reclaim policy Retain):
+
+   ```sh
+   kubectl delete namespace moks moks-diagnostics moks-terminals moks-lab
+   kubectl get pv | grep data-moks-opensearch-0          # delete it by name
+   ```
 
 ## OpenSearch at /opensearch
 
@@ -306,7 +363,7 @@ path shows the site's 404.
 
 ```sh
 PASS=$(openssl rand -hex 32)
-kubectl --context mk4 -n moks create secret generic moks-opensearch-auth \
+kubectl --context mk4 -n moks-sre create secret generic moks-opensearch-auth \
   --type=kubernetes.io/basic-auth --from-literal=username=moks --from-literal=password="$PASS"
 echo "$PASS"   # kept nowhere else
 kubectl --context mk4 apply -f deploy/argocd/hetzner/project.yaml
@@ -327,11 +384,11 @@ source of truth, so `moks reindex` rebuilds the knowledge index. Saved dashboard
 
 ```sh
 PASS=$(openssl rand -hex 32)
-kubectl --context mk4 -n moks create secret generic moks-opensearch-dashboards-auth \
+kubectl --context mk4 -n moks-sre create secret generic moks-opensearch-dashboards-auth \
   --type=kubernetes.io/basic-auth --from-literal=username=moks --from-literal=password="$PASS"
 echo "$PASS"   # kept nowhere else
 argocd app sync moks-opensearch && argocd app sync moks-routing   # never --prune
-kubectl --context mk4 -n moks rollout status deploy/moks-opensearch-dashboards --timeout=300s
+kubectl --context mk4 -n moks-sre rollout status deploy/moks-opensearch-dashboards --timeout=300s
 ```
 
 Sign in, open **Dashboards Management > Index patterns**, create `moks-chunks-*`, then use **Discover**. To remove
@@ -420,7 +477,7 @@ for Deployments. **Services → Manage…** edits the selector or session affini
 
 Each option creates an action plan, so the usual review applies: production plans need a second person unless an administrator requests them,
 and nothing changes until it is executed. Execution only works in the namespaces listed in
-`executor.namespaces`, which on mk4 is `moks-lab`. Add a namespace there to manage it. StatefulSets and
+`executor.namespaces`, which on mk4 is `moks-sre-lab`. Add a namespace there to manage it. StatefulSets and
 DaemonSets can be viewed and investigated but have no actions yet.
 
 ## Detection
@@ -509,7 +566,7 @@ can lose is about an hour.
 4. Set `backup.enabled`, `backup.bucket`, and for R2 `backup.endpoint` and `backup.region: auto`.
 5. Apply `deploy/argocd/hetzner/project.yaml`, which now allows CronJobs, move `deploy/argocd/hetzner/optional/moks-backup.yaml` into `apps/`, push, sync `moks-root`, then sync `moks-backup`.
 6. Run one by hand and check the stored copy:
-   `kubectl --context mk4 -n moks create job --from=cronjob/moks-backup first-backup`
+   `kubectl --context mk4 -n moks-sre create job --from=cronjob/moks-backup first-backup`
 
 A warning appears on **Overview** when no backup has succeeded for three hours. For Prometheus alerts, add
 `deploy/grafana/prometheus-scrape.yaml` and `deploy/grafana/moks-alerts.yaml` to the tools repository, and
@@ -536,13 +593,13 @@ Differences against a live database are expected and are not a verdict. `moks ba
 Use a scratch database, never `moks`:
 
 ```sh
-kubectl --context mk4 -n moks exec statefulset/moks-postgres -- psql -U moks -d postgres -c 'CREATE DATABASE moks_restore_test'
+kubectl --context mk4 -n moks-sre exec statefulset/moks-postgres -- psql -U moks -d postgres -c 'CREATE DATABASE moks_restore_test'
 # fetch and decrypt the newest backup, from a pod or machine holding the moks-backup values
 moks backup fetch --out /work/moks.dump
 pg_restore --no-owner -h moks-postgres -U moks -d moks_restore_test --exit-on-error /work/moks.dump
 MOKS_COMPARE_SOURCE_URL=... MOKS_COMPARE_TARGET_URL=... moks backup compare
 MOKS_DATABASE_URL=<scratch url> moks verify-audit
-kubectl --context mk4 -n moks exec statefulset/moks-postgres -- psql -U moks -d postgres -c 'DROP DATABASE moks_restore_test'
+kubectl --context mk4 -n moks-sre exec statefulset/moks-postgres -- psql -U moks -d postgres -c 'DROP DATABASE moks_restore_test'
 ```
 
 `compare` fails if a table is missing or holds more rows than its source. A live source moves on, so a
@@ -554,17 +611,17 @@ schema change and at least quarterly.
 Use this when the database is lost. Stop writers first, so nothing lands in a half-restored database.
 
 ```sh
-kubectl --context mk4 -n moks scale deploy/moks-api deploy/moks-worker deploy/moks-executor --replicas=0
-kubectl --context mk4 -n moks patch cronjob moks-backup -p '{"spec":{"suspend":true}}'
+kubectl --context mk4 -n moks-sre scale deploy/moks-api deploy/moks-worker deploy/moks-executor --replicas=0
+kubectl --context mk4 -n moks-sre patch cronjob moks-backup -p '{"spec":{"suspend":true}}'
 # recreate the database, keeping any surviving data aside rather than dropping it
-kubectl --context mk4 -n moks exec statefulset/moks-postgres -- psql -U moks -d postgres \
+kubectl --context mk4 -n moks-sre exec statefulset/moks-postgres -- psql -U moks -d postgres \
   -c 'ALTER DATABASE moks RENAME TO moks_damaged' -c 'CREATE DATABASE moks OWNER moks'
 moks backup fetch --out moks.dump        # or scripts/decrypt-backup.py if MOKS is unavailable
 pg_restore --no-owner -h <postgres> -U moks -d moks --exit-on-error moks.dump
 MOKS_DATABASE_URL=<url> moks verify-audit
-kubectl --context mk4 -n moks scale deploy/moks-api --replicas=2
-kubectl --context mk4 -n moks scale deploy/moks-worker deploy/moks-executor --replicas=1
-kubectl --context mk4 -n moks patch cronjob moks-backup -p '{"spec":{"suspend":false}}'
+kubectl --context mk4 -n moks-sre scale deploy/moks-api --replicas=2
+kubectl --context mk4 -n moks-sre scale deploy/moks-worker deploy/moks-executor --replicas=1
+kubectl --context mk4 -n moks-sre patch cronjob moks-backup -p '{"spec":{"suspend":false}}'
 ```
 
 If the whole host is gone, rebuild the cluster and recreate the Secrets first, including the encryption key
@@ -584,16 +641,16 @@ previous commit (step 4). Roll back data by restoring the backup.
 
 | Symptom | Check |
 |---|---|
-| `/moks` serves the jithendar.com 404 page | Ingress `moks` exists and Traefik picked it up: `kubectl -n moks get ingress`; check the Traefik logs |
+| `/moks` serves the jithendar.com 404 page | Ingress `moks` exists and Traefik picked it up: `kubectl -n moks-sre get ingress`; check the Traefik logs |
 | `/moks/assets/*.js` returns 404 | The image was built with a different `MOKS_BASE_PATH` than `basePath` in values |
 | Login loops back to login | `MOKS_PUBLIC_URL` scheme/host must match the browser; cookies are `Secure`, so HTTPS is required |
 | "CSRF check failed" | Origin differs from `MOKS_PUBLIC_URL` (for example www vs apex); www redirects to apex on mk4 |
-| Investigation stays `queued` | `kubectl -n moks logs deploy/moks-worker`; worker replicas > 0; database reachable |
+| Investigation stays `queued` | `kubectl -n moks-sre logs deploy/moks-worker`; worker replicas > 0; database reachable |
 | Connector test `forbidden` | `moks-reader` ClusterRoleBinding exists; with `rbac.clusterWide=false`, the namespace is listed |
 | Connector test `unavailable` | NetworkPolicy egress (`networkPolicy.inCluster`, `apiServer.cidrs`), service DNS name, path prefix (`/prometheus`) |
 | Plan execution fails with "changed after review" | The Deployment changed (another rollout, HPA) after the plan was made; create a new plan |
-| Plan stays `queued` | `kubectl -n moks logs deploy/moks-executor`; the executor needs a RoleBinding in that namespace (`executor.namespaces`) |
-| Knowledge search empty | **Runbooks & knowledge → Sources**: last sync status/error; `kubectl -n moks logs deploy/moks-worker` |
+| Plan stays `queued` | `kubectl -n moks-sre logs deploy/moks-executor`; the executor needs a RoleBinding in that namespace (`executor.namespaces`) |
+| Knowledge search empty | **Runbooks & knowledge → Sources**: last sync status/error; `kubectl -n moks-sre logs deploy/moks-worker` |
 | OpenSearch pod restarting | Needs ~2 GiB; check node memory and `rag.opensearch.nodeName` pinning. `AccessDeniedException` on `data/nodes`: set `rag.opensearch.fixVolumePermissions: true` |
 | SSE updates only arrive at the end | Something buffers the response: do not attach compress or buffering middleware to the MOKS router |
 
@@ -619,7 +676,7 @@ To roll back the image, follow docs/RELEASES.md: the schema stays and older buil
 ## Logs and traces from MOKS itself
 
 Every process writes one JSON object per line to stdout, including warnings and crashes with a redacted stack.
-On mk4, Alloy collects the `moks` namespace into Loki, so MOKS's own logs appear on the **Logs** page. Alloy keeps
+On mk4, Alloy collects the `moks-sre` namespace into Loki, so MOKS's own logs appear on the **Logs** page. Alloy keeps
 only its allowlisted fields and rewrites each line as `event=... level=... route=...`, which keeps messages and
 stack traces out of Loki. Those stay in `kubectl logs`. A new namespace needs both `templates/alloy-logs.yaml` and
 an entry in `observability/loki/config.alloy` in the tools repo.
@@ -648,8 +705,8 @@ With tracing on, the request id **is** the trace id (unless the caller sent a pl
 as **Reference** on server errors, and every response carries `X-Request-ID` and `X-Trace-ID`. One id then finds:
 
 - the trace in Jaeger (`/api/v3/traces/<id>` on the jaeger service, or the search box in the UI);
-- the lines in Loki: `{namespace="moks"} |= "trace_id=<id>"` (trace_id passes the Alloy allowlist);
-- the full lines in `kubectl -n moks logs deploy/moks-api | grep <id>`.
+- the lines in Loki: `{namespace="moks-sre"} |= "trace_id=<id>"` (trace_id passes the Alloy allowlist);
+- the full lines in `kubectl -n moks-sre logs deploy/moks-api | grep <id>`.
 
 Each line written inside a unit of work carries that unit's ids without the call site passing them: `request_id` and
 `user_id` for API requests; `job_id`, `job_type` and `attempt` for jobs; `investigation_id`, `environment`,
@@ -694,7 +751,7 @@ Rollback: redeploy the previous image digest. The extra columns and tables are i
 ## Deploying to mk4 (Hetzner k3s)
 
 mk4 is the Hetzner k3s cluster (`jithendar-master1` and two workers). MOKS uses the shared CloudNativePG
-database `postgres-db/postgres-cluster` (Secret `moks/postgres-db-credentials`), and Argo CD deploys
+database `postgres-db/postgres-cluster` (Secret `moks-sre/postgres-db-credentials`), and Argo CD deploys
 `deploy/argocd/hetzner` with `values-hetzner.yaml` from origin/master.
 
 1. `scripts/create-secrets-hetzner.sh`: moks-secrets (database URL from postgres-db-credentials), moks-terminal-secrets,

@@ -51,7 +51,7 @@ resource "aws_iam_role_policy" "eks_runtime_bedrock" {
 resource "aws_eks_pod_identity_association" "eks_runtime" {
   count           = var.eks_runtime_cluster_name != "" ? 1 : 0
   cluster_name    = var.eks_runtime_cluster_name
-  namespace       = "moks"
+  namespace       = "moks-sre"
   service_account = "moks"
   role_arn        = aws_iam_role.eks_runtime[0].arn
 }

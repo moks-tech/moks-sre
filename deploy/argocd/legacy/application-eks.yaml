@@ -24,7 +24,7 @@ spec:
       valueFiles: [values-eks.yaml]
   destination:
     name: roboshop-demo
-    namespace: moks
+    namespace: moks-sre
   syncPolicy:
     syncOptions:
       - CreateNamespace=true

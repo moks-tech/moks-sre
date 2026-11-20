@@ -7,7 +7,7 @@
       "Action": "sts:AssumeRoleWithWebIdentity",
       "Condition": {
         "StringEquals": {
-          "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:sub": "system:serviceaccount:moks:moks",
+          "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:sub": "system:serviceaccount:moks-sre:moks",
           "oidc.eks.<region>.amazonaws.com/id/<oidc-id>:aud": "sts.amazonaws.com"
         }
       }

@@ -13,11 +13,11 @@ spec:
     - https://github.com/mrjithendar/moks-sre.git
   destinations:
     - name: roboshop-demo
-      namespace: moks
+      namespace: moks-sre
     - name: roboshop-demo
-      namespace: moks-terminals        # terminal session namespace (chart-managed)
+      namespace: moks-sre-terminals        # terminal session namespace (chart-managed)
     - name: roboshop-demo
-      namespace: moks-diagnostics      # diagnostic session namespace (chart-managed)
+      namespace: moks-sre-diagnostics      # diagnostic session namespace (chart-managed)
     - name: roboshop-demo
       namespace: roboshop-ai           # Role for database backups (databaseBackups.namespaces)
   clusterResourceWhitelist:

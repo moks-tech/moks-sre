@@ -12,10 +12,10 @@ set -euo pipefail
 CONTEXT="${1:-mk4}"
 USER_NAME="${IAM_USER:-moks-terminal-gateway}"
 SECRET=moks-terminal-secrets
-k() { kubectl --context "$CONTEXT" -n moks "$@"; }
+k() { kubectl --context "$CONTEXT" -n moks-sre "$@"; }
 
 aws iam get-user --user-name "$USER_NAME" >/dev/null || { echo "IAM user $USER_NAME not found; run terraform apply in deploy/terraform with terminal_enabled = true first." >&2; exit 1; }
-k get secret moks-secrets >/dev/null || { echo "Secret moks/moks-secrets missing; run scripts/create-secrets.sh first." >&2; exit 1; }
+k get secret moks-secrets >/dev/null || { echo "Secret moks-sre/moks-secrets missing; run scripts/create-secrets.sh first." >&2; exit 1; }
 
 OLD_KEYS="$(aws iam list-access-keys --user-name "$USER_NAME" --query 'AccessKeyMetadata[].AccessKeyId' --output text)"
 EXISTS="$(k get secret "$SECRET" --ignore-not-found -o name)"
@@ -44,7 +44,7 @@ work, name = sys.argv[1:3]
 key = json.load(open(f"{work}/key"))["AccessKey"]
 password = open(f"{work}/password").read().strip()
 session = base64.b64decode(json.load(open(f"{work}/source"))["data"]["MOKS_SESSION_SECRET"]).decode()
-json.dump({"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {"name": name, "namespace": "moks"},
+json.dump({"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": {"name": name, "namespace": "moks-sre"},
            "stringData": {"MOKS_DATABASE_URL": f"postgresql+asyncpg://moks_terminal:{password}@moks-postgres:5432/moks",
                           "MOKS_SESSION_SECRET": session,
                           "AWS_ACCESS_KEY_ID": key["AccessKeyId"], "AWS_SECRET_ACCESS_KEY": key["SecretAccessKey"]}}, sys.stdout)

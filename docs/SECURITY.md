@@ -206,7 +206,7 @@ PostgreSQL accepts only MOKS pods and has no egress.
 
 ## Diagnostic sessions
 
-Session pods run in `moks-diagnostics` with no ServiceAccount token, `activeDeadlineSeconds`, a
+Session pods run in `moks-sre-diagnostics` with no ServiceAccount token, `activeDeadlineSeconds`, a
 ResourceQuota and LimitRange, and a NetworkPolicy allowing DNS and egress except link-local/metadata
 and the Kubernetes API. They run non-root with all capabilities dropped. **Elevated** sessions run
 as root inside the pod, for catalog OS packages. No session needs an approval, in any environment:

@@ -1,4 +1,4 @@
-# The terminal gateway, session identities and the moks-terminals namespace with its quota and
+# The terminal gateway, session identities and the moks-sre-terminals namespace with its quota and
 # default-deny NetworkPolicy. Optional: apply this file by hand, once docs/TERMINAL.md's steps are done.
 # Manual sync, never with prune (docs/ARGOCD_APP_SPLIT.md).
 apiVersion: argoproj.io/v1alpha1
@@ -23,7 +23,7 @@ spec:
         - {name: resourceGroup, value: terminal}
   destination:
     name: roboshop-demo
-    namespace: moks
+    namespace: moks-sre
   syncPolicy:
     automated:
       enabled: true

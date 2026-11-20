@@ -20,7 +20,7 @@ vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
 const options = { idle_minutes: 15, max_minutes: 60, min_minutes: 15, kube_namespaces: ["shop"], recording: { text: "MOKS does not record what is typed or shown in a terminal." },
   profiles: [{ name: "ro", label: "read-only", environment: "mk4", account: "111122223333", role_arn: "arn:aws:iam::111122223333:role/moks-terminal-readonly", regions: ["us-east-1"], clusters: ["in-cluster"] }] };
 const ready = { id: "s1", mine: true, owner: "me@example.com", status: "ready", purpose: "Checking checkout", environment: "mk4", account: "111122223333", region: "us-east-1", cluster: "in-cluster", namespaces: ["shop"],
-  aws_identity: "arn:aws:sts::111122223333:assumed-role/moks-terminal-readonly/moks-term-s1", kube_identity: "system:serviceaccount:moks-terminals:moks-terminal-session",
+  aws_identity: "arn:aws:sts::111122223333:assumed-role/moks-terminal-readonly/moks-term-s1", kube_identity: "system:serviceaccount:moks-sre-terminals:moks-terminal-session",
   expires_at: new Date(Date.now() + 3 * 60_000).toISOString(), credential_expires_at: new Date(Date.now() + 3 * 60_000).toISOString() };
 const responses: Record<string, unknown> = {};
 const calls = vi.hoisted(() => [] as { path: string; body: unknown }[]);

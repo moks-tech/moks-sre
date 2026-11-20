@@ -20,25 +20,25 @@ Grants live in [`backend/moks/db_roles.py`](../backend/moks/db_roles.py). The AP
 Generate four database passwords, then create the Secrets from your password manager. Only the variable names below are fixed. Do not put real values in Git.
 
 ```sh
-kubectl -n moks create secret generic moks-migrate-secrets \
+kubectl -n moks-sre create secret generic moks-migrate-secrets \
   --from-literal=MOKS_DATABASE_URL='postgresql+asyncpg://moks:<owner password>@moks-postgres:5432/moks' \
   --from-literal=MOKS_SESSION_SECRET='<same value as today>' \
   --from-literal=MOKS_DB_PASSWORD_API='<new>' --from-literal=MOKS_DB_PASSWORD_WORKER='<new>' \
   --from-literal=MOKS_DB_PASSWORD_EXECUTOR='<new>' --from-literal=MOKS_DB_PASSWORD_BACKUP='<new>'
 
-kubectl -n moks create secret generic moks-api-secrets \
+kubectl -n moks-sre create secret generic moks-api-secrets \
   --from-literal=MOKS_DATABASE_URL='postgresql+asyncpg://moks_api:<new>@moks-postgres:5432/moks' \
   --from-literal=MOKS_SESSION_SECRET='<same value as today>' \
   --from-literal=MOKS_OIDC_CLIENT_SECRET='<if used>' --from-literal=MOKS_ALERT_WEBHOOK_TOKEN='<if used>' \
   --from-literal=MOKS_CRED_R2_ACCESS_KEY_ID='<for the storage test>' --from-literal=MOKS_CRED_R2_SECRET_ACCESS_KEY='<for the storage test>' \
   --from-literal=MOKS_CRED_R2_SSE_KEY='<for the storage test>'
 
-kubectl -n moks create secret generic moks-worker-secrets \
+kubectl -n moks-sre create secret generic moks-worker-secrets \
   --from-literal=MOKS_DATABASE_URL='postgresql+asyncpg://moks_worker:<new>@moks-postgres:5432/moks' \
   --from-literal=MOKS_SESSION_SECRET='<same value as today>' \
   --from-literal=MOKS_CRED_<each read connector and LLM key>='<value>'
 
-kubectl -n moks create secret generic moks-executor-secrets \
+kubectl -n moks-sre create secret generic moks-executor-secrets \
   --from-literal=MOKS_DATABASE_URL='postgresql+asyncpg://moks_executor:<new>@moks-postgres:5432/moks' \
   --from-literal=MOKS_SESSION_SECRET='<same value as today>' \
   --from-literal=MOKS_CRED_<write credentials and git token>='<value>' \
@@ -57,8 +57,8 @@ On EKS, prefer IAM roles for AWS access: set `serviceAccount.componentAnnotation
 Take and verify a database backup first. The next two commands only add roles and grants, and the migration 0014 trigger only acts for `moks_api`.
 
 ```sh
-kubectl -n moks exec deploy/moks-api -c api -- moks migrate
-kubectl -n moks exec deploy/moks-api -c api -- env MOKS_DB_PASSWORD_API='<new>' MOKS_DB_PASSWORD_WORKER='<new>' \
+kubectl -n moks-sre exec deploy/moks-api -c api -- moks migrate
+kubectl -n moks-sre exec deploy/moks-api -c api -- env MOKS_DB_PASSWORD_API='<new>' MOKS_DB_PASSWORD_WORKER='<new>' \
   MOKS_DB_PASSWORD_EXECUTOR='<new>' MOKS_DB_PASSWORD_BACKUP='<new>' moks db-grants
 ```
 

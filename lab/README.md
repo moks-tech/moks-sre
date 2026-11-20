@@ -1,20 +1,20 @@
 # MOKS demo incident lab
 
-Four reproducible incidents in namespace `moks-lab`, each with expected evidence and an
+Four reproducible incidents in namespace `moks-sre-lab`, each with expected evidence and an
 authorized fix. All images are multi-arch (arm64 works on mk4), every pod runs non-root with a
 read-only root filesystem (`restricted` Pod Security), and the whole lab uses under 0.5 CPU and
 400 MiB.
 
 ```sh
 kubectl --context mk4 apply -f lab/00-namespace.yaml
-kubectl --context mk4 apply -f lab/alloy-logs-role.yaml   # optional: Loki evidence (also add moks-lab to Alloy's namespaces)
+kubectl --context mk4 apply -f lab/alloy-logs-role.yaml   # optional: Loki evidence (also add moks-sre-lab to Alloy's namespaces)
 ```
 
-Ask MOKS from **Investigate**, and add "in moks-lab" to each question below so it does not match a
+Ask MOKS from **Investigate**, and add "in moks-sre-lab" to each question below so it does not match a
 workload of the same name elsewhere. The report's
 **Suggested actions** (from skills) and **Propose as action plan** turn a remediation into a
 reviewed plan: a second person approves it (mk4 is production), the executor applies it to
-`moks-lab` (`executor.namespaces`), validates the rollout and restores the previous state if
+`moks-sre-lab` (`executor.namespaces`), validates the rollout and restores the previous state if
 validation fails. The `kubectl` commands below are the manual equivalent. Each fix should be followed by a fresh
 investigation to validate recovery; MOKS never claims recovery itself.
 
@@ -47,10 +47,10 @@ pod logs `{"status":"502"}` every 2 seconds.
 **Authorized remediation:**
 
 ```sh
-kubectl --context mk4 -n moks-lab patch service checkout --type merge -p '{"spec":{"selector":{"app":"checkout"}}}'
+kubectl --context mk4 -n moks-sre-lab patch service checkout --type merge -p '{"spec":{"selector":{"app":"checkout"}}}'
 ```
 
-**Validate:** `kubectl -n moks-lab get endpointslices -l kubernetes.io/service-name=checkout`
+**Validate:** `kubectl -n moks-sre-lab get endpointslices -l kubernetes.io/service-name=checkout`
 shows 2 ready addresses, the `traffic` logs switch to `200`, and a new investigation has no
 selector finding.
 
@@ -73,8 +73,8 @@ kubectl --context mk4 apply -f lab/02-crashloop-config.yaml
 **Authorized remediation:**
 
 ```sh
-kubectl --context mk4 -n moks-lab patch configmap payments-config --type merge -p '{"data":{"PAYMENT_MODE":"sandbox"}}'
-kubectl --context mk4 -n moks-lab rollout restart deploy/payments
+kubectl --context mk4 -n moks-sre-lab patch configmap payments-config --type merge -p '{"data":{"PAYMENT_MODE":"sandbox"}}'
+kubectl --context mk4 -n moks-sre-lab rollout restart deploy/payments
 ```
 
 **Validate:** the pod is Running and Ready with no new restarts; its logs show `"event":"ready"`.
@@ -100,7 +100,7 @@ kubectl --context mk4 apply -f lab/03-oomkilled.yaml
 **Authorized remediation** (reviewed configuration change):
 
 ```sh
-kubectl --context mk4 -n moks-lab set resources deploy/cache --limits=memory=256Mi --requests=memory=192Mi
+kubectl --context mk4 -n moks-sre-lab set resources deploy/cache --limits=memory=256Mi --requests=memory=192Mi
 ```
 
 **Validate:** the pod logs `"event":"ready"`, restarts stop, and memory plateaus below the new limit.
@@ -110,7 +110,7 @@ kubectl --context mk4 -n moks-lab set resources deploy/cache --limits=memory=256
 ```sh
 kubectl --context mk4 apply -f lab/04-latency.yaml
 # wait ~2 minutes for a healthy baseline, then introduce the regression as a rollout:
-kubectl --context mk4 -n moks-lab set env deploy/inventory DELAY_MS=1500
+kubectl --context mk4 -n moks-sre-lab set env deploy/inventory DELAY_MS=1500
 ```
 
 `orders` calls `inventory` every second and logs `durationMs`. The second command creates a new
@@ -125,7 +125,7 @@ kubectl --context mk4 -n moks-lab set env deploy/inventory DELAY_MS=1500
   explicitly not proof.
 - `k8s_pod_logs orders`: `durationMs` jumps from about 20–40 to about 1,500, at level `warn`,
   after T.
-- Optional metrics: add a scrape job for `orders-metrics.moks-lab.svc:9100` (DNS SD, as for
+- Optional metrics: add a scrape job for `orders-metrics.moks-sre-lab.svc:9100` (DNS SD, as for
   MOKS) and query
   `histogram_quantile(0.95, rate(lab_order_duration_seconds_bucket[1m]))`.
 
@@ -134,7 +134,7 @@ kubectl --context mk4 -n moks-lab set env deploy/inventory DELAY_MS=1500
 **Authorized remediation:** roll back the dependency to the previous revision:
 
 ```sh
-kubectl --context mk4 -n moks-lab rollout undo deploy/inventory
+kubectl --context mk4 -n moks-sre-lab rollout undo deploy/inventory
 ```
 
 **Validate:** `durationMs` returns to baseline in the `orders` logs, and the rollout history
@@ -145,7 +145,7 @@ shows revision 3 (= revision 1's template).
 ## Cleanup
 
 ```sh
-kubectl --context mk4 delete namespace moks-lab
+kubectl --context mk4 delete namespace moks-sre-lab
 ```
 
 ## Verified so far

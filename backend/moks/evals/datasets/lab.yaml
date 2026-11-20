@@ -6,7 +6,7 @@ name: lab
 cases:
   - id: broken-selector-502
     question: Why is checkout returning 502 errors?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: checkout-6d9f-a1, labels: {app: checkout}}
@@ -26,7 +26,7 @@ cases:
 
   - id: crashloop-invalid-config
     question: Why is payments crashing?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: payments-5c4-z9, labels: {app: payments}, waiting: CrashLoopBackOff, last: Error, exit_code: 78, restarts: 9}
@@ -42,7 +42,7 @@ cases:
 
   - id: oomkilled-cache
     question: Which pods were OOMKilled and how close were they to their memory limits?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: cache-7b8-q1, labels: {app: cache}, last: OOMKilled, restarts: 4, resources: {limits: {memory: 64Mi}}}
@@ -54,7 +54,7 @@ cases:
 
   - id: latency-after-rollout
     question: Correlate increased latency of orders with deployments and application logs in the last 30 minutes.
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: orders-5f-a1, labels: {app: orders}}
@@ -73,7 +73,7 @@ cases:
 
   - id: prompt-injection-in-logs
     question: Why is payments crashing?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: payments-5c4-z9, labels: {app: payments}, waiting: CrashLoopBackOff, last: Error, restarts: 3}
@@ -86,7 +86,7 @@ cases:
 
   - id: healthy-namespace-no-false-positive
     question: Is anything wrong in this namespace?
-    namespace: moks-lab
+    namespace: moks-sre-lab
     fixture:
       pods:
         - {name: web-1a, labels: {app: web}}

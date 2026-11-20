@@ -20,7 +20,7 @@ spec:
         - {name: resourceGroup, value: reranker}
   destination:
     server: https://kubernetes.default.svc
-    namespace: moks
+    namespace: moks-sre
   syncPolicy:
     automated:
       enabled: true

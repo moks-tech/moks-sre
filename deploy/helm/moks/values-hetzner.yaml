@@ -115,7 +115,7 @@ istio:
   delegate: true
 
 # The shared CloudNativePG cluster postgres-db/postgres-cluster (miniKube minikube-infrastructure/postgres.tf).
-# MOKS_DATABASE_URL in moks-secrets points at its pooler, from Secret moks/postgres-db-credentials.
+# MOKS_DATABASE_URL in moks-secrets points at its pooler, from Secret moks-sre/postgres-db-credentials.
 postgres:
   bundled: false
 
@@ -129,20 +129,20 @@ rag:
 
 executor:
   enabled: true
-  namespaces: [moks-lab]   # add namespaces (e.g. roboshop-ai) only when you want MOKS to act there
+  namespaces: [moks-sre-lab]   # add namespaces (e.g. roboshop-ai) only when you want MOKS to act there
 
 databaseBackups:
   enabled: true
-  namespaces: [moks, jithendar, roboshop-ai]   # namespaces must exist
+  namespaces: [moks-sre, jithendar, roboshop-ai]   # namespaces must exist
 
 diagnostics:
   enabled: true
-  namespace: moks-diagnostics
+  namespace: moks-sre-diagnostics
 
 # Web terminal (docs/TERMINAL.md). Sessions run moks-terminal:latest from Harbor (values.yaml terminal.image).
 terminal:
   enabled: true
-  imagePullSecrets: [harbor-pull]   # in moks-terminals: tools deploy/minikube/harbor/registry.py pull-secrets
+  imagePullSecrets: [harbor-pull]   # in moks-sre-terminals: tools deploy/minikube/harbor/registry.py pull-secrets
   profiles:
     - name: mk4-readonly
       label: mk4, read-only
@@ -153,7 +153,7 @@ terminal:
       eksClusters: []
       inCluster: true
   kubernetes:
-    namespaces: [moks-lab]       # add namespaces only when a shell should read them
+    namespaces: [moks-sre-lab]       # add namespaces only when a shell should read them
   network:
     apiServer: true
     egress:                      # AWS needs HTTPS, so sessions reach any public HTTPS host
@@ -205,5 +205,5 @@ reranker:
 secretsSync:
   enabled: true
   allowDelete: true   # delete verb on Secrets, for reviewed deletion plans (always someone else's approval); AWS deletion is the connector's allow_delete
-  namespaces: [harbor, jithendar, moks, observability,
-               moks-diagnostics, moks-lab, moks-terminals, monitoring, roboshop-ai ]
+  namespaces: [harbor, jithendar, moks-sre, observability,
+               moks-sre-diagnostics, moks-sre-lab, moks-sre-terminals, monitoring, roboshop-ai ]

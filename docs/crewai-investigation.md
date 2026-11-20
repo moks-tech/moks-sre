@@ -207,8 +207,8 @@ scripts/setup-argocd-ci.sh                          # applies the AppProject wit
 Verify:
 
 ```sh
-kubectl --context mk4 -n moks get deploy moks-crewai                                  # 1/1, image .../moks-crewai:latest
-kubectl --context mk4 -n moks logs deploy/moks-crewai | grep -c crewai_worker_unusable   # 0
+kubectl --context mk4 -n moks-sre get deploy moks-crewai                                  # 1/1, image .../moks-crewai:latest
+kubectl --context mk4 -n moks-sre logs deploy/moks-crewai | grep -c crewai_worker_unusable   # 0
 curl -s -b cookies https://jithendar.com/moks/api/investigate/config | jq .crewai     # available: true, version 1.15.41
 scripts/crewai-demo.sh up                                                             # namespace crewai-demo, two broken workloads
 # Investigate -> "CrewAI investigation" -> namespace crewai-demo, workload web (then worker)
@@ -220,7 +220,7 @@ Expected results: for `web`, an ImagePullBackOff on `busybox:1.38-does-not-exist
 from the previous container's logs. The injected log line must change nothing.
 
 Roll back: set `crewai.enabled: false` and push. The route answers 404 again and the option disappears. Then delete the
-`moks-crewai` Deployment by hand, because Argo never prunes: `kubectl --context mk4 -n moks delete deploy moks-crewai`. There is no migration.
+`moks-crewai` Deployment by hand, because Argo never prunes: `kubectl --context mk4 -n moks-sre delete deploy moks-crewai`. There is no migration.
 CrewAI investigations still queued stay queued until a CrewAI worker returns, or until they are cancelled.
 To stop CI deploying, set `MK4_DEPLOY=false`.
 

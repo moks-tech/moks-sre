@@ -22,7 +22,7 @@ spec:
         - {name: resourceGroup, value: reranker}
   destination:
     name: roboshop-demo
-    namespace: moks
+    namespace: moks-sre
   syncPolicy:
     automated:
       enabled: true

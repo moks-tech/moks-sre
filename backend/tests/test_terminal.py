@@ -52,7 +52,7 @@ class FakeStream:
 class FakePods:
     def __init__(self):
         self.manifests, self.files, self.deleted, self.existing, self.commands = [], {}, [], {}, []
-        self.stream, self.shell_alive, self.kube_user, self.can_i, self.inside = FakeStream(), True, "system:serviceaccount:moks-terminals:moks-terminal-session", set(), None
+        self.stream, self.shell_alive, self.kube_user, self.can_i, self.inside = FakeStream(), True, "system:serviceaccount:moks-sre-terminals:moks-terminal-session", set(), None
 
     async def aclose(self):
         pass
@@ -105,7 +105,7 @@ def world(monkeypatch):
     rows = [{"name": "ro", "environment": env, "account": "111122223333", "roleArn": ROLE, "regions": ["us-east-1"], "eksClusters": ["prod"], "inCluster": True}]
     monkeypatch.setattr(cfg, "terminal_profiles", json.dumps(rows))
     monkeypatch.setattr(cfg, "terminal_image", "registry/moks-terminal@sha256:" + "a" * 64)
-    monkeypatch.setattr(cfg, "terminal_kube_namespaces", "shop,moks-lab")
+    monkeypatch.setattr(cfg, "terminal_kube_namespaces", "shop,moks-sre-lab")
     fake_aws, fake_pods = FakeAws(), FakePods()
     monkeypatch.setattr(service, "aws_factory", lambda: fake_aws)
     monkeypatch.setattr(service, "pods_factory", lambda: fake_pods)
@@ -271,7 +271,7 @@ async def test_a_session_gets_its_own_short_lived_identity(world, gw):
     assert got["role"] == ROLE and got["seconds"] == 1800 and got["identity"] == email and got["name"] == f"moks-term-{str(sid)[:8]}"
     s = (await gw.get(f"/moks/api/terminal/sessions/{sid}")).json()
     assert s["aws_identity"].endswith(f"assumed-role/moks-terminal-readonly/moks-term-{str(sid)[:8]}")
-    assert s["kube_identity"].startswith("system:serviceaccount:moks-terminals:") and s["credential_expires_at"]
+    assert s["kube_identity"].startswith("system:serviceaccount:moks-sre-terminals:") and s["credential_expires_at"]
     assert b"bound-token" in fake_pods.files[tpods.KUBECONFIG]
 
 
@@ -712,7 +712,7 @@ def test_session_pods_pull_a_tag_every_time_and_a_digest_once():
     from moks.terminal.pods import pod_manifest
     def policy(image):
         session = SimpleNamespace(id=uuid4(), owner_id=uuid4(), lifetime_minutes=15, region="us-east-1", aws_account="1",
-                                  environment="mk4", pod_name="moks-term-x", pod_namespace="moks-terminals",
+                                  environment="mk4", pod_name="moks-term-x", pod_namespace="moks-sre-terminals",
                                   expires_at=datetime.now(timezone.utc), image=image)
         return pod_manifest(session)["spec"]["containers"][0]["imagePullPolicy"]
     assert policy("registry.jithendar.com/jithendar/moks-terminal:latest") == "Always"

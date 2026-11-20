@@ -9,7 +9,7 @@ no credentials: no LLM is configured, so the investigation is rule-based.
 What one run does, on a single-node kind cluster:
 
 1. Installs the chart with `values-kind.yaml`, which leaves the chart's defaults alone: the NetworkPolicy, the
-   `moks-reader` ClusterRole, the executor's Role in `moks-lab`, the bundled PostgreSQL, one Secret from
+   `moks-reader` ClusterRole, the executor's Role in `moks-sre-lab`, the bundled PostgreSQL, one Secret from
    `scripts/create-secrets.sh`, and migrations, seed and skills in the init containers. `config.env` is
    `production` and sign-in is `local`.
 2. Creates one administrator with `moks create-user --password-stdin`, signs in with the password and uses the
@@ -309,7 +309,7 @@ scripts/validate-argocd-split.py
 ## Not yet verified (Phases 2–4)
 
 - Executor writes, diagnostic pods and OpenSearch have **not run on mk4**. They are covered by fakes
-  and server-side dry runs; deploy, then exercise them on `moks-lab` (lab/README.md).
+  and server-side dry runs; deploy, then exercise them on `moks-sre-lab` (lab/README.md).
 - CloudWatch, Cost Explorer/Budgets, remote EKS and OpenSearch were tested against stubs or mock
   transports only (no credentials or cluster available). Grafana needs a token.
 - No LLM provider was called; LLM mode is tested with a scripted OpenAI-compatible endpoint.

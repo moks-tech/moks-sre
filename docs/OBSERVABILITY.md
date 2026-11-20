@@ -3,7 +3,7 @@
 This page is about telemetry **MOKS produces about itself**: is the portal up, why was an investigation slow,
 did a model answer get used. It is not about the Prometheus, Loki and Kubernetes data MOKS *reads* during an
 investigation through its connectors. On mk4 both live in the same Prometheus and Loki, so the difference is the
-data, not the backend: MOKS's own lines are `{namespace="moks"}`, its own metrics are `job="moks"`.
+data, not the backend: MOKS's own lines are `{namespace="moks-sre"}`, its own metrics are `job="moks"`.
 
 There is no Langfuse or LangSmith for MOKS. LangSmith is forced off in `backend/moks/llm/lc.py` because it would
 send prompts holding redacted evidence to a third party. The Langfuse Cloud set-up in the tools repository
@@ -71,11 +71,11 @@ The Anthropic SDK (2.x) uses `httpx2`, which the httpx instrumentation does not 
 Loki (lines are logfmt after Alloy):
 
 ```logql
-{namespace="moks"} |= "trace_id=<32 hex>"                      # every line of one request or run
-{namespace="moks", level=~"warn|error"}                         # what went wrong lately
-{namespace="moks"} | logfmt | event="llm_answer_unused"         # model answers MOKS could not use, by error_code
-{namespace="moks"} | logfmt | event="tool_call" | outcome="failure"
-{namespace="moks"} | logfmt | event="http_request" | status=~"5.."
+{namespace="moks-sre"} |= "trace_id=<32 hex>"                      # every line of one request or run
+{namespace="moks-sre", level=~"warn|error"}                         # what went wrong lately
+{namespace="moks-sre"} | logfmt | event="llm_answer_unused"         # model answers MOKS could not use, by error_code
+{namespace="moks-sre"} | logfmt | event="tool_call" | outcome="failure"
+{namespace="moks-sre"} | logfmt | event="http_request" | status=~"5.."
 ```
 
 PromQL:
@@ -112,5 +112,5 @@ kubectl --context mk4 get --raw "/api/v1/namespaces/observability/services/jaege
 3. If the report says it is rule-based although model calls succeeded, look for `moks.llm.answer_unused` on
    `node report`, or `event="llm_answer_unused"` in Loki. `BudgetExceeded` means the investigation's token budget
    (`max_tokens_per_investigation`, default 60 000) had no room left for the report.
-4. Read the full lines with `kubectl --context mk4 -n moks logs deploy/moks-worker | grep <trace id>`; they include
+4. Read the full lines with `kubectl --context mk4 -n moks-sre logs deploy/moks-worker | grep <trace id>`; they include
    the redacted error message that Loki does not keep.

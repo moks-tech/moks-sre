@@ -347,7 +347,7 @@ cnpg:
 # Disposable diagnostic session pods (no service account token, quota, egress-only network policy).
 diagnostics:
   enabled: true
-  namespace: moks-diagnostics
+  namespace: moks-sre-diagnostics
   quota: {pods: "5", cpu: "1", memory: 1Gi}
 
 # Web terminal (docs/TERMINAL.md). Off, and nobody holds the terminal role until an admin grants it.
@@ -387,7 +387,7 @@ reranker:
 
 terminal:
   enabled: false
-  namespace: moks-terminals
+  namespace: moks-sre-terminals
   image:
     repository: registry.jithendar.com/jithendar/moks-terminal
     tag: latest            # CI moves it on every master build; session pods pull it (Always) when they start

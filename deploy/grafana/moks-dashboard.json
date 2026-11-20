@@ -1365,7 +1365,7 @@
       },
       "targets": [
         {
-          "expr": "{namespace=\"moks\", level=~\"warn|error\"}",
+          "expr": "{namespace=\"moks-sre\", level=~\"warn|error\"}",
           "refId": "A",
           "datasource": {
             "type": "loki",

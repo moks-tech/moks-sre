@@ -28,7 +28,7 @@ GROUPS = ["foundation", "database", "migrate", "opensearch", "api", "worker", "e
 CLUSTER_SCOPED = {"Namespace", "ClusterRole", "ClusterRoleBinding"}
 REPO = "https://github.com/mrjithendar/moks-sre.git"
 TERMINAL_ON = ["--set", "terminal.enabled=true", "--set", "terminal.image.digest=sha256:" + "a" * 64, "--set", "terminal.profiles[0].name=ro",
-               "--set", "terminal.kubernetes.namespaces={moks-lab}", "--set", "terminal.network.apiServer=true"]
+               "--set", "terminal.kubernetes.namespaces={moks-sre-lab}", "--set", "terminal.network.apiServer=true"]
 POOLS = ["--set-json", 'worker.pools=[{"name":"detection","classes":"detection","capacity":"detection=2","replicas":1},'
                        '{"name":"knowledge","classes":"knowledge,maintenance","capacity":"knowledge=1,maintenance=1","replicas":2}]']
 OPENSEARCH = ["--set", "rag.backend=opensearch"]
@@ -63,7 +63,7 @@ SCENARIOS = {
     "crewai-on": (["--set", "crewai.enabled=true"], {"crewai"}, set()),
     "crewai-off": (["--set", "crewai.enabled=false"], set(), {"crewai"}),
     "custom-skills": (["--set", "customSkills.runbook=body"], {"foundation"}, set()),
-    "namespaced-rbac": (["--set", "rbac.clusterWide=false", "--set", "rbac.namespaces={moks}"], set(), set()),
+    "namespaced-rbac": (["--set", "rbac.clusterWide=false", "--set", "rbac.namespaces={moks-sre}"], set(), set()),
     "no-network-policy": (["--set", "networkPolicy.enabled=false"], set(), set()),
     "velero": (["--set", "velero.enabled=true"], {"foundation", "executor"}, set()),
     "executor-off": (["--set", "executor.enabled=false"], set(), {"executor"}),
@@ -75,13 +75,13 @@ OPTIONAL_SCENARIO = {"migrate": "split", "opensearch": "rag-opensearch-bundled",
 ENVIRONMENTS = {
     "hetzner": {   # mk4: Hetzner k3s, the shared CloudNativePG database (postgres.bundled false)
         "prefix": "moks", "project": "moks", "projectFile": "hetzner/project.yaml", "values": "values-hetzner.yaml", "legacy": "legacy/application.yaml",
-        "old": "moks-portal", "destination": {"server": "https://kubernetes.default.svc", "namespace": "moks"},
+        "old": "moks-portal", "destination": {"server": "https://kubernetes.default.svc", "namespace": "moks-sre"},
         "namespaceLabels": {"app.kubernetes.io/part-of": "moks", "pod-security.kubernetes.io/enforce": "baseline", "pod-security.kubernetes.io/warn": "restricted",
                             "istio-injection": "enabled"},
     },
     "eks": {
         "prefix": "roboshop-demo-moks", "project": "moks-eks", "projectFile": "eks/project.yaml", "values": "values-eks.yaml", "legacy": "legacy/application-eks.yaml",
-        "old": "roboshop-demo-moks-portal", "destination": {"name": "roboshop-demo", "namespace": "moks"},
+        "old": "roboshop-demo-moks-portal", "destination": {"name": "roboshop-demo", "namespace": "moks-sre"},
         "namespaceLabels": {"app.kubernetes.io/part-of": "moks", "istio-injection": "enabled",
                             "pod-security.kubernetes.io/enforce": "privileged", "pod-security.kubernetes.io/warn": "restricted"},
     },
@@ -100,7 +100,7 @@ def check(ok: bool, message: str, category: str = "other") -> bool:
 
 
 def render(chart: Path, environment: str, extra: list[str], group: str | None = None) -> list[dict]:
-    args = ["helm", "template", "moks", str(chart), "-n", "moks", "-f", str(chart / ENVIRONMENTS[environment]["values"]), *extra]
+    args = ["helm", "template", "moks", str(chart), "-n", "moks-sre", "-f", str(chart / ENVIRONMENTS[environment]["values"]), *extra]
     if group:
         args += ["--set", f"resourceGroup={group}"]
     out = subprocess.run(args, capture_output=True, text=True)
@@ -111,7 +111,7 @@ def render(chart: Path, environment: str, extra: list[str], group: str | None = 
 
 def key(doc: dict) -> tuple[str, str, str, str]:
     group = doc["apiVersion"].rpartition("/")[0]
-    namespace = "" if doc["kind"] in CLUSTER_SCOPED else doc["metadata"].get("namespace", "moks")
+    namespace = "" if doc["kind"] in CLUSTER_SCOPED else doc["metadata"].get("namespace", "moks-sre")
     return group, doc["kind"], namespace, doc["metadata"]["name"]
 
 

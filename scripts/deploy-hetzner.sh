@@ -24,9 +24,9 @@ git -C "$REPO" diff --quiet origin/master -- deploy/helm/moks deploy/argocd/hetz
   || die "Argo CD reads origin/master, which differs from this checkout. Push first."
 missing=()
 for secret in harbor-pull postgres-db-credentials moks-secrets moks-reranker-secrets moks-terminal-secrets moks-secret-sync; do
-  kc -n moks get secret "$secret" -o name > /dev/null 2>&1 || missing+=("$secret")
+  kc -n moks-sre get secret "$secret" -o name > /dev/null 2>&1 || missing+=("$secret")
 done
-[[ ${#missing[@]} -eq 0 ]] || die "missing Secrets in moks: ${missing[*]} (scripts/create-secrets-hetzner.sh; harbor-pull from tools registry.py pull-secrets)"
+[[ ${#missing[@]} -eq 0 ]] || die "missing Secrets in moks-sre: ${missing[*]} (scripts/create-secrets-hetzner.sh; harbor-pull from tools registry.py pull-secrets)"
 curl -fsS -o /dev/null https://registry.jithendar.com/api/v2.0/ping || die "Harbor at registry.jithendar.com does not answer; every MOKS image comes from it"
 echo ok
 [[ "$MODE" == --check ]] && exit 0

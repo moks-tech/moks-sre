@@ -114,7 +114,7 @@ async def pods():
             pass
 
     p = tpods.Pods.__new__(tpods.Pods)
-    p.conn, p.ns = Conn(), "moks-terminals"
+    p.conn, p.ns = Conn(), "moks-sre-terminals"
     yield p
     await runner.cleanup()
 
@@ -132,7 +132,7 @@ async def writer(pods, monkeypatch):
 
 
 async def test_a_diagnostic_command_really_runs(writer):
-    assert await writer.exec("moks-diagnostics", "p", ["sh", "-c", "echo found; exit 2"]) == (2, "found\n")
+    assert await writer.exec("moks-sre-diagnostics", "p", ["sh", "-c", "echo found; exit 2"]) == (2, "found\n")
 
 
 async def test_a_database_dump_really_streams_to_its_sink(writer):

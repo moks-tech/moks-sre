@@ -258,12 +258,12 @@ designed to separate. It is not a quality measure.
 This is yours to run. It writes to mk4, and Argo CD reads `origin/master`.
 
 1. **Ship the code.** Push, wait for the image, then restart:
-   `kubectl --context mk4 -n moks rollout restart deploy/moks-api deploy/moks-worker`. Migration 0032 runs on start.
+   `kubectl --context mk4 -n moks-sre rollout restart deploy/moks-api deploy/moks-worker`. Migration 0032 runs on start.
    The config map gains `MOKS_ML_*` keys, so the next Argo CD sync of the API and worker also restarts them.
-2. **Backfill incidents:** `kubectl --context mk4 -n moks exec deploy/moks-worker -- moks ml index-incidents`.
+2. **Backfill incidents:** `kubectl --context mk4 -n moks-sre exec deploy/moks-worker -- moks ml index-incidents`.
 3. **Grant roles** if someone other than an admin will review: `moks grant <email> ml_reviewer:<env>:<ns>`.
 4. **Train, without changing anything live:**
-   `kubectl --context mk4 -n moks exec deploy/moks-worker -- moks ml train --environment mk4 --namespace <ns>`.
+   `kubectl --context mk4 -n moks-sre exec deploy/moks-worker -- moks ml train --environment mk4 --namespace <ns>`.
    Read the output for each cohort: `insufficient_history`, or two candidates with gates.
 5. **Turn on shadow mode:** Settings > Features > anomaly detection > Change mode > shadow, with a reason. Then pick a champion
    per workload under Models. Observations appear on ML insights within `intervalMinutes`.

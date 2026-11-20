@@ -21,7 +21,7 @@ spec:
       valueFiles: [values-minikube.yaml]
   destination:
     server: https://kubernetes.default.svc
-    namespace: moks
+    namespace: moks-sre
   syncPolicy:
     syncOptions:
       - CreateNamespace=true

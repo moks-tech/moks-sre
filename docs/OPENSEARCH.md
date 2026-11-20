@@ -64,12 +64,12 @@ All of this is yours to run: it writes to mk4 and needs a push, because Argo CD 
 
 ### 1. Ship the code
 
-The `moks` image must contain migration 0030 and this code before anything else. Push, wait for CI, then `kubectl -n moks rollout restart deploy/moks-api deploy/moks-worker`. Search stays on the original cluster, now with the new write path. Confirm: `curl -fsS https://jithendar.com/moks/api/health`.
+The `moks` image must contain migration 0030 and this code before anything else. Push, wait for CI, then `kubectl -n moks-sre rollout restart deploy/moks-api deploy/moks-worker`. Search stays on the original cluster, now with the new write path. Confirm: `curl -fsS https://jithendar.com/moks/api/health`.
 
 Take stock of what you will compare against, from the worker:
 
 ```sh
-kubectl --context mk4 -n moks exec deploy/moks-worker -- moks opensearch status
+kubectl --context mk4 -n moks-sre exec deploy/moks-worker -- moks opensearch status
 ```
 
 ### 2. Free disk
@@ -91,9 +91,9 @@ In `values-hetzner.yaml`, set `rag.opensearch.secure.enabled: true`. Push.
 ```sh
 argocd app sync moks-foundation     # lets MOKS pods reach moks-search; never --prune
 argocd app sync moks-opensearch     # creates moks-search and runs the security Job
-kubectl --context mk4 -n moks rollout status statefulset/moks-search --timeout=300s
-kubectl --context mk4 -n moks wait --for=condition=Complete job/moks-search-security --timeout=300s
-kubectl --context mk4 patch pv "$(kubectl --context mk4 -n moks get pvc data-moks-search-0 -o jsonpath='{.spec.volumeName}')" \
+kubectl --context mk4 -n moks-sre rollout status statefulset/moks-search --timeout=300s
+kubectl --context mk4 -n moks-sre wait --for=condition=Complete job/moks-search-security --timeout=300s
+kubectl --context mk4 patch pv "$(kubectl --context mk4 -n moks-sre get pvc data-moks-search-0 -o jsonpath='{.spec.volumeName}')" \
   -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
 scripts/opensearch-migrate.sh status
 ```
@@ -101,7 +101,7 @@ scripts/opensearch-migrate.sh status
 `status` should report `live: false` and `health: green`. Then prove NetworkPolicy is enforced here, which has never been shown on mk4's kindnet. This must time out or fail:
 
 ```sh
-kubectl --context mk4 -n moks run np-probe --rm -it --restart=Never --image=curlimages/curl -- \
+kubectl --context mk4 -n moks-sre run np-probe --rm -it --restart=Never --image=curlimages/curl -- \
   curl -sk -m 5 -o /dev/null -w '%{http_code}\n' https://moks-search:9200/
 ```
 
@@ -152,7 +152,7 @@ Keep the original for at least the retention window. Before retiring it, run `sc
 **After step 6:**
 
 1. Set `secure.active: false`, push, then `argocd app sync moks-foundation moks-opensearch moks-api moks-worker`.
-2. Catch the original up: `kubectl --context mk4 -n moks exec deploy/moks-worker -- moks opensearch sync`.
+2. Catch the original up: `kubectl --context mk4 -n moks-sre exec deploy/moks-worker -- moks opensearch sync`.
 
 Nothing is lost. The original stopped receiving events at cutover, but PostgreSQL holds every update and delete, and `document_index_state` shows which documents that generation missed. `sync` rewrites those and removes deleted ones. The worker also does this slowly by itself, 50 documents every 600 ticks. After rollback the original is unauthenticated again, and `publicRoute` and `dashboards` can return.
 
@@ -189,8 +189,8 @@ To turn it on, with `moks-search` running:
 3. Connect and sign in as `moks_viewer`:
 
 ```sh
-kubectl --context mk4 -n moks get secret moks-search-viewer-login -o jsonpath='{.data.password}' | base64 -d; echo
-kubectl --context mk4 -n moks port-forward svc/moks-search-dashboards 5601
+kubectl --context mk4 -n moks-sre get secret moks-search-viewer-login -o jsonpath='{.data.password}' | base64 -d; echo
+kubectl --context mk4 -n moks-sre port-forward svc/moks-search-dashboards 5601
 # open http://localhost:5601 and create the index pattern moks-chunks-*
 ```
 
@@ -223,9 +223,9 @@ The last successful snapshot appears on the admin page, and `MoksSnapshotOverdue
 **Restore drill.** Into a new name, so nothing serving is touched, as `moks_admin`:
 
 ```sh
-kubectl --context mk4 -n moks port-forward svc/moks-search 9200 &
-PASS="$(kubectl --context mk4 -n moks get secret moks-search-admin-login -o jsonpath='{.data.password}' | base64 -d)"
-kubectl --context mk4 -n moks get secret moks-search-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/moks-ca.crt
+kubectl --context mk4 -n moks-sre port-forward svc/moks-search 9200 &
+PASS="$(kubectl --context mk4 -n moks-sre get secret moks-search-admin-login -o jsonpath='{.data.password}' | base64 -d)"
+kubectl --context mk4 -n moks-sre get secret moks-search-tls -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/moks-ca.crt
 curl -u "moks_admin:$PASS" --cacert /tmp/moks-ca.crt --resolve moks-search:9200:127.0.0.1 \
   -XPOST 'https://moks-search:9200/_snapshot/moks-knowledge/<snapshot>/_restore?wait_for_completion=true' -H 'content-type: application/json' \
   -d '{"indices":"moks-chunks-*","rename_pattern":"(.+)","rename_replacement":"$1-drill","include_global_state":false}'
@@ -238,7 +238,7 @@ Compare `_count` with the original, then delete the `-drill` index as `moks_admi
 Nothing does this automatically. Sync prune is never used, the volume claim is annotated against Argo CD deletion, and the StatefulSet retains claims when deleted or scaled. To delete, deliberately:
 
 ```sh
-kubectl --context mk4 -n moks delete pvc data-moks-opensearch-0
+kubectl --context mk4 -n moks-sre delete pvc data-moks-opensearch-0
 kubectl --context mk4 get pv | grep moks-opensearch   # Delete reclaim removes it; a Retain volume needs kubectl delete pv
 ```
 

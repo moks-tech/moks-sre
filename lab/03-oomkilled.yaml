@@ -1,7 +1,7 @@
 # Scenario 3: "cache" allocates more memory than its 64Mi limit -> OOMKilled, restarting.
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: cache, namespace: moks-lab, labels: {app: cache}}
+metadata: {name: cache, namespace: moks-sre-lab, labels: {app: cache}}
 spec:
   replicas: 1
   selector: {matchLabels: {app: cache}}

@@ -2,7 +2,7 @@
 # Create the MOKS Secrets on mk4 (Hetzner k3s), where the database is the shared CloudNativePG cluster.
 #   scripts/create-secrets-hetzner.sh [kube-context]
 #
-# MOKS_DATABASE_URL is built from Secret moks/postgres-db-credentials (written by miniKube
+# MOKS_DATABASE_URL is built from Secret moks-sre/postgres-db-credentials (written by miniKube
 # minikube-infrastructure/postgres.tf), through the session-mode pooler. Keys in the gitignored
 # moks-secrets.yaml / moks-terminal-secrets.yaml beside the repository root (MOKS_CRED_*, MOKS_SESSION_SECRET,
 # the terminal's AWS keys) are carried over when those files exist; otherwise a new session secret is made.
@@ -10,7 +10,7 @@
 # Refuses to overwrite a Secret that exists. Prints no values; they reach kubectl on stdin, never argv.
 set -euo pipefail
 CONTEXT="${1:-mk4}"
-NS=moks
+NS=moks-sre
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 k() { kubectl --context "$CONTEXT" -n "$NS" "$@"; }
 

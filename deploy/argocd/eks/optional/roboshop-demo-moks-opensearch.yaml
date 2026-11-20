@@ -23,7 +23,7 @@ spec:
         - {name: resourceGroup, value: opensearch}
   destination:
     name: roboshop-demo
-    namespace: moks
+    namespace: moks-sre
   syncPolicy:
     automated:
       enabled: true

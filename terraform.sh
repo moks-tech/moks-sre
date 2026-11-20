@@ -13,5 +13,5 @@ $TF apply moks.tfplan
 
 gh variable set AWS_ROLE_ARN --repo mrjithendar/moks-sre --body "$($TF output -raw ci_role_arn)"
 
-# After scripts/create-secrets.sh has created moks/moks-secrets:
+# After scripts/create-secrets.sh has created moks-sre/moks-secrets:
 #   scripts/create-runtime-key.sh mk4

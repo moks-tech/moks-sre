@@ -170,7 +170,7 @@ flowchart LR
     PG[(PostgreSQL)]
     OS[(OpenSearch<br/>optional)]
   end
-  subgraph moks-diagnostics
+  subgraph moks-sre-diagnostics
     D[session pods<br/>no SA token, TTL, quota]
   end
   subgraph target namespaces

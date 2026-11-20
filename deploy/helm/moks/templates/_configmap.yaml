@@ -103,6 +103,7 @@ data:
   MOKS_PINECONE_CLOUD: {{ .Values.rag.pinecone.cloud | quote }}
   MOKS_PINECONE_REGION: {{ .Values.rag.pinecone.region | quote }}
   {{- end }}
+  MOKS_OWN_NAMESPACE: {{ .Release.Namespace | quote }}   # never a Velero restore target
   MOKS_DIAGNOSTICS_NAMESPACE: {{ .Values.diagnostics.namespace | quote }}
   MOKS_ALERT_POLL_SECONDS: {{ .Values.config.alertPollSeconds | quote }}
   MOKS_DATABASE_VOLUME_GIB: {{ trimSuffix "Gi" .Values.postgres.storage | quote }}

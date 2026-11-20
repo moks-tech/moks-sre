@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Create the executor-only Secret for secret sync (docs/SECRETS_SYNC.md) in namespace moks.
+# Create the executor-only Secret for secret sync (docs/SECRETS_SYNC.md) in namespace moks-sre.
 #   scripts/create-secret-sync-secret.sh [kube-context]           # Minikube: prompts for the IAM access keys
 #   NO_AWS_KEYS=1 scripts/create-secret-sync-secret.sh [context]   # EKS: Pod Identity, digest key only
 # Refuses to overwrite: a new digest key invalidates every mapping's baseline. Nothing is echoed or written to disk.
 set -euo pipefail
 CONTEXT="${1:-mk4}"
-NS=moks
+NS=moks-sre
 NAME=moks-secret-sync
 k() { kubectl --context "$CONTEXT" "$@"; }
 

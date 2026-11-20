@@ -8,8 +8,8 @@ set -euo pipefail
 context="$(kubectl config current-context)"
 [[ "$context" == kind-* ]] || { echo "refusing: the current context is not a kind cluster" >&2; exit 1; }
 here="$(cd "$(dirname "$0")/.." && pwd)"
-NS=moks
-LAB=moks-lab
+NS=moks-sre
+LAB=moks-sre-lab
 PORT="${MOKS_E2E_PORT:-18080}"
 EMAIL=e2e@moks.test
 forward=""

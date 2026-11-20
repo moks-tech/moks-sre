@@ -21,7 +21,7 @@ kind: RoleBinding
 metadata: {name: moks-secret-sync, namespace: shop}
 roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: moks-secret-sync}
 subjects:
-  - {kind: ServiceAccount, name: moks-executor, namespace: moks}
+  - {kind: ServiceAccount, name: moks-executor, namespace: moks-sre}
 ---
 # The cluster identity check reads kube-system's UID (already in the chart's moks-executor-cluster-identity).
 apiVersion: rbac.authorization.k8s.io/v1

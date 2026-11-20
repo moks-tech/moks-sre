@@ -173,7 +173,7 @@ async def test_restore_takes_a_backup_first_then_restores(client):
     assert [k[0] for k in w.objects] == ["backups", "restores"]
     body = next(v for k, v in w.objects.items() if k[0] == "restores")
     assert body["spec"]["backupName"] == "nightly" and body["spec"]["existingResourcePolicy"] == "none"
-    assert {"velero", "moks"} <= set(body["spec"]["excludedNamespaces"])
+    assert {"velero", "moks-sre"} <= set(body["spec"]["excludedNamespaces"])
 
 
 async def test_a_failed_pre_restore_backup_stops_the_restore(client):

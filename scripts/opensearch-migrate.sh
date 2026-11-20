@@ -14,12 +14,12 @@
 set -euo pipefail
 CONTEXT="${CONTEXT:-mk4}"
 [[ $# -ge 1 ]] || { sed -n '2,13p' "$0"; exit 2; }
-k() { kubectl --context "$CONTEXT" -n moks "$@"; }
+k() { kubectl --context "$CONTEXT" -n moks-sre "$@"; }
 JOB="moks-search-$1-$(date +%s)"
 ARGS="$(printf '%s\n' opensearch "$@" | jq -R . | jq -s .)"
 k get cronjob moks-search-ops -o json | jq --arg name "$JOB" --argjson args "$ARGS" '{
   apiVersion: "batch/v1", kind: "Job",
-  metadata: {name: $name, namespace: "moks", labels: {app: "moks", component: "search-ops"}},
+  metadata: {name: $name, namespace: "moks-sre", labels: {app: "moks", component: "search-ops"}},
   spec: (.spec.jobTemplate.spec | .template.spec.containers[0].args = $args)}' | k create -f -
 k wait --for=condition=Ready pod -l "job-name=$JOB" --timeout=300s > /dev/null || true
 k logs -f "job/$JOB" || true
