@@ -354,7 +354,7 @@ diagnostics:
 # It is scoped to Terminating pods, those that set activeDeadlineSeconds: only session pods do, so it never counts
 # MOKS itself (the chart's Jobs set their deadline on the Job, not the pod).
 sessions:
-  quota: {pods: "9", cpu: "3", memory: 3Gi, ephemeralStorage: 4Gi}
+  quota: {pods: "9", cpu: "3", memory: 3Gi}   # pods, cpu and memory only: a Terminating-scoped quota allows nothing else
 
 # Web terminal (docs/TERMINAL.md). Off, and nobody holds the terminal role until an admin grants it.
 # Internal PyTorch reranking (docs/RERANKING.md). enabled deploys the service; client.enabled makes
