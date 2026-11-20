@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, ErrorBox, Loading, PageHead, Time, useLoad } from "../components";
+import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, Loading, PageHead, Time, useLoad } from "../components";
 import { type Chip, FilterPanel, useUrlFilters } from "../filters";
 import { type MenuItem, Empty, Identifier, Truncate } from "../ui";
 
@@ -22,7 +22,7 @@ export function Detections() {
   const envs: any[] = rules.data?.environments ?? [];
   const [env, setEnv] = useState("");
   const target = env || envs[0]?.name || "";
-  const [w, setW] = useState({ namespace: "*", rule_id: "*", starts_at: "", ends_at: "", reason: "" });
+  const [addingWindow, setAddingWindow] = useState(false);
   const rows: any[] = (rules.data?.rules ?? []).filter((r: any) => JSON.stringify([r.id, r.title, r.skill]).toLowerCase().includes(text.toLowerCase()) && (!severity || r.severity === severity));
   const chips: Chip[] = [...(text ? [{ key: "q", label: `matches ${text}`, onRemove: () => setF({ q: "" }) }] : []), ...(severity ? [{ key: "s", label: severity, onRemove: () => setF({ severity: "" }) }] : [])];
 
@@ -39,11 +39,6 @@ export function Detections() {
   async function toggle(r: any) {
     await run(() => api(`/detections/rules/${r.id}`, { method: "PUT", body: { enabled: !r.enabled, environments: r.policy_environments } }));
     rules.reload();
-  }
-  async function addWindow(e: FormEvent) {
-    e.preventDefault();
-    await run(() => api("/detections/maintenance", { method: "POST", body: { ...w, environment: target, starts_at: new Date(w.starts_at).toISOString(), ends_at: new Date(w.ends_at).toISOString() } }));
-    windows.reload();
   }
   return (
     <>
@@ -94,19 +89,51 @@ export function Detections() {
           ]} />}
         </div>
         <div className="card stack">
-          <h2>Maintenance windows</h2>
+          <div className="row between"><h2>Maintenance windows</h2>{admin && envs.length > 0 && <button className="ghost small" onClick={() => setAddingWindow(true)}>Add window</button>}</div>
+          {addingWindow && <AddWindow envs={envs} env={target} onClose={() => setAddingWindow(false)} onAdded={() => { setAddingWindow(false); windows.reload(); }} />}
           {windows.data?.windows.map((x: any) => <div key={x.id} className="row between small"><span>{x.environment}/{x.namespace} · {new Date(x.starts_at).toLocaleString()} to {new Date(x.ends_at).toLocaleString()} · {x.reason}</span>
             {admin && <button className="ghost small" onClick={async () => { await run(() => api(`/detections/maintenance/${x.id}`, { method: "DELETE" })); windows.reload(); }}>Remove</button>}</div>)}
           {windows.data && !windows.data.windows.length && <div className="small muted">None scheduled.</div>}
-          {admin && <form className="filters" onSubmit={addWindow}>
-            <label>Namespace<input value={w.namespace} onChange={(e) => setW({ ...w, namespace: e.target.value })} /></label>
-            <label>From<input required type="datetime-local" value={w.starts_at} onChange={(e) => setW({ ...w, starts_at: e.target.value })} /></label>
-            <label>To<input required type="datetime-local" value={w.ends_at} onChange={(e) => setW({ ...w, ends_at: e.target.value })} /></label>
-            <label>Reason<input required minLength={3} value={w.reason} onChange={(e) => setW({ ...w, reason: e.target.value })} /></label>
-            <button>Add</button>
-          </form>}
         </div>
       </div>
     </>
+  );
+}
+
+/** Detection stays quiet in a namespace for a while, for planned work. Times are local and sent as UTC. */
+function AddWindow({ envs, env, onClose, onAdded }: { envs: any[]; env: string; onClose: () => void; onAdded: () => void }) {
+  const [w, setW] = useState({ environment: env, namespace: "*", rule_id: "*", starts_at: "", ends_at: "", reason: "" });
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const backwards = !!w.starts_at && !!w.ends_at && new Date(w.ends_at) <= new Date(w.starts_at);
+  async function add(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/detections/maintenance", { method: "POST", body: { ...w, starts_at: new Date(w.starts_at).toISOString(), ends_at: new Date(w.ends_at).toISOString() } });
+      onAdded();
+    } catch (err) { setError(err); setBusy(false); }
+  }
+  return (
+    <FormDrawer title="Add a maintenance window" submit="Add window" busy={busy} blocked={backwards} error={error} onSubmit={add} onClose={onClose}>
+      <FormSection title="Where" help="Rules do not open or update incidents here during the window.">
+        <div className="form-grid">
+          <label>Environment<select value={w.environment} onChange={(e) => setW({ ...w, environment: e.target.value })}>{envs.map((x) => <option key={x.name}>{x.name}</option>)}</select></label>
+          <label>Namespace<input value={w.namespace} onChange={(e) => setW({ ...w, namespace: e.target.value })} title="* for every namespace" /></label>
+        </div>
+      </FormSection>
+      <FormSection title="When">
+        <div className="form-grid">
+          <label>From<input required type="datetime-local" value={w.starts_at} onChange={(e) => setW({ ...w, starts_at: e.target.value })} /></label>
+          <label>To<input required type="datetime-local" value={w.ends_at} onChange={(e) => setW({ ...w, ends_at: e.target.value })} aria-invalid={backwards} /></label>
+        </div>
+        {backwards && <div className="small danger-text">The window must end after it starts.</div>}
+        <div className="small muted">In your time zone ({Intl.DateTimeFormat().resolvedOptions().timeZone}).</div>
+      </FormSection>
+      <FormSection title="Why">
+        <label>Reason<input required minLength={3} value={w.reason} onChange={(e) => setW({ ...w, reason: e.target.value })} placeholder="Node pool upgrade" /></label>
+      </FormSection>
+    </FormDrawer>
   );
 }

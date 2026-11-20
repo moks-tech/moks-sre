@@ -2,7 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
-import { Badge, DataTable, ErrorBox, fmtBytes, Loading, PageHead, Time, useInterval, useLoad, type Env } from "../components";
+import { Badge, DataTable, ErrorBox, fmtBytes, FormDrawer, FormSection, Loading, PageHead, Time, useInterval, useLoad, type Env } from "../components";
 import { Dialog, Drawer, Empty, Identifier, useFeedback } from "../ui";
 
 const PHASE: Record<string, "ok" | "warn" | "bad" | "info"> = { Completed: "ok", PartiallyFailed: "warn", Failed: "bad", FailedValidation: "bad", InProgress: "info" };
@@ -383,43 +383,82 @@ export function Backups() {
 
 export function BackupStorage() {
   const s = useLoad(() => api<any>("/backups/store"), []);
-  const [form, setForm] = useState<any>(null);
+  const { toast } = useFeedback();
+  const [editing, setEditing] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [error, setError] = useState<unknown>();
-  const [busy, setBusy] = useState(false);
   const store = s.data?.store;
-  const f = form ?? { account_id: store?.account_id ?? "", bucket: store?.bucket ?? "", prefix: store?.prefix ?? "clusters", jurisdiction: store?.jurisdiction ?? "default",
-    names: Object.fromEntries(REFS.map(([k]) => [k, store?.credentials?.[k]?.name ?? `MOKS_CRED_R2_${k.toUpperCase()}`])) };
-  const set = (patch: any) => setForm({ ...f, ...patch });
-  async function run(fn: () => Promise<any>) {
-    setBusy(true);
+  async function test() {
+    setTesting(true);
     setError(null);
-    try { await fn(); s.reload(); } catch (e) { setError(e); }
-    setBusy(false);
+    try { await api("/backups/store/test", { method: "POST" }); s.reload(); } catch (e) { setError(e); s.reload(); }
+    setTesting(false);
   }
-  const save = (e: FormEvent) => {
-    e.preventDefault();
-    run(() => api("/backups/store", { method: "PUT", body: { account_id: f.account_id, bucket: f.bucket, prefix: f.prefix, jurisdiction: f.jurisdiction,
-      credentials: Object.fromEntries(REFS.map(([k]) => [k, { type: "env", name: f.names[k] }])) } })).then(() => setForm(null));
-  };
   return (
     <>
-      <PageHead title="Backup storage" sub="Cloudflare R2 settings. Credentials are names of mounted Secrets, never values, so nothing secret is stored in the database." />
+      <PageHead title="Backup storage" sub="Cloudflare R2 settings. Credentials are names of mounted Secrets, never values, so nothing secret is stored in the database.">
+        {store && <button className="ghost" disabled={testing} onClick={test}>{testing ? "Testing…" : "Test write, read and delete"}</button>}
+        {s.data && <button onClick={() => setEditing(true)}>{store ? "Edit settings" : "Set up storage"}</button>}
+      </PageHead>
       <ErrorBox error={s.error ?? error} />
-      <form className="card stack" onSubmit={save}>
-        <div className="filters">
-          <label>Account ID<input required pattern="[a-f0-9]{32}" value={f.account_id} onChange={(e) => set({ account_id: e.target.value })} /></label>
-          <label>Bucket<input required value={f.bucket} onChange={(e) => set({ bucket: e.target.value })} /></label>
+      {!s.data && !s.error && <Loading load={s} />}
+      {s.data && !store && <div className="card"><Empty title="R2 storage is not set up.">Backups need a Cloudflare R2 bucket. Use Set up storage to name it, and the Secret variables that hold its keys.</Empty></div>}
+      {store && <div className="grid cols-2" style={{ alignItems: "start" }}>
+        <section className="card stack">
+          <h2>Bucket</h2>
+          <dl className="kv">
+            <dt>Account ID</dt><dd className="mono">{store.account_id}</dd>
+            <dt>Bucket</dt><dd className="mono">{store.bucket}</dd>
+            <dt>Prefix</dt><dd className="mono">{store.prefix || "—"}</dd>
+            <dt>Jurisdiction</dt><dd>{store.jurisdiction === "eu" ? "EU" : "Default"}</dd>
+            <dt>Last test</dt><dd>{store.last_test_at ? <>{store.last_test_ok ? <Badge kind="ok">passed</Badge> : <Badge kind="bad">failed</Badge>} <Time iso={store.last_test_at} />{store.last_test_error && <div className="small muted">{store.last_test_error}</div>}</> : <span className="muted">never tested</span>}</dd>
+          </dl>
+        </section>
+        <section className="card stack">
+          <h2>Credential references</h2>
+          <dl className="kv">{REFS.map(([k, label]) => <div key={k} className="kv-row">
+            <dt>{label.replace(/^Variable holding the /, "")}</dt>
+            <dd><span className="mono">{store.credentials?.[k]?.name ?? "—"}</span> {store.credential_status?.[k]?.available ? <Badge kind="ok">available here</Badge> : <Badge kind="warn">not set here</Badge>}</dd>
+          </div>)}</dl>
+          <div className="small muted">Names of variables in the Kubernetes Secret. The values never pass through MOKS's database or this page.</div>
+        </section>
+      </div>}
+      {editing && <EditStorage store={store} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); s.reload(); toast(store ? "Backup storage saved." : "Backup storage set up. Run a test to check it."); }} />}
+    </>
+  );
+}
+
+function EditStorage({ store, onClose, onSaved }: { store: any; onClose: () => void; onSaved: () => void }) {
+  const [f, setF] = useState({ account_id: store?.account_id ?? "", bucket: store?.bucket ?? "", prefix: store?.prefix ?? "clusters", jurisdiction: store?.jurisdiction ?? "default",
+    names: Object.fromEntries(REFS.map(([k]) => [k, store?.credentials?.[k]?.name ?? `MOKS_CRED_R2_${k.toUpperCase()}`])) as Record<string, string> });
+  const [error, setError] = useState<unknown>();
+  const [busy, setBusy] = useState(false);
+  const set = (patch: Partial<typeof f>) => setF({ ...f, ...patch });
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/backups/store", { method: "PUT", body: { account_id: f.account_id, bucket: f.bucket, prefix: f.prefix, jurisdiction: f.jurisdiction,
+        credentials: Object.fromEntries(REFS.map(([k]) => [k, { type: "env", name: f.names[k] }])) } });
+      onSaved();
+    } catch (err) { setError(err); setBusy(false); }
+  }
+  return (
+    <FormDrawer title={store ? "Edit backup storage" : "Set up backup storage"} submit="Save" busy={busy} error={error} onSubmit={save} onClose={onClose}>
+      <FormSection title="Bucket">
+        <div className="form-grid">
+          <label>Account ID<input required pattern="[a-f0-9]{32}" title="32 lowercase hex characters, from the Cloudflare dashboard" className="mono" value={f.account_id} onChange={(e) => set({ account_id: e.target.value.trim() })} /></label>
+          <label>Bucket<input required value={f.bucket} onChange={(e) => set({ bucket: e.target.value.trim() })} /></label>
           <label>Prefix<input value={f.prefix} onChange={(e) => set({ prefix: e.target.value })} /></label>
           <label>Jurisdiction<select value={f.jurisdiction} onChange={(e) => set({ jurisdiction: e.target.value })}><option value="default">Default</option><option value="eu">EU</option></select></label>
         </div>
-        <h2>Credential references</h2>
-        <p className="small muted" style={{ margin: 0 }}>Enter variable names here, not keys. The values go in the Kubernetes Secret, and this page never accepts them.</p>
-        <div className="filters">{REFS.map(([k, label]) => <label key={k}>{label}<input required pattern="MOKS_CRED_[A-Z0-9_]+" title="The name of a variable in the Secret, such as MOKS_CRED_R2_ACCESS_KEY_ID. Never the key itself." className="mono" value={f.names[k]} onChange={(e) => set({ names: { ...f.names, [k]: e.target.value } })} />
-          {store && <span className="small">{store.credential_status[k].available ? "available here" : "not set here"}</span>}</label>)}</div>
-        <div className="row"><button disabled={busy}>Save</button>
-          {store && <button type="button" className="ghost" disabled={busy} onClick={() => run(() => api("/backups/store/test", { method: "POST" }))}>Test write, read and delete</button>}
-          {store?.last_test_at && <span className="small">{store.last_test_ok ? <Badge kind="ok">test passed</Badge> : <Badge kind="bad">test failed</Badge>} <Time iso={store.last_test_at} /> {store.last_test_error}</span>}</div>
-      </form>
-    </>
+      </FormSection>
+      <FormSection title="Credential references" help="Enter variable names here, not keys. The values go in the Kubernetes Secret, and this page never accepts them.">
+        <div className="form-grid">{REFS.map(([k, label]) => <label key={k}>{label}<input required pattern="MOKS_CRED_[A-Z0-9_]+" title="The name of a variable in the Secret, such as MOKS_CRED_R2_ACCESS_KEY_ID. Never the key itself." className="mono"
+          value={f.names[k]} onChange={(e) => set({ names: { ...f.names, [k]: e.target.value } })} />
+          {store && <span className="small">{store.credential_status?.[k]?.available ? "available here" : "not set here"}</span>}</label>)}</div>
+      </FormSection>
+    </FormDrawer>
   );
 }

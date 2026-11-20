@@ -61,7 +61,9 @@ function view() { render(<MemoryRouter initialEntries={["/terminal/s1"]}><Feedba
 describe("opening a terminal", () => {
   it("makes every part of the scope a deliberate choice", async () => {
     list();
-    const open = (await screen.findByRole("button", { name: "Open terminal" })) as HTMLButtonElement;
+    fireEvent.click(await screen.findByRole("button", { name: "New terminal" }));
+    expect(screen.getByRole("dialog", { name: "Open a terminal" })).toBeTruthy();
+    const open = screen.getByRole("button", { name: "Open terminal" }) as HTMLButtonElement;
     expect(open.disabled).toBe(true);
     expect((screen.getByLabelText("Environment") as HTMLSelectElement).value).toBe("");
     fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "mk4" } });
