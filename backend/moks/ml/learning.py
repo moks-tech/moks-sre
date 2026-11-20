@@ -55,6 +55,7 @@ VERDICTS = {
     "similar_incident": ("similar", "not_similar", "unsure"),
     "skill_recommendation": ("helpful", "not_helpful", "unsure"),
     "anomaly_observation": ("true_positive", "false_positive", "expected", "unsure"),
+    "correlation_group": ("correct", "wrong_grouping", "partly", "unsure"),
 }
 # Which approved records each dataset purpose reads. Incident similarity learns from incidents whose postmortem was
 # approved (kind "incident"); the other purposes read any approved record, including outcomes confirmed by a reviewer.

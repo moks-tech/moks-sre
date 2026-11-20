@@ -533,9 +533,10 @@ def _log_validation(history: History, report: Any, decided: dict[str, Any], crew
         history.line(f"Gap: {g['source']}: {g['reason']}", "warning", {"event": "gap", **g})
     if decided.get("fallback"):
         history.line("The reviewer gave no usable JSON report; MOKS wrote its rule-based report over the evidence collected", "warning")
-    rejected, removed, lowered = (decided.get(k) or [] for k in ("citations_rejected", "claims_removed", "confidence_lowered"))
+    rejected, removed, lowered, demoted = (decided.get(k) or [] for k in ("citations_rejected", "claims_removed", "confidence_lowered", "ml_only_findings_demoted"))
     history.line(f"Checked by MOKS: {len(rejected)} invented citation(s) rejected{' (' + ', '.join(map(str, rejected)) + ')' if rejected else ''}, "
-                 f"{len(removed)} uncited claim(s) removed, {len(lowered)} confidence level(s) lowered", "warning" if rejected or removed or lowered else "info",
+                 f"{len(removed)} uncited claim(s) removed, {len(lowered)} confidence level(s) lowered"
+                 + (f", {len(demoted)} ML-only finding(s) kept as low-confidence causes" if demoted else ""), "warning" if rejected or removed or lowered or demoted else "info",
                  {"event": "validation", **{k: v for k, v in decided.items()}})
     history.line(f"Report: {len(report.observed_facts)} finding(s), {len(report.suspected_causes)} likely cause(s), {len(report.missing_evidence)} missing evidence item(s)",
                  data={"event": "report", "summary": (report.summary or "")[:500]})

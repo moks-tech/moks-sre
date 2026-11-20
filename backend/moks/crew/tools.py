@@ -197,6 +197,15 @@ def _repository(t: Target) -> str:
     return t.repository
 
 
+def _cohort(t: Target) -> str:
+    """The workload name ML cohorts use: the controller's name, or a Pod's name without its ReplicaSet or ordinal suffix."""
+    if t.kind != "Pod":
+        return t.workload
+    from ..ml.correlate import workload_of
+
+    return workload_of(t.workload)
+
+
 def _pods(t: Target, m: Members) -> str:
     if not m.pods:
         raise Empty(f"no pods are owned by {t.kind.lower()} {t.workload}" + (f": {m.reason}" if m.reason else ""))
@@ -241,6 +250,9 @@ TOOLS: tuple[CrewTool, ...] = (
              NoArgs, lambda t, a, m: {"namespace": t.namespace, "pod_regex": _pods(t, m), "minutes": max(5, t.minutes)}, "prometheus"),
     CrewTool("firing_alerts", "prom_alerts", "workload", "Prometheus alerts firing within your scope.",
              NoArgs, lambda t, a, m: {"firing_only": True}, "prometheus"),
+    CrewTool("ml_signals", "ml_anomalies", "workload", "Shadow-mode ML anomalies for the target workload (baseline, observed value, deviation, model version, "
+             "confidence, validation status) and the correlation group it belongs to. Statistical leads to check with live evidence, never findings or causes.",
+             NoArgs, lambda t, a, m: {"namespace": t.namespace, "workload": _cohort(t), "minutes": min(1440, max(60, t.minutes))}, "ml"),
     CrewTool("rollout_history", "k8s_rollout_history", "change", "Revisions of the target Deployment with images and creation times.",
              NoArgs, lambda t, a, m: {"namespace": t.namespace, "deployment": _deployment(t)}, "kubernetes"),
     CrewTool("config_audit", "k8s_config_audit", "change", "Configuration of the namespace's workloads: requests, probes, image pinning, missing Secret/ConfigMap references (contents never read).",
@@ -283,6 +295,9 @@ TOOLS: tuple[CrewTool, ...] = (
     CrewTool("similar_incidents", "similar_incidents", "", "Approved past incidents with similar symptoms on this workload, and how they were resolved. Historical leads, never proof.",
              SimilarArgs, lambda t, a, m: {"symptoms": list(a.symptoms), "services": [t.workload], "signature": list(a.signature), "text": a.text, "changes": a.changes, "k": 5},
              "knowledge"),
+    CrewTool("incident_history", "incident_history", "change", "Reviewed past incidents of the target workload: recurring failures, repeated infrastructure "
+             "problems, runbooks and resolutions that worked. History, not evidence of the current state.",
+             NoArgs, lambda t, a, m: {"namespace": t.namespace, "service": _cohort(t), "days": 180}, "knowledge"),
 )
 BY_NAME = {t.name: t for t in TOOLS}
 ALLOWED_MOKS_TOOLS = frozenset(t.tool for t in TOOLS)

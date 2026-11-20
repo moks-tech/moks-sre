@@ -13,17 +13,17 @@ from __future__ import annotations
 import statistics
 from typing import Any
 
-from .features import FEATURES, CohortFrame, hour_of_week
+from .features import CohortFrame, hour_of_week
 
 MIN_BUCKET = 4
 THRESHOLD = 4.0
 
 
-def _stats(xs: list[float]) -> tuple[float, float] | None:
+def _stats(xs: list[float]) -> list[float] | None:
     if len(xs) < MIN_BUCKET:
         return None
     med = statistics.median(xs)
-    return med, statistics.median(abs(x - med) for x in xs)
+    return [med, statistics.median(abs(x - med) for x in xs)]  # a list, as it is stored: state is JSON
 
 
 def _floor(med: float, mad: float) -> float:
@@ -32,19 +32,20 @@ def _floor(med: float, mad: float) -> float:
 
 def fit(frames: list[CohortFrame]) -> dict[str, Any]:
     """{feature: {"week": {how: [med, mad]}, "day": {...}, "all": [med, mad] | None}} from training frames."""
-    buckets: dict[str, dict[str, dict[int, list[float]]]] = {f: {"week": {}, "day": {}} for f in FEATURES}
-    every: dict[str, list[float]] = {f: [] for f in FEATURES}
+    names = list(dict.fromkeys(f for fr in frames for f in fr.features))
+    buckets: dict[str, dict[str, dict[int, list[float]]]] = {f: {"week": {}, "day": {}} for f in names}
+    every: dict[str, list[float]] = {f: [] for f in names}
     for fr in frames:
         for t, row in fr.rows():
             how = hour_of_week(t)
-            for f, v in zip(FEATURES, row):
+            for f, v in zip(fr.features, row):
                 if v is None:
                     continue
                 buckets[f]["week"].setdefault(how, []).append(v)
                 buckets[f]["day"].setdefault(how % 24, []).append(v)
                 every[f].append(v)
     out: dict[str, Any] = {}
-    for f in FEATURES:
+    for f in names:
         week = {str(k): s for k, xs in buckets[f]["week"].items() if (s := _stats(xs))}
         day = {str(k): s for k, xs in buckets[f]["day"].items() if (s := _stats(xs))}
         out[f] = {"week": week, "day": day, "all": _stats(every[f]), "samples": len(every[f])}
@@ -66,10 +67,10 @@ def expected(model: dict[str, Any], feature: str, ts: int) -> tuple[float, float
 
 def score(model: dict[str, Any], frame: CohortFrame, threshold: float = THRESHOLD) -> dict[str, Any]:
     """The window's deviation per feature and whether any is unusual. Missing points are skipped and counted."""
-    per: dict[str, list[tuple[float, float, float]]] = {f: [] for f in FEATURES}
+    per: dict[str, list[tuple[float, float, float]]] = {f: [] for f in frame.features}
     unseen: set[str] = set()
     for t, row in frame.rows():
-        for f, v in zip(FEATURES, row):
+        for f, v in zip(frame.features, row):
             if v is None:
                 continue
             e = expected(model, f, t)
