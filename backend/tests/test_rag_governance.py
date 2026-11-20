@@ -104,14 +104,10 @@ async def test_request_scope_narrows_a_wide_reader():
 
 def test_filters_preserve_pairs_for_every_backend():
     g = [access.Grant("prod", "team-a"), access.Grant("dev", "team-b")]
-    os_filter, exact = access.opensearch(g)
-    assert exact and len(os_filter["bool"]["should"]) == 2
-    assert os_filter["bool"]["should"][0]["bool"]["filter"] == [{"terms": {"environment": ["*", "prod"]}}, {"terms": {"namespace": ["*", "team-a"]}}]
     pc, exact = access.pinecone(g)
     assert exact and pc == {"$or": [{"$and": [{"environment": {"$in": ["*", "prod"]}}, {"namespace": {"$in": ["*", "team-a"]}}]},
                                     {"$and": [{"environment": {"$in": ["*", "dev"]}}, {"namespace": {"$in": ["*", "team-b"]}}]}]}
     assert access.pinecone([access.Grant("prod-*", "a")])[1] is False  # says so, and search widens
-    assert access.opensearch([access.Grant("*", "*")]) == (None, True)
     assert access.pinecone([]) == ({"environment": {"$in": []}}, True)
 
 
@@ -525,12 +521,12 @@ class Index:
 async def ext(monkeypatch):
     fake = Index()
     monkeypatch.setattr(service, "external", lambda name=None: fake)
-    monkeypatch.setattr(service, "backend_name", lambda: "opensearch")
+    monkeypatch.setattr(service, "backend_name", lambda: "pinecone")
     async with session_scope() as db:
         await db.execute(text("UPDATE index_outbox SET status = 'done' WHERE status <> 'done'"))
-        await db.execute(text("UPDATE embedding_indexes SET status = 'retired' WHERE backend = 'opensearch' AND status = 'active'"))
+        await db.execute(text("UPDATE embedding_indexes SET status = 'retired' WHERE backend = 'pinecone' AND status = 'active'"))
         await db.execute(text("UPDATE documents SET indexed_revision = content_revision"))
-        db.add(EmbeddingIndex(backend="opensearch", model_key="keyword-only", index_name="active", status="active"))
+        db.add(EmbeddingIndex(backend="pinecone", model_key="keyword-only", index_name="active", status="active"))
     yield fake
 
 

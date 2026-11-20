@@ -279,7 +279,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Investigations", ("max_", "default_query", "investigation_", "intent_", "knowledge_", "guidance_", "evidence_", "auto_investigations")),
     ("LLM spend", ("llm_",)),
     ("Machine learning", ("ml_",)),
-    ("Knowledge search", ("rag_", "opensearch_", "pinecone_")),
+    ("Knowledge search", ("rag_", "pinecone_")),
     ("CrewAI", ("crewai_",)),
     ("Secrets sync", ("secrets_",)),
     ("Terminal", ("terminal_",)),

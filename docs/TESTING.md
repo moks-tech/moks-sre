@@ -291,7 +291,6 @@ Index coverage at the same time, as active documents against qualifying files: `
 | Prompt injection in documents | `test_rag.py::test_prompt_injection_in_documents_cannot_trigger_actions` (a retrieved runbook demanding scale-to-zero; the request is denied and audited) |
 | Database backups and backup details | `test_database_backups.py` (no approval, encrypted upload proven, bad or cut dumps fail, secrets redacted, schedules, targets limited to real databases, stream framing, details view) |
 | Force approve | `test_actions.py` (global admin only, refused attempts audited, reason required, hash bound, expired plans revived with a new hash, finished plans stay closed, role loss voids it, changed object still stops the executor) |
-| Amazon OpenSearch Service signing | `test_rag_aws.py` (signature recomputed over the exact JSON and bulk bodies, tampering detected, missing credentials, plain HTTP refused, basic auth unchanged) |
 | Claude on Bedrock | `test_llm_providers.py` (model routing, no sampling or fallback parameters, refusal, missing credentials, endpoint from region) |
 | Approval expiry, replay, parameter changes | `test_actions.py` (self-approval refused except for admins, hash mismatch, expiry, replay, parameters tampered after approval, revoked approver, resource changed after review, policy limits, forbidden patch fields) |
 | Remediation validation and failure recovery | `test_actions.py::test_validation_failure_triggers_automatic_recovery`, `test_full_flow_with_separation_of_duties` |
@@ -323,9 +322,9 @@ scripts/validate-argocd-split.py
 
 ## Not yet verified (Phases 2–4)
 
-- Executor writes, diagnostic pods and OpenSearch have **not run on mk4**. They are covered by fakes
+- Executor writes and diagnostic pods have **not run on mk4**. They are covered by fakes
   and server-side dry runs; deploy, then exercise them on `moks-sre-lab` (lab/README.md).
-- CloudWatch, Cost Explorer/Budgets, remote EKS and OpenSearch were tested against stubs or mock
+- CloudWatch, Cost Explorer/Budgets and remote EKS were tested against stubs or mock
   transports only (no credentials or cluster available). Grafana needs a token.
 - No LLM provider was called; LLM mode is tested with a scripted OpenAI-compatible endpoint.
 
@@ -376,19 +375,6 @@ covered by tests with simulated services (`test_rag_governance.py`, `test_pineco
 `test_llm_providers.py` covers each provider's request and response shape with the network simulated: no call reaches
 a real model. Query drafts use a stand-in model. `format_query` and scoped label lookups were checked by hand against mk4's
 Prometheus and Loki.
-
-## OpenSearch
-
-`tests/test_opensearch_contract.py` and the render tests need no server. `tests/test_opensearch_real.py` is skipped unless pointed at a real cluster running the chart's own security files, and uses throwaway `moks-chunks-test-*` indexes only:
-
-```sh
-scripts/opensearch-secrets.sh --files /tmp/os-creds
-# Start OpenSearch 3.9.0 with deploy/helm/moks/files/opensearch/, those certificates in config/tls and internal_users.yml, and path.repo set.
-MOKS_TEST_OPENSEARCH_URL=https://localhost:9200 MOKS_TEST_OPENSEARCH_CREDS=/tmp/os-creds MOKS_TEST_OPENSEARCH_REPO=/allowed/repo \
-  pytest tests/test_opensearch_real.py
-```
-
-Never point it at a cluster that serves anyone. It does not replace a run on mk4.
 
 ## Knowledge and skill governance
 

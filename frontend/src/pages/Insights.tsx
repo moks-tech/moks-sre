@@ -89,32 +89,19 @@ function SearchBackend() {
     catch (e: any) { toast(e.message, "bad"); }
   }
   if (!d) return null;
-  const p = d.probe, active = d.generations.find((g: any) => g.serving), snap = p?.snapshots, c = d.coverage;
+  const active = d.generations.find((g: any) => g.serving), c = d.coverage;
   const fallbacks = Object.entries(d.retrieval.fallbacks) as [string, number][];
   const modes = Object.entries(d.retrieval.modes) as [string, number][];
-  const health = !p ? "not probed yet" : !p.reachable ? "unreachable" : p.health;
   return (
     <div className="stack">
       <h3>Search backend</h3>
       <div className="stat-row">
-        <Stat value={health} label={d.cluster ? `cluster ${d.cluster}` : d.backend} tone={p && !p.reachable ? "bad" : undefined} />
+        <Stat value={d.backend} label="backend" />
         <Stat value={active?.index ?? "—"} label="active generation" />
         <Stat value={active ? (active.dimensions ? `${active.dimensions}` : "keyword only") : "—"} label={active?.model ?? "embedding model"} />
         <Stat value={c ? `${c.chunks_written} of ${c.chunks_expected}` : "—"} label="chunks in this generation" />
         <Stat value={c ? `${c.vectors_written} of ${c.vectors_expected}` : "—"} label="vectors in this generation" />
         <Stat value={d.backfill_eligible} label="documents waiting for vector backfill" />
-      </div>
-      {p?.error && <div className="alert warn small">{p.error}</div>}
-      {p?.read_only && <div className="alert warn small">OpenSearch has blocked writes, usually because the disk passed the flood-stage watermark. Index changes wait in the outbox.</div>}
-      {d.url && !d.tls_verified && <div className="alert warn small">This connection is not TLS-verified{d.authenticated ? "" : " and has no login"}. See docs/OPENSEARCH.md.</div>}
-      {p && <div className="small muted">
-        Checked {new Date(p.checked_at).toLocaleString()}{p.version ? `, OpenSearch ${p.version}` : ""}
-        {p.heap_used_percent != null ? `, heap ${p.heap_used_percent}%` : ""}
-        {p.disk_free_bytes != null ? `, ${(p.disk_free_bytes / 1e9).toFixed(1)} GB free on its disk` : ""}
-        {p.unassigned_shards ? `, ${p.unassigned_shards} unassigned shards` : ""}.
-      </div>}
-      <div className="small muted">
-        {snap ? (snap.error ? `Snapshots: ${snap.error}` : `Last successful snapshot: ${snap.last_success_at ?? "none yet"}${snap.latest_state && snap.latest_state !== "SUCCESS" ? `, latest ${snap.latest_state}` : ""}.`) : "Snapshots are not configured. The index can be rebuilt from PostgreSQL."}
       </div>
       {modes.length > 0 && <div className="small muted">Retrieval in this API process: {modes.map(([k, v]) => `${k} ${v}`).join(", ")}.</div>}
       {fallbacks.length > 0 && <div className="small">Fallbacks: {fallbacks.map(([k, v]) => `${k} (${v})`).join("; ")}.</div>}

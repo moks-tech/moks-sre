@@ -163,30 +163,3 @@ variable "backup_noncurrent_days" {
   type        = number
   default     = 90
 }
-
-# ---- Amazon OpenSearch Service for RAG (BM25 + k-NN) --------------------------------------------
-
-variable "opensearch_domain_name" {
-  description = "Domain to create for MOKS knowledge search. Empty creates nothing. Needs runtime_user_enabled."
-  type        = string
-  default     = ""
-  validation {
-    condition     = var.opensearch_domain_name == "" || can(regex("^[a-z][a-z0-9-]{2,27}$", var.opensearch_domain_name))
-    error_message = "Use 3-28 lowercase letters, digits or hyphens, starting with a letter."
-  }
-}
-
-variable "opensearch_engine_version" {
-  type    = string
-  default = "OpenSearch_3.5"
-}
-
-variable "opensearch_instance_type" {
-  type    = string
-  default = "m7g.medium.search"
-}
-
-variable "opensearch_storage_gb" {
-  type    = number
-  default = 20
-}

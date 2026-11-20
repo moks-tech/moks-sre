@@ -1,6 +1,6 @@
 # Defaults. Environment-specific files (values-hetzner.yaml, values-eks.yaml) override these.
 
-# What to render: all, or one of foundation, database, migrate, opensearch, api, worker, executor,
+# What to render: all, or one of foundation, database, migrate, api, worker, executor,
 # terminal, reranker, routing, backup. Each child Argo CD Application sets its own group as a parameter and
 # shares the environment's values file, so shared checksums match. See docs/ARGOCD_APP_SPLIT.md.
 resourceGroup: all
@@ -162,8 +162,6 @@ rbac:
   namespaces: []
 
 # A plain Kubernetes Ingress for clusters with an ingress controller. HTTP to HTTPS and TLS are the controller's job.
-# The OpenSearch routes (rag.opensearch.publicRoute, dashboards) exist only with istio below: their logins and the
-# read-only rule live on the gateway.
 ingress:
   enabled: false
   className: ""            # empty: the cluster's default IngressClass
@@ -233,86 +231,10 @@ backup:
 #                (fresh installs; moving an existing alpine database to the Debian image needs dump/restore)
 #   pinecone   - keyword search in the MOKS database, vectors in Pinecone (no extra pods). Needs
 #                MOKS_CRED_PINECONE_API_KEY in the Secret, an active embedding model and a reindex.
-#   opensearch - BM25 + k-NN. Without rag.opensearch.url: single-node pod, ~2.5 GiB memory, persistent
-#                volume. With it: Amazon OpenSearch Service (deploy/terraform/opensearch.tf), no pod,
-#                requests signed with the pod's AWS identity. Moving backend needs a reindex.
+# Moving backend needs a reindex.
 rag:
   backend: postgres
   pinecone: {cloud: aws, region: us-east-1}
-  opensearch:
-    url: ""                # https://<domain endpoint> for Amazon OpenSearch Service; set awsRegion too
-    awsRegion: ""
-    image: opensearchproject/opensearch:3.9.0
-    heapSize: 1g           # container limit = heap x 2
-    storage: 20Gi
-    storageClass: ""       # empty: the cluster default
-    nodeName: ""
-    fixVolumePermissions: false   # true for storage that ignores fsGroup (minikube hostPath)
-    diskWatermarks: {}     # {low: 3gb, high: 2gb, floodStage: 1gb} replaces the percentages. All three or none.
-    # Publish the bundled pod's read endpoints behind a basic-auth login. The pod has no security of its own, and
-    # this bypasses MOKS document access: the login reads every indexed chunk. Needs istio.delegate: the gateway's
-    # routing table holds the login (from authSecret) and the read-only rule (mk4: miniKube deploy/minikube/istio/edge).
-    publicRoute:
-      enabled: false
-      path: /opensearch
-      authSecret: moks-opensearch-auth   # created out of band, see docs/OPERATOR_GUIDE.md; the gateway's login comes from it
-    # OpenSearch Dashboards for the bundled pod. This login can write and delete, because Dashboards reaches the pod
-    # directly, and it reads every chunk regardless of MOKS document access. Needs istio.delegate, like publicRoute.
-    dashboards:
-      enabled: false
-      image: opensearchproject/opensearch-dashboards:3.9.0@sha256:256d4cea5928868ac09bca642a0ac8285a2b7e4b7fdd45c4ec06e75a5cf3184c   # keep on the server's version
-      path: /opensearch-dashboards
-      authSecret: moks-opensearch-dashboards-auth   # created out of band, see docs/OPERATOR_GUIDE.md; the gateway's login comes from it
-    # moks-search: a second, secured single node beside the pod above (docs/OPENSEARCH.md). Persistence, not
-    # high availability. enabled deploys it and moves nothing. active points search and indexing at it, and
-    # the pod above stays as the way back until you remove it.
-    secure:
-      enabled: false
-      active: false
-      retireOriginal: false   # stops rendering the pod above, once active has soaked. Its volume stays until you delete it.
-      # Required before retireOriginal renders: the generation that passed `opensearch-migrate.sh validate` after cutover and
-      # the date the soak ended, e.g. "moks-chunks-ab12cd34 validated 2026-11-20". Being active is not the same as being verified.
-      cutoverVerified: ""
-      cluster: secure      # names its generations in PostgreSQL, apart from the original cluster's
-      # The upstream image: security and TLS, no snapshots, no Prometheus exporter. To have those, set this to
-      # registry.jithendar.com/jithendar/moks-opensearch:latest (CI builds deploy/opensearch/Dockerfile), and
-      # pluginsInstalled to true.
-      image: opensearchproject/opensearch:3.9.0@sha256:3b55f6b6249cfdb92b52ee59adc8a266203ba9ef9f5d82544fad6f1af2f3609e
-      pluginsInstalled: false
-      heapSize: 1g         # measured on mk4: 254 MiB of 1 GiB heap used, 1487 MiB pod, at 1,942 chunks and 3072 dimensions
-      resources:
-        requests: {cpu: 250m, memory: 2Gi}
-        limits: {cpu: "2", memory: 2Gi}
-      storage: 10Gi        # a label on hostPath: nothing enforces it, and the class cannot expand
-      nodeName: ""
-      fixVolumePermissions: false
-      allowMmap: false     # true only where the node has vm.max_map_count >= 262144
-      diskWatermarks: {}   # as above
-      secrets:             # created by scripts/opensearch-secrets.sh, never by Helm
-        tls: moks-search-tls
-        adminTls: moks-search-admin-tls
-        users: moks-search-users
-        clients: moks-search-clients
-      # OpenSearch Dashboards for administrators (docs/OPENSEARCH.md). Off by default, ClusterIP, port-forward first.
-      # It does not follow MOKS RBAC: a login sees what its OpenSearch role allows, whatever its MOKS bindings.
-      dashboards:
-        enabled: false
-        image: opensearchproject/opensearch-dashboards:3.9.0@sha256:256d4cea5928868ac09bca642a0ac8285a2b7e4b7fdd45c4ec06e75a5cf3184c   # keep on the server's version
-        secret: moks-search-dashboards   # keys password, cookie-password, from scripts/opensearch-secrets.sh
-        resources:
-          requests: {cpu: 100m, memory: 512Mi}
-          limits: {cpu: "1", memory: 1Gi}
-        ingress:              # never needed; port-forward works without it. Refused while publicRoute holds the same path
-          enabled: false
-          path: /opensearch
-      snapshots:           # needs pluginsInstalled
-        enabled: false
-        repository: moks-knowledge
-        policy: moks-knowledge
-        endpoint: ""       # https://<account>.r2.cloudflarestorage.com
-        region: auto
-        pathStyle: true
-        credentialsSecret: moks-search-snapshots   # keys access-key, secret-key
 
 # Phase 3 executor: the only component with write access. It acts only in these namespaces
 # (one RoleBinding each, verbs limited to the allowlisted actions), plus diagnostics.namespace.

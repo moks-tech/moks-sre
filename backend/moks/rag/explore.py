@@ -1,5 +1,5 @@
 """What the Knowledge Explorer shows: documents, their chunks and how far each got through sync, indexing and
-embedding. Everything here reads PostgreSQL, which holds the text, and OpenSearch is never asked, so this cannot
+embedding. Everything here reads PostgreSQL, which holds the text, and no external index is asked, so this cannot
 become a way around document access.
 
 One predicate decides what a person sees, and the list, the filter options, every count and each direct link

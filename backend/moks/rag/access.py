@@ -112,31 +112,6 @@ def sql(found: list[Grant], params: dict, column: str = "d", prefix: str = "g") 
     return "(" + " OR ".join(f"({p})" for p in parts) + ")" if parts else "FALSE"
 
 
-def opensearch(found: list[Grant]) -> tuple[dict | None, bool]:
-    """(filter, exact). Character classes cannot be expressed, so such an axis is left out and the
-    final check decides; `exact` tells the caller that candidates may include unreadable documents."""
-    exact = True
-
-    def axis(field: str, value: str) -> dict | None:
-        nonlocal exact
-        if value == "*":
-            return None
-        if "[" in value or "\\" in value:  # a wildcard query reads a backslash as an escape; fnmatch does not
-            exact = False
-            return None
-        if any(c in value for c in GLOB):
-            return {"bool": {"should": [{"term": {field: "*"}}, {"wildcard": {field: {"value": value}}}], "minimum_should_match": 1}}
-        return {"terms": {field: ["*", value]}}
-
-    should = []
-    for g in found:
-        terms = [x for x in (axis("environment", g.environment), axis("namespace", g.namespace)) if x]
-        if not terms:
-            return None, exact  # unrestricted
-        should.append({"bool": {"filter": terms}})
-    return {"bool": {"should": should, "minimum_should_match": 1}} if should else {"bool": {"must_not": [{"match_all": {}}]}}, exact
-
-
 def pinecone(found: list[Grant]) -> tuple[dict | None, bool]:
     """(filter, exact). Pinecone metadata filters have no patterns."""
     exact = True

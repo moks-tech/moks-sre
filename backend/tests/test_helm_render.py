@@ -41,14 +41,6 @@ BUNDLED = "postgres.bundled=true"
 VELERO = "velero.enabled=true"
 # mk4 turns secret sync on; the checks of the posture without it switch it off again.
 SYNC_OFF = "secretsSync.enabled=false"
-# mk4 ran the bundled OpenSearch like this until 2026-11-19 and searches PostgreSQL since. The checks of the OpenSearch
-# backend, which other environments can still choose, turn it back on.
-OPENSEARCH = ("rag.backend=opensearch", "rag.opensearch.storageClass=local-path", "rag.opensearch.fixVolumePermissions=true",
-              "rag.opensearch.diskWatermarks.low=3gb", "rag.opensearch.diskWatermarks.high=2gb", "rag.opensearch.diskWatermarks.floodStage=1gb",
-              "rag.opensearch.publicRoute.enabled=true", "rag.opensearch.dashboards.enabled=true",
-              "rag.opensearch.secure.fixVolumePermissions=true", "rag.opensearch.secure.allowMmap=true",
-              "rag.opensearch.secure.diskWatermarks.low=3gb", "rag.opensearch.secure.diskWatermarks.high=2gb",
-              "rag.opensearch.secure.diskWatermarks.floodStage=1gb")
 TERMINAL = (
     "terminal.enabled=true",
     "terminal.image.digest=sha256:" + "0" * 64,
@@ -149,14 +141,13 @@ def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
     assert [d["metadata"]["name"] for d in docs if d["kind"] == "AuthorizationPolicy"] == ["allow-known-callers"]
     assert not any(d["kind"] == "Ingress" or d["apiVersion"].startswith("traefik.io/") for d in docs)
     routes = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "VirtualService"}
-    assert set(routes) == {"moks"}   # /opensearch and /opensearch-dashboards went with the bundled pod
+    assert set(routes) == {"moks"}
     assert not any("hosts" in r or "gateways" in r for r in routes.values())   # delegates of miniKube's routing table
     peer = {d["metadata"]["name"]: d["spec"] for d in docs if d["kind"] == "PeerAuthentication"}
     assert peer["default"] == {"mtls": {"mode": "STRICT"}}
     # mk4: the Istio gateway is the only edge and Prometheus scrapes through its sidecar, so no port takes plain text.
     # Every name still renders (Argo CD never prunes here, so a dropped policy would keep its old exceptions live).
-    assert set(peer) == {"default", "moks-metrics", "moks-reranker-metrics", "moks-embedder-metrics", "moks-opensearch-edge",
-                         "moks-opensearch-dashboards-edge"}
+    assert set(peer) == {"default", "moks-metrics", "moks-reranker-metrics", "moks-embedder-metrics"}
     assert all("portLevelMtls" not in spec and spec["mtls"] == {"mode": "STRICT"} for spec in peer.values())
     assert peer["moks-metrics"]["selector"] == {"matchLabels": {"app": "moks"}}
     # An edge or a scraper outside the mesh gets exactly its ports back.
@@ -165,8 +156,6 @@ def test_minikube_is_strict_and_routed_by_delegates_without_gateway_policies():
     assert legacy["moks-metrics"]["portLevelMtls"] == {9464: {"mode": "PERMISSIVE"}, 8080: {"mode": "PERMISSIVE"}}
     assert legacy["moks-reranker-metrics"]["portLevelMtls"] == {9464: {"mode": "PERMISSIVE"}}
     assert legacy["moks-embedder-metrics"]["portLevelMtls"] == {9464: {"mode": "PERMISSIVE"}}
-    assert legacy["moks-opensearch-edge"]["portLevelMtls"] == {9200: {"mode": "PERMISSIVE"}}
-    assert legacy["moks-opensearch-dashboards-edge"]["portLevelMtls"] == {5601: {"mode": "PERMISSIVE"}}
     policy = next(d for d in docs if d["kind"] == "AuthorizationPolicy")
     assert policy["metadata"]["annotations"] == {"istio.io/dry-run": "true"}
     assert policy["spec"] == {"action": "ALLOW", "rules": [{"from": [{"source": {"namespaces": ["moks-sre", "istio-ingress", "monitoring"]}}]}]}
@@ -197,10 +186,9 @@ def test_minikube_sidecars_reach_istiod_only_from_already_isolated_pods():
     sessions = {"moks-diagnostic", "moks-terminal"}
     assert sessions <= isolated and not sessions & selected
     isolated -= sessions
-    # moks-postgres and the OpenSearch pods are always selected; mk4 runs none of them, so those match nothing.
-    assert isolated <= selected and selected - isolated <= {"moks-search", "moks-search-dashboards", "moks-postgres",
-                                                            "moks-opensearch", "moks-opensearch-dashboards"}
-    # DNS too: the proxy resolves istiod by name, and postgres, opensearch and reranker have no DNS rule of their own.
+    # moks-postgres is always selected; mk4 does not run it, so that matches nothing.
+    assert isolated <= selected and selected - isolated <= {"moks-postgres"}
+    # DNS too: the proxy resolves istiod by name, and postgres and the reranker have no DNS rule of their own.
     assert mesh["egress"] == [{"to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kube-system"}},
                                        "podSelector": {"matchLabels": {"k8s-app": "kube-dns"}}}],
                                "ports": [{"port": 53, "protocol": "UDP"}, {"port": 53, "protocol": "TCP"}]},
@@ -359,7 +347,7 @@ def test_the_gateway_is_routed_under_the_base_path_and_keeps_to_its_own_identity
     # Both narrow the routing table's /moks prefix, so Istio's delegation accepts them.
     assert terminal["match"] == [{"uri": {"prefix": "/moks/api/terminal"}}] and terminal["route"][0]["destination"]["host"] == "moks-terminal.moks-sre.svc.cluster.local"
     assert portal["match"] == [{"uri": {"prefix": "/moks"}}] and portal["route"][0]["destination"]["host"] == "moks-api.moks-sre.svc.cluster.local"
-    plain = render("values-hetzner.yaml", *TERMINAL, "istio.enabled=false", "ingress.enabled=true", "rag.opensearch.publicRoute.enabled=false", "rag.opensearch.dashboards.enabled=false")
+    plain = render("values-hetzner.yaml", *TERMINAL, "istio.enabled=false", "ingress.enabled=true")
     paths = of(plain, "Ingress", "moks")["spec"]["rules"][0]["http"]["paths"]
     assert paths[0]["path"] == "/moks/api/terminal" and paths[0]["backend"]["service"]["name"] == "moks-terminal"
     assert paths[1]["path"] == "/moks" and paths[1]["backend"]["service"]["name"] == "moks-api"
@@ -498,47 +486,6 @@ def test_the_mesh_allows_only_the_callers():
     assert rule["to"][0]["operation"]["ports"] == ["8090"] and all(p.startswith("cluster.local/ns/moks-sre/sa/") for p in rule["from"][0]["source"]["principals"])
 
 
-def test_opensearch_public_route_is_a_delegate_that_strips_its_prefix():
-    # The login and the read-only rule are the gateway's (miniKube deploy/minikube/istio/edge): this only routes.
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *OPENSEARCH)
-    route = of(docs, "VirtualService", "moks-opensearch")["spec"]
-    assert "hosts" not in route and "gateways" not in route
-    (http,) = route["http"]
-    assert "match" not in http and http["rewrite"] == {"uriRegexRewrite": {"match": "^/opensearch/?", "rewrite": "/"}}
-    assert http["route"][0]["destination"] == {"host": "moks-opensearch.moks-sre.svc.cluster.local", "port": {"number": 9200}}
-    assert not any(d["apiVersion"].startswith("traefik.io/") for d in docs)
-    rules = of(docs, "NetworkPolicy", "moks-opensearch")["spec"]["ingress"]
-    assert {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "istio-ingress"}}} in rules[1]["from"]
-
-
-def test_opensearch_routes_need_the_gateway_routing_table():
-    # Without a delegating gateway there is nowhere for the login and the read-only rule to live.
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        render("values-hetzner.yaml", *OPENSEARCH, "istio.delegate=false", "istio.gateway=istio-ingress/public", "istio.host=jithendar.com")
-    assert "needs istio.delegate" in e.value.stderr
-
-
-def test_opensearch_dashboards_has_its_own_login_and_a_writable_config():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *OPENSEARCH)
-    pod = of(docs, "Deployment", "moks-opensearch-dashboards")["spec"]["template"]["spec"]
-    env = {e["name"]: e["value"] for e in pod["containers"][0]["env"]}
-    assert env["SERVER_BASEPATH"] == "/opensearch-dashboards" and env["SERVER_REWRITEBASEPATH"] == "true"
-    assert env["OPENSEARCH_HOSTS"] == '["http://moks-opensearch:9200"]' and env["DISABLE_SECURITY_DASHBOARDS_PLUGIN"] == "true"
-    assert ":" + "3.9.0" in pod["containers"][0]["image"] and ":3.9.0" in of(docs, "StatefulSet", "moks-opensearch")["spec"]["template"]["spec"]["containers"][0]["image"]
-    assert not pod["containers"][0].get("volumeMounts") and pod["automountServiceAccountToken"] is False
-    route = of(docs, "VirtualService", "moks-opensearch-dashboards")["spec"]
-    assert "hosts" not in route and "rewrite" not in route["http"][0]   # Dashboards serves its base path itself
-    assert route["http"][0]["route"][0]["destination"]["host"] == "moks-opensearch-dashboards.moks-sre.svc.cluster.local"
-    assert {"podSelector": {"matchLabels": {"app": "moks-opensearch-dashboards"}}} in of(docs, "NetworkPolicy", "moks-opensearch")["spec"]["ingress"][2]["from"]
-
-
-@pytest.mark.parametrize("sets", [("rag.opensearch.publicRoute.enabled=false", "rag.opensearch.dashboards.enabled=false"), ("rag.opensearch.url=https://d.example", "rag.opensearch.awsRegion=us-east-1")])
-def test_opensearch_stays_private_unless_the_bundled_pod_is_published(sets):
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *sets)
-    assert not any(d["kind"] == "IngressRoute" or d["metadata"]["name"].startswith("opensearch-") for d in docs)
-    assert {d["metadata"]["name"] for d in docs if d["kind"] == "VirtualService"} == {"moks"}
-
-
 def test_mk4_seeds_bge_m3_and_lets_the_pods_reach_it():
     """The shared bge-m3 (miniKube deploy/minikube/embeddings/bge-m3) admits app=moks pods by NetworkPolicy and the
     moks service account by AuthorizationPolicy; this side needs the seed entry and the egress rule."""
@@ -558,211 +505,8 @@ def test_mk4_searches_postgresql_and_runs_no_search_pods():
     docs = render("values-hetzner.yaml")
     config = of(docs, "ConfigMap", "moks-config")["data"]
     assert config["MOKS_RAG_BACKEND"] == "postgres" and not [k for k in config if k.startswith("MOKS_OPENSEARCH")]
-    assert not [d for d in docs if "opensearch" in d["metadata"]["name"] and d["kind"] != "PeerAuthentication"]
-    assert render("values-hetzner.yaml", "resourceGroup=opensearch") == []   # so moks-opensearch waits in optional/
+    assert not [d for d in docs if "opensearch" in d["metadata"]["name"] or d["metadata"]["name"].startswith("moks-search")]
     assert not [r for r in of(docs, "NetworkPolicy", "moks")["spec"]["egress"] if "opensearch" in str(r)]
-
-
-def test_bundled_opensearch_runs_on_the_node_with_its_data():
-    # On k3s the local-path volume's own node affinity places the pod; nodeName is for clusters where it does not.
-    docs = render("values-hetzner.yaml", *OPENSEARCH, "rag.opensearch.nodeName=mk4-m02")
-    spec = of(docs, "StatefulSet", "moks-opensearch")["spec"]["template"]["spec"]
-    assert spec["nodeSelector"] == {"kubernetes.io/hostname": "mk4-m02"} and spec["initContainers"][0]["name"] == "volume-permissions"
-    env = {e["name"]: e["value"] for e in spec["containers"][0]["env"]}
-    assert env["cluster.routing.allocation.disk.watermark.flood_stage"] == "1gb"
-    config = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "moks-config")["data"]
-    assert config["MOKS_RAG_BACKEND"] == "opensearch" and config["MOKS_OPENSEARCH_URL"] == "http://moks-opensearch:9200"
-
-
-def test_watermarks_stay_out_of_the_chart_unless_asked_for():
-    env = of(render("values-hetzner.yaml", *OPENSEARCH, "rag.opensearch.diskWatermarks=null"), "StatefulSet", "moks-opensearch")["spec"]["template"]["spec"]["containers"][0]["env"]
-    assert not [e for e in env if "watermark" in e["name"]]
-
-
-
-SECURE = ("rag.opensearch.secure.enabled=true",)
-ACTIVE = (*SECURE, "rag.opensearch.secure.active=true", "rag.opensearch.publicRoute.enabled=false", "rag.opensearch.dashboards.enabled=false")
-
-
-def test_the_secured_cluster_is_off_until_asked_for():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *OPENSEARCH)
-    assert not any(d["metadata"]["name"].startswith("moks-search") for d in docs)
-    assert of(docs, "ConfigMap", "moks-config")["data"]["MOKS_OPENSEARCH_URL"] == "http://moks-opensearch:9200"
-
-
-def test_enabling_it_deploys_beside_the_old_pod_and_moves_nothing():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *SECURE)
-    assert of(docs, "StatefulSet", "moks-search") and of(docs, "StatefulSet", "moks-opensearch")
-    assert of(docs, "ConfigMap", "moks-config")["data"]["MOKS_OPENSEARCH_URL"] == "http://moks-opensearch:9200"
-    ops = of(docs, "CronJob", "moks-search-ops")["spec"]
-    env = {e["name"]: e.get("value") for e in ops["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["env"]}
-    assert ops["suspend"] is True and env["MOKS_OPENSEARCH_STANDBY"] == "true" and env["MOKS_OPENSEARCH_CLUSTER"] == "secure"
-
-
-def test_the_secured_pod_is_hardened_and_never_disables_security():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *SECURE, "rag.opensearch.secure.nodeName=mk4-m02")
-    sts = of(docs, "StatefulSet", "moks-search")["spec"]
-    spec = sts["template"]["spec"]
-    c = spec["containers"][0]
-    env = {e["name"]: e.get("value") for e in c["env"]}
-    assert "DISABLE_SECURITY_PLUGIN" not in env and env["DISABLE_INSTALL_DEMO_CONFIG"] == "true"
-    assert c["startupProbe"]["httpGet"]["scheme"] == "HTTPS" and c["readinessProbe"] and c["livenessProbe"]["tcpSocket"]
-    assert "@sha256:" in c["image"] and c["securityContext"]["capabilities"]["drop"] == ["ALL"] and spec["securityContext"]["runAsNonRoot"]
-    assert spec["nodeSelector"] == {"kubernetes.io/hostname": "mk4-m02"} and spec["terminationGracePeriodSeconds"] >= 60
-    assert sts["persistentVolumeClaimRetentionPolicy"] == {"whenDeleted": "Retain", "whenScaled": "Retain"}
-    assert not any(i.get("securityContext", {}).get("privileged") for i in spec["initContainers"])
-    config = of(docs, "ConfigMap", "moks-search-config")["data"]["opensearch.yml"]
-    assert "plugins.security.ssl.http.enabled: true" in config and "plugins.security.disabled" not in config and "action.auto_create_index: false" in config
-
-
-def test_the_secured_service_is_internal_and_reachable_only_by_those_who_use_it():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *SECURE)
-    assert of(docs, "Service", "moks-search")["spec"]["type"] == "ClusterIP"
-    assert not any(d["kind"] in ("Ingress", "IngressRoute") and "moks-search" in str(d["spec"]) for d in docs)
-    np = of(docs, "NetworkPolicy", "moks-search")["spec"]
-    who = np["ingress"][0]["from"]
-    assert who[0]["podSelector"]["matchExpressions"][1]["values"] == ["api", "worker", "search-ops"] and np["egress"] == []
-    assert {"to": [{"podSelector": {"matchLabels": {"app": "moks-search"}}}], "ports": [{"port": 9200, "protocol": "TCP"}]} in of(docs, "NetworkPolicy", "moks")["spec"]["egress"]
-
-
-def test_at_cutover_each_component_gets_its_own_identity():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *ACTIVE)
-    data = of(docs, "ConfigMap", "moks-config")["data"]
-    assert data["MOKS_OPENSEARCH_URL"] == "https://moks-search:9200" and data["MOKS_OPENSEARCH_CLUSTER"] == "secure"
-
-    def names(deployment):
-        return {e["name"] for e in of(docs, "Deployment", deployment)["spec"]["template"]["spec"]["containers"][0]["env"]}
-    assert "MOKS_OPENSEARCH_PASSWORD" in names("moks-api") and "MOKS_OPENSEARCH_INDEX_PASSWORD" not in names("moks-api") and "MOKS_OPENSEARCH_LIFECYCLE_PASSWORD" not in names("moks-api")
-    assert {"MOKS_OPENSEARCH_INDEX_PASSWORD", "MOKS_OPENSEARCH_LIFECYCLE_PASSWORD"} <= names("moks-worker")
-    volume = next(v for v in of(docs, "Deployment", "moks-api")["spec"]["template"]["spec"]["volumes"] if v["name"] == "search-ca")
-    assert volume["secret"]["items"] == [{"key": "ca.crt", "path": "ca.crt"}]  # never tls.key
-
-
-def test_the_original_pod_goes_only_after_cutover_and_only_when_asked():
-    verified = "rag.opensearch.secure.cutoverVerified=moks-chunks-ab12cd34 validated 2026-11-20"
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *ACTIVE, "rag.opensearch.secure.retireOriginal=true", verified)
-    assert not any(d["metadata"]["name"] == "moks-opensearch" for d in docs) and of(docs, "StatefulSet", "moks-search")
-    with pytest.raises(subprocess.CalledProcessError) as e:  # active is not the same as verified
-        render("values-hetzner.yaml", *OPENSEARCH, *ACTIVE, "rag.opensearch.secure.retireOriginal=true")
-    assert "cutoverVerified" in str(e.value.stderr)
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        render("values-hetzner.yaml", *OPENSEARCH, *SECURE, "rag.opensearch.secure.retireOriginal=true")
-    assert "set active first" in str(e.value.stderr)
-
-
-def test_the_old_public_route_blocks_cutover():
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        render("values-hetzner.yaml", *OPENSEARCH, *SECURE, "rag.opensearch.secure.active=true")
-    assert "publicRoute" in str(e.value.stderr)
-
-
-def test_the_old_dashboards_block_cutover():
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        render("values-hetzner.yaml", *OPENSEARCH, *SECURE, "rag.opensearch.secure.active=true", "rag.opensearch.publicRoute.enabled=false", "rag.opensearch.dashboards.enabled=true")
-    assert "rag.opensearch.dashboards" in str(e.value.stderr)
-
-
-def test_snapshots_need_the_image_that_has_the_plugin():
-    with pytest.raises(subprocess.CalledProcessError) as e:
-        render("values-hetzner.yaml", *OPENSEARCH, *SECURE, "rag.opensearch.secure.snapshots.enabled=true")
-    assert "pluginsInstalled" in str(e.value.stderr)
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *SECURE, "rag.opensearch.secure.snapshots.enabled=true", "rag.opensearch.secure.pluginsInstalled=true", "rag.opensearch.secure.snapshots.endpoint=https://x.r2.cloudflarestorage.com")
-    spec = of(docs, "StatefulSet", "moks-search")["spec"]["template"]["spec"]
-    assert [i["name"] for i in spec["initContainers"]] == ["volume-permissions", "keystore"]
-    assert any(r.get("ports") == [{"port": 443, "protocol": "TCP"}] for r in of(docs, "NetworkPolicy", "moks-search")["spec"]["egress"])
-
-
-def test_no_chart_file_holds_a_credential():
-    from pathlib import Path
-    for f in (Path(__file__).parents[2] / "deploy/helm/moks/files/opensearch").iterdir():
-        assert "$2" not in f.read_text() and "hash:" not in f.read_text() and "BEGIN" not in f.read_text()
-
-
-# ---- OpenSearch Dashboards on the secured cluster ------------------------------------------------
-
-
-DASH = (*SECURE, "rag.opensearch.secure.dashboards.enabled=true")
-ROUTED = (*DASH, "rag.opensearch.publicRoute.enabled=false", "rag.opensearch.secure.dashboards.ingress.enabled=true")
-
-
-def dashboards_config(docs) -> dict:
-    return yaml.safe_load(of(docs, "ConfigMap", "moks-search-dashboards")["data"]["opensearch_dashboards.yml"])
-
-
-def test_secured_dashboards_are_off_by_default():
-    for args in ((), SECURE):
-        assert not [d for d in render("values-hetzner.yaml", *OPENSEARCH, *args) if d["metadata"]["name"].startswith("moks-search-dashboards")]
-
-
-def test_secured_dashboards_need_the_secured_cluster():
-    with pytest.raises(subprocess.CalledProcessError):
-        render("values-hetzner.yaml", *OPENSEARCH, "rag.opensearch.secure.dashboards.enabled=true")
-
-
-def test_secured_dashboards_are_internal_and_verify_tls():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *DASH)
-    assert of(docs, "Service", "moks-search-dashboards")["spec"]["type"] == "ClusterIP"
-    assert not [d for d in docs if d["kind"] in ("IngressRoute", "Ingress") and d["metadata"]["name"] == "moks-search-dashboards"]
-    assert of(docs, "NetworkPolicy", "moks-search-dashboards")["spec"]["ingress"] == []
-    cfg = dashboards_config(docs)
-    assert cfg["opensearch.ssl.verificationMode"] == "full" and cfg["opensearch.hosts"] == ["https://moks-search:9200"] and cfg["opensearch.ssl.certificateAuthorities"] == ["/etc/moks-dashboards/ca.crt"]
-    assert cfg["server.basePath"] == "" and cfg["server.rewriteBasePath"] is False
-
-
-def test_secured_dashboards_hold_their_own_identity_and_no_admin_credential():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *DASH)
-    pod = of(docs, "Deployment", "moks-search-dashboards")["spec"]["template"]["spec"]
-    cfg = dashboards_config(docs)
-    assert cfg["opensearch.username"] == "moks_dashboards" and cfg["opensearch.password"] == "${MOKS_DASHBOARDS_PASSWORD}"  # a reference, not a value
-    env = {e["name"]: e for e in pod["containers"][0]["env"]}
-    assert env["MOKS_DASHBOARDS_PASSWORD"]["valueFrom"]["secretKeyRef"]["name"] == "moks-search-dashboards"
-    assert "moks-search-admin" not in json.dumps(pod) and "moks-search-clients" not in json.dumps(pod)
-    secret = next(v for v in pod["volumes"] if v["name"] == "ca")["secret"]
-    assert secret["items"] == [{"key": "ca.crt", "path": "ca.crt"}]  # the CA, never the node key
-    assert pod["automountServiceAccountToken"] is False and pod["containers"][0]["securityContext"]["capabilities"] == {"drop": ["ALL"]}
-    assert "@sha256:" in pod["containers"][0]["image"]
-
-
-def test_secured_dashboards_may_reach_moks_search_and_nothing_else_may_through_them():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *DASH)
-    allowed = of(docs, "NetworkPolicy", "moks-search")["spec"]["ingress"][0]["from"]
-    assert {"podSelector": {"matchLabels": {"app": "moks-search-dashboards"}}} in allowed
-    egress = of(docs, "NetworkPolicy", "moks-search-dashboards")["spec"]["egress"]
-    assert egress[-1]["to"] == [{"podSelector": {"matchLabels": {"app": "moks-search"}}}] and egress[-1]["ports"] == [{"port": 9200, "protocol": "TCP"}]
-
-
-def test_secured_dashboards_can_sit_behind_a_base_path():
-    docs = render("values-hetzner.yaml", *OPENSEARCH, *ROUTED)
-    cfg = dashboards_config(docs)
-    assert cfg["server.basePath"] == "/opensearch" and cfg["server.rewriteBasePath"] is True and cfg["opensearch_security.cookie.secure"] is True
-    pod = of(docs, "Deployment", "moks-search-dashboards")["spec"]["template"]["spec"]["containers"][0]
-    assert pod["startupProbe"]["httpGet"]["path"] == "/opensearch/app/login"  # with rewriteBasePath the server answers under it
-    # The delegate the gateway's routing table uses for /opensearch; nothing strips the prefix.
-    route = of(docs, "VirtualService", "moks-opensearch")["spec"]
-    assert "hosts" not in route and "rewrite" not in route["http"][0]
-    assert route["http"][0]["route"][0]["destination"]["host"] == "moks-search-dashboards.moks-sre.svc.cluster.local"
-    assert of(docs, "NetworkPolicy", "moks-search-dashboards")["spec"]["ingress"]
-
-
-def test_secured_dashboards_cannot_take_a_path_already_in_use():
-    with pytest.raises(subprocess.CalledProcessError, match="") as e:
-        render("values-hetzner.yaml", *OPENSEARCH, *DASH, "rag.opensearch.secure.dashboards.ingress.enabled=true")
-    assert "taken by rag.opensearch.publicRoute" in e.value.stderr
-
-
-def test_anonymous_access_stays_refused():
-    config = (CHART / "files/opensearch/config.yml").read_text()
-    assert "anonymous_auth_enabled: false" in config
-
-
-def test_the_dashboards_identities_have_least_privilege():
-    roles = yaml.safe_load((CHART / "files/opensearch/roles.yml").read_text())
-    viewer = roles["moks_knowledge_viewer"]
-    assert viewer["index_permissions"][0]["index_patterns"] == ["moks-chunks-*"] and viewer["index_permissions"][0]["fls"] == ["~embedding"]
-    assert not {"write", "indices_all", "crud", "manage"} & set(viewer["index_permissions"][0]["allowed_actions"])
-    mapping = yaml.safe_load((CHART / "files/opensearch/roles_mapping.yml").read_text())
-    assert "moks_dashboards" not in mapping["all_access"]["users"] and "moks_viewer" not in mapping["all_access"]["users"]
-    assert mapping["kibana_server"]["users"] == ["moks_dashboards"]
 
 
 # ---- secret sync -------------------------------------------------------------------------------------------

@@ -15,7 +15,7 @@ from moks.rag.backends import rrf
 from moks.rag.rerank import Outcome
 from moks.rbac import ROLES, Binding, P, Principal
 from tests.conftest import login, make_user
-from tests.test_rag_index import _model, os_  # noqa: F401  (fixtures)
+from tests.test_rag_index import _model, ext  # noqa: F401  (fixtures)
 
 RULES = """groups:
   - name: payments
@@ -329,7 +329,7 @@ async def test_a_question_resolves_only_services_its_asker_can_read():
     assert wide["dependents"] == {f"ledger{tag}": [f"invoices{tag}"]}
 
 
-async def test_the_embedding_cache_embeds_only_changed_text_and_rebuilds_for_free(os_, monkeypatch):  # noqa: F811
+async def test_the_embedding_cache_embeds_only_changed_text_and_rebuilds_for_free(ext, monkeypatch):  # noqa: F811
     calls: list[int] = []
     sent: list[str] = []
 

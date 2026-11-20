@@ -96,7 +96,7 @@ async def test_the_deployment_view_never_returns_a_secret(client):
     h = await admin(client)
     sections = (await client.get(URL, headers=h)).json()["deployment"]
     flat = {i["key"]: i for s in sections for i in s["items"]}
-    for key in ("session_secret", "oidc_client_secret", "alert_webhook_token", "secrets_digest_key", "opensearch_password", "database_url"):
+    for key in ("session_secret", "oidc_client_secret", "alert_webhook_token", "secrets_digest_key", "database_url"):
         assert flat[key]["secret"] and "value" not in flat[key], key
     assert flat["session_secret"]["set"] is True
     assert flat["auto_investigations_per_hour"]["editable"] and not flat["max_tool_calls"]["editable"]
@@ -106,9 +106,9 @@ async def test_the_deployment_view_never_returns_a_secret(client):
 
 
 def test_credentials_inside_urls_are_masked(monkeypatch):
-    monkeypatch.setattr(get_settings(), "opensearch_url", "https://search:hunter2@os.internal:9200")
+    monkeypatch.setattr(get_settings(), "rag_rerank_url", "https://rerank:hunter2@reranker.internal:8090")
     flat = {i["key"]: i for s in rs.deployment() for i in s["items"]}
-    assert flat["opensearch_url"]["value"] == "https://***@os.internal:9200"
+    assert flat["rag_rerank_url"]["value"] == "https://***@reranker.internal:8090"
 
 
 async def test_other_processes_pick_up_changes_and_ignore_rows_that_no_longer_fit():

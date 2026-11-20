@@ -546,7 +546,7 @@ async def test_sync_records_upstream_completion_apart_from_indexing(github, monk
     env = f"kr-{uuid.uuid4().hex[:6]}"
     github["gh"] = GitHub({"acme/payments": {"docs/runbook.md": RUNBOOK}})
     sid = await source("acme/payments", env)
-    monkeypatch.setattr(service, "external", lambda name=None: object())  # as with OpenSearch: changes wait in the outbox
+    monkeypatch.setattr(service, "external", lambda name=None: object())  # as with an external index: changes wait in the outbox
     r = await sync(sid)
     assert r["complete"] and r["indexing"]["state"] == "pending" and r["indexing"]["outbox"] >= 1
     async with session_scope() as db:  # leave nothing pending for other tests' drains

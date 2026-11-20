@@ -12,7 +12,7 @@ from moks.db import session_scope
 from moks.llm.providers import LLMError
 from moks.models import AuditEvent, Document, KnowledgeSource, LLMConfig
 from moks.rag import service
-from moks.rag.backends import OpenSearchBackend
+from moks.rag.backends import PineconeBackend
 from tests.conftest import login, make_user
 from tests.test_rag import FakeGitHub, LimitedGitHub, _source, _use
 
@@ -94,7 +94,7 @@ async def test_a_document_with_its_own_scope_keeps_it(client):
     assert (d.environment, d.namespace) == ("mk4", "shop")
 
 
-async def test_scope_change_reaches_opensearch_and_a_failure_saves_nothing(client, monkeypatch):
+async def test_scope_change_reaches_the_external_index_and_a_failure_saves_nothing(client, monkeypatch):
     h, _ = await _admin(client)
     sent = []
     fail = {"on": False}
@@ -105,14 +105,15 @@ async def test_scope_change_reaches_opensearch_and_a_failure_saves_nothing(clien
         sent.append(req.url.path)
         return httpx.Response(200, json={})
 
-    monkeypatch.setattr(service, "_opensearch", OpenSearchBackend("http://os:9200", transport=httpx.MockTransport(transport)))
-    monkeypatch.setattr(service, "backend_name", lambda: "opensearch")
+    index = PineconeBackend("test-key", transport=httpx.MockTransport(transport))
+    monkeypatch.setattr(service, "pinecone", lambda: index)
+    monkeypatch.setattr(service, "backend_name", lambda: "pinecone")
     sid = await _source("os", type_="upload")
     async with session_scope() as db:
         from moks.models import Chunk, EmbeddingIndex
 
-        await db.execute(EmbeddingIndex.__table__.delete().where(EmbeddingIndex.backend == "opensearch"))
-        db.add(EmbeddingIndex(backend="opensearch", model_key="keyword-only", index_name="moks-chunks-x", status="active"))
+        await db.execute(EmbeddingIndex.__table__.delete().where(EmbeddingIndex.backend == "pinecone"))
+        db.add(EmbeddingIndex(backend="pinecone", model_key="keyword-only", index_name="moks-chunks-x", status="active"))
         db.add(Document(source_id=sid, path="a.md", content_hash="h", kind="doc", environment="*", namespace="*", status="active"))
     fail["on"] = True
     r = await client.put(f"/moks/api/knowledge/sources/{sid}", json={"scope_environment": "prod"}, headers=h)
@@ -123,7 +124,7 @@ async def test_scope_change_reaches_opensearch_and_a_failure_saves_nothing(clien
     async with session_scope() as db:
         assert (await service.stats(db))["outbox"]["retrying"] >= 1  # kept for retry, and visible
     async with session_scope() as db:
-        await db.execute(EmbeddingIndex.__table__.delete().where(EmbeddingIndex.backend == "opensearch"))
+        await db.execute(EmbeddingIndex.__table__.delete().where(EmbeddingIndex.backend == "pinecone"))
 
 
 async def test_a_sync_that_skips_files_reports_partial_with_the_count(client, monkeypatch):

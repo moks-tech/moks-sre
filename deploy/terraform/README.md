@@ -11,7 +11,6 @@ This module creates everything MOKS needs in AWS account `881026659929` (us-east
 | IAM user `/moks/moks-mk4-runtime` | Identity for MOKS pods on mk4, created **without an access key** |
 | User policy `invoke-selected-bedrock-profile` | `bedrock:InvokeModel` (which also covers Converse) on one inference profile and its model through that profile only |
 | User policy `invoke-claude-on-bedrock` (optional) | `bedrock-mantle:CreateInference` in `aws_region`, for current Claude models; off until `bedrock_claude_enabled = true` |
-| OpenSearch domain (optional) | Single-node knowledge search that only the runtime user can call, with signed requests; off while `opensearch_domain_name = ""`. **Billed hourly** |
 | User policy `read-allowed-log-groups` | Phase 2 CloudWatch Logs Insights on listed log groups; off while `cloudwatch_log_group_arns = []` |
 
 State: `s3://jithendardharmapuri/terraform/moks.tfstate`, the same bucket as

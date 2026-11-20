@@ -24,14 +24,13 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CHART = ROOT / "deploy/helm/moks"
 ARGOCD = ROOT / "deploy/argocd"
-GROUPS = ["foundation", "database", "migrate", "opensearch", "api", "worker", "executor", "terminal", "reranker", "routing", "backup", "crewai"]
+GROUPS = ["foundation", "database", "migrate", "api", "worker", "executor", "terminal", "reranker", "routing", "backup", "crewai"]
 CLUSTER_SCOPED = {"Namespace", "ClusterRole", "ClusterRoleBinding"}
 REPO = "https://github.com/mrjithendar/moks-sre.git"
 TERMINAL_ON = ["--set", "terminal.enabled=true", "--set", "terminal.image.digest=sha256:" + "a" * 64, "--set", "terminal.profiles[0].name=ro",
                "--set", "terminal.kubernetes.namespaces={moks-sre-lab}", "--set", "terminal.network.apiServer=true"]
 POOLS = ["--set-json", 'worker.pools=[{"name":"detection","classes":"detection","capacity":"detection=2","replicas":1},'
                        '{"name":"knowledge","classes":"knowledge,maintenance","capacity":"knowledge=1,maintenance=1","replicas":2}]']
-OPENSEARCH = ["--set", "rag.backend=opensearch"]
 RERANKER = ["--set", "reranker.enabled=true", "--set", "reranker.image.digest=sha256:" + "b" * 64]
 # Backups dump the bundled database, so these scenarios need it whatever the environment says.
 BUNDLED = ["--set", "postgres.bundled=true"]
@@ -47,13 +46,9 @@ SCENARIOS = {
     "terminal-off": (["--set", "terminal.enabled=false"], set(), {"terminal"}),
     "external-postgres": (["--set", "postgres.bundled=false"], set(), {"database"}),
     "external-postgres-split-backup": (["--set", "postgres.bundled=false"] + SPLIT + BACKUP_ONLY, {"migrate"}, {"database", "backup"}),
-    "rag-postgres": (["--set", "rag.backend=postgres"], set(), {"opensearch"}),
-    "rag-pgvector": (BUNDLED + ["--set", "rag.backend=pgvector", "--set", "postgres.image=pgvector/pgvector:0.8.7-pg17", "--set", "postgres.uid=999"], {"database"}, {"opensearch"}),
-    "rag-pinecone": (["--set", "rag.backend=pinecone"], set(), {"opensearch"}),
-    "rag-opensearch-bundled": (OPENSEARCH, {"opensearch"}, set()),
-    "rag-opensearch-managed": (OPENSEARCH + ["--set", "rag.opensearch.url=https://search.example", "--set", "rag.opensearch.awsRegion=us-east-1"], set(), {"opensearch"}),
-    "rag-opensearch-secure": (OPENSEARCH + ["--set", "rag.opensearch.secure.enabled=true"], {"opensearch", "foundation"}, set()),
-    "rag-opensearch-secure-active": (OPENSEARCH + ["--set", "rag.opensearch.publicRoute.enabled=false", "--set", "rag.opensearch.dashboards.enabled=false", "--set", "rag.opensearch.secure.enabled=true", "--set", "rag.opensearch.secure.active=true"], {"opensearch", "foundation", "api", "worker"}, set()),
+    "rag-postgres": (["--set", "rag.backend=postgres"], set(), set()),
+    "rag-pgvector": (BUNDLED + ["--set", "rag.backend=pgvector", "--set", "postgres.image=pgvector/pgvector:0.8.7-pg17", "--set", "postgres.uid=999"], {"database"}, set()),
+    "rag-pinecone": (["--set", "rag.backend=pinecone"], set(), set()),
     "worker-pools": (POOLS, {"worker"}, set()),
     "worker-pools-split": (POOLS + SPLIT, {"worker", "migrate"}, set()),
     "backup": (BACKUP, {"backup"}, set()),
@@ -61,7 +56,7 @@ SCENARIOS = {
     "reranker-on": (RERANKER, {"reranker"}, set()),
     # The embedder (moks-embedder) renders in the reranker group too, and values-hetzner turns it on: the group is empty
     # only with both model services off (models-off), never with the reranker alone off.
-    "embedder-on":(["--set", "reranker.enabled=false", "--set", "embedder.enabled=true", "--set", "embedder.image.digest=sha256:" + "c" * 64], {"reranker"}, set()),
+    "embedder-on": (["--set", "reranker.enabled=false", "--set", "embedder.enabled=true", "--set", "embedder.image.digest=sha256:" + "c" * 64], {"reranker"}, set()),
     "models-off": (["--set", "reranker.enabled=false", "--set", "embedder.enabled=false"], set(), {"reranker"}),
     "crewai-on": (["--set", "crewai.enabled=true"], {"crewai"}, set()),
     "crewai-off": (["--set", "crewai.enabled=false"], set(), {"crewai"}),
@@ -70,11 +65,11 @@ SCENARIOS = {
     "no-network-policy": (["--set", "networkPolicy.enabled=false"], set(), set()),
     "velero": (["--set", "velero.enabled=true"], {"foundation", "executor"}, set()),
     "executor-off": (["--set", "executor.enabled=false"], set(), {"executor"}),
-    "everything": (TERMINAL_ON + SPLIT + POOLS + OPENSEARCH + BACKUP + ["--set", "customSkills.runbook=body"],
-                   {"terminal", "migrate", "opensearch", "backup", "database"}, set()),
+    "everything": (TERMINAL_ON + SPLIT + POOLS + BACKUP + ["--set", "customSkills.runbook=body"],
+                   {"terminal", "migrate", "backup", "database"}, set()),
 }
 # What each optional Application needs before it may leave optional/, for the project checks.
-OPTIONAL_SCENARIO = {"migrate": "split", "opensearch": "rag-opensearch-bundled", "backup": "backup", "reranker": "reranker-on"}
+OPTIONAL_SCENARIO = {"migrate": "split", "backup": "backup", "reranker": "reranker-on"}
 ENVIRONMENTS = {
     "hetzner": {   # mk4: Hetzner k3s, the shared CloudNativePG database (postgres.bundled false)
         "prefix": "moks", "project": "moks", "projectFile": "hetzner/project.yaml", "values": "values-hetzner.yaml", "legacy": "legacy/application.yaml",

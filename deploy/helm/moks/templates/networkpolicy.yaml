@@ -26,14 +26,6 @@ spec:
       ports: [{port: 53, protocol: UDP}, {port: 53, protocol: TCP}]
     - to: [{podSelector: {matchLabels: {app: moks-postgres}}}]
       ports: [{port: 5432, protocol: TCP}]
-    {{- if and (eq .Values.rag.backend "opensearch") (not .Values.rag.opensearch.url) (not .Values.rag.opensearch.secure.retireOriginal) }}
-    - to: [{podSelector: {matchLabels: {app: moks-opensearch}}}]
-      ports: [{port: 9200, protocol: TCP}]
-    {{- end }}
-    {{- if and (eq .Values.rag.backend "opensearch") .Values.rag.opensearch.secure.enabled }}
-    - to: [{podSelector: {matchLabels: {app: moks-search}}}]
-      ports: [{port: 9200, protocol: TCP}]
-    {{- end }}
     {{- if .Values.reranker.enabled }}
     - to: [{podSelector: {matchLabels: {app: moks-reranker}}}]
       ports: [{port: 8090, protocol: TCP}]

@@ -89,7 +89,7 @@ updates:
       - dependency-name: python
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
-  # Images in the Helm chart values (postgres, opensearch)
+  # Images in the Helm chart values (postgres)
   - package-ecosystem: helm
     directory: /deploy/helm/moks
     schedule:
@@ -138,8 +138,6 @@ updates:
 
   # Base images: reranker/Dockerfile (python) and deploy/terminal/Dockerfile (debian, pinned by tag + digest;
   # AWS CLI and kubectl there are ARG versions with checksums and are bumped by hand, docs/TERMINAL.md).
-  # deploy/opensearch/Dockerfile is left out: the exporter plugin URL must match the server version exactly, and
-  # the chart and the live pod run the same version, so OpenSearch moves by hand.
   - package-ecosystem: docker
     directories:
       - /reranker

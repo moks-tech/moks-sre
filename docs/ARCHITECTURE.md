@@ -46,7 +46,7 @@ flowchart LR
 | 1. Web portal and authenticated API | `moks-api` (FastAPI) serves the React build, the JSON API, SSE and OIDC callbacks under `/moks` |
 | 2. Investigation orchestrator | `moks-worker` runs `moks.orchestrator.engine.Investigator`, one asyncio task per investigation |
 | 3. Typed connectors and tool registry | `moks.connectors.*` (Kubernetes, Prometheus, Loki) and `moks.tools` (17 typed tools, one executor) |
-| 4. RAG ingestion/retrieval workers | `moks.rag`: GitHub/upload/postmortem ingestion as background jobs in the worker; Postgres full-text, pgvector or OpenSearch (BM25 + k-NN, RRF) |
+| 4. RAG ingestion/retrieval workers | `moks.rag`: GitHub/upload/postmortem ingestion as background jobs in the worker; Postgres full-text and pgvector (RRF), or Pinecone for vectors |
 | 5. Approval and remediation service | `moks.actions.service`: allowlisted, hash-bound action plans with approvals, expiry and replay protection |
 | 6. Isolated execution workers | `moks-executor`: the only write-capable process, with its own ServiceAccount bound per namespace; runs actions, and diagnostic-session pods beside MOKS (selected by label, no sidecar, their own quota) |
 | 7. Audit and observability | Hash-chained `audit_events` (DB triggers), Prometheus metrics, JSON logs, OTel traces, Grafana dashboard |
@@ -168,7 +168,6 @@ flowchart LR
     API[moks-api] --- W[moks-worker<br/>investigations · jobs:<br/>ingest, reindex, alert poll, evals]
     EX[moks-executor<br/>SA moks-executor]
     PG[(PostgreSQL)]
-    OS[(OpenSearch<br/>optional)]
     D[session pods<br/>no SA token, TTL, quota, no sidecar]
   end
   subgraph target namespaces
@@ -176,7 +175,6 @@ flowchart LR
   end
   AM[Alertmanager / Grafana] -- webhook --> API
   W -- poll /api/v1/alerts --> PROM[Prometheus]
-  W --> OS
   API -- plans, approvals --> PG
   EX -- claim queued plans --> PG
   EX -- RoleBinding per namespace --> T
@@ -194,8 +192,8 @@ flowchart LR
   (git blob SHA), deletions propagate, secret files are excluded with a recorded reason, and
   content is redacted. Retrieval is filtered twice (SQL pre-filter, authoritative post-filter).
   Embedding indexes are versioned (`moks-chunks-<id>`), and a model change builds a new index
-  before switching. *Assumption retained:* "OpenGraph vector database" is read as OpenSearch; there
-  is no graph database.
+  before switching. *Assumption retained:* "OpenGraph vector database" is read as a vector index
+  (pgvector, or Pinecone); there is no graph database.
 - **Incidents (Phase 2):** a workspace with a timeline, hypotheses, linked investigations, action
   plans and their validation, plus a Markdown report. Approved postmortems are indexed into the
   knowledge base, scoped to the incident's environment and namespace.
@@ -309,9 +307,10 @@ becomes a `crash_log_reason` finding, quoted verbatim.
 
 ## Vector backends
 
-OpenSearch and Pinecone offer the same index lifecycle: versioned indexes, a build beside the active one, and
+pgvector (in PostgreSQL) and Pinecone share one index lifecycle: versioned indexes, a build beside the active one, and
 cleanup after the switch commits. Pinecone holds vectors only, so its keyword half is PostgreSQL full-text
-search. Either way the index is derived data and PostgreSQL stays the system of record.
+search. Either way the index is derived data and PostgreSQL stays the system of record. (An OpenSearch backend
+existed until 2026-11-20.)
 
 An external index is written only after commit. A document change adds a row to `index_outbox` in the same transaction, so a rollback can never remove valid content from search, and a crash replays rather than loses. Each event carries a per-document revision: an older one, or a replay, is dropped. Failures retry with backoff up to 8 times, then go `dead`. Dead events are visible in `/knowledge/status` (`outbox`) and go back in the queue through `POST /knowledge/outbox/retry`. `documents.content_revision` against `indexed_revision` shows what is behind, and a periodic pass requeues anything left behind with nothing pending.
 
