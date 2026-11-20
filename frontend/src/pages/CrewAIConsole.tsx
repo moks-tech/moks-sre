@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, Route, Routes, useNavigate, useParams } from "react-router-dom";
 import { api, qs } from "../api";
+import { useAuth } from "../auth";
 import { Badge, DataTable, ErrorBox, Loading, PageHead, Stat, Time, useInterval, useLoad } from "../components";
 import { CrewEditor } from "../crewai/CrewEditor";
 import { LogViewer } from "../crewai/LogViewer";
@@ -251,12 +252,14 @@ function FlowCard({ f, admin, why, reload }: { f: any; admin: boolean; why: stri
 }
 
 function Flows() {
+  const { can } = useAuth();
   const load = useLoad(() => api("/crewai/flows"), []);
   const d = load.data;
   if (!d) return <Loading load={load} />;
   return <div className="stack">
     {!d.crewai_enabled && <div className="alert warn">CrewAI is off in this deployment (MOKS_CREWAI_ENABLED). Runs and schedules start nothing until it is on.</div>}
-    {d.crewai_enabled && d.unavailable && <div className="alert warn small">No run can start right now: {d.unavailable}.</div>}
+    {d.crewai_enabled && d.unavailable && <div className="alert warn small">No run can start right now: {d.unavailable}.
+      {/chat LLM/.test(d.unavailable) && <> {can("admin.llm") ? <Link to="/admin/llm">Add or activate a chat model in LLM providers →</Link> : "An administrator can add one under LLM providers."}</>}</div>}
     {d.flows.map((f: any) => <FlowCard key={f.name} f={f} admin={d.can_admin} why={d.unavailable} reload={load.reload} />)}
   </div>;
 }

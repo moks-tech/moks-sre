@@ -153,6 +153,10 @@ label.inline { flex-direction: row; align-items: center; gap: 6px; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .form-grid input, .form-grid select { width: 100%; }
 .form-grid.fill { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+/* LLM provider form: filter beside the provider's model list */
+.model-pick { display: grid; grid-template-columns: minmax(140px, 220px) minmax(0, 1fr); gap: 10px; align-items: end; }
+.model-pick input, .model-pick select, .model-picker > label select, .model-picker > label input { width: 100%; }
+@media (max-width: 600px) { .model-pick { grid-template-columns: minmax(0, 1fr); } }
 .form-section { display: flex; flex-direction: column; gap: 10px; padding-top: var(--sp-3); border-top: 1px solid var(--border-soft); }
 .form-section:first-child { padding-top: 0; border-top: 0; }
 

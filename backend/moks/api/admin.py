@@ -23,7 +23,7 @@ from ..auth.sessions import AuthContext, client_ip, revoke_all_for_user
 from ..connectors import registry
 from ..connectors.base import describe_credential_ref
 from ..db import get_db
-from ..llm import budget
+from ..llm import budget, catalog
 from ..llm.providers import LLMError, provider_for
 from ..models import AuditEvent, Connector, Environment, LLMConfig, RoleBinding, User
 from ..rbac import ROLES, P
@@ -184,6 +184,15 @@ class LLMIn(BaseModel):
     embedding_dimensions: int | None = Field(default=None, ge=8, le=8192)
 
 
+class ModelsIn(BaseModel):
+    """The connection part of the provider form, so models can be listed before anything is saved."""
+    provider: Literal["anthropic", "openai", "azure_openai", "gemini", "bedrock", "ollama"]
+    endpoint: str | None = Field(default=None, max_length=500, pattern=r"^https?://")
+    region: str | None = Field(default=None, pattern=r"^[a-z]{2}(-[a-z]+)+-\d$")
+    credential_ref: CredentialRef = Field(default_factory=CredentialRef)
+    fresh: bool = False
+
+
 def llm_out(c: LLMConfig, spent: Decimal | None = None) -> dict[str, Any]:
     return {"id": str(c.id), "name": c.name, "purpose": c.purpose, "provider": c.provider, "model": c.model, "endpoint": c.endpoint,
             "region": c.region, "credential": describe_credential_ref(c.credential_ref), "credential_ref": c.credential_ref,
@@ -214,6 +223,15 @@ async def create_llm(body: LLMIn, ctx: AuthContext = Depends(needs(P.ADMIN_LLM))
     await audit.record(db, action="llm.create", actor_id=ctx.user.id, actor_email=ctx.user.email, resource_type="llm_config",
                        resource_id=str(c.id), details=body.model_dump(mode="json"))
     return llm_out(c)
+
+
+@router.post("/llm/models")
+async def llm_models(body: ModelsIn, ctx: AuthContext = Depends(needs(P.ADMIN_LLM))) -> dict[str, Any]:
+    """Models the provider says this credential can use, asked of the provider itself (moks/llm/catalog.py).
+    A provider that cannot be asked answers 200 with `error`, so the form falls back to typing a name."""
+    cfg = LLMConfig(provider=body.provider, model="", endpoint=body.endpoint or None, region=body.region if body.provider == "bedrock" else None,
+                    credential_ref=body.credential_ref.model_dump(exclude_none=True), timeout_seconds=int(catalog.TIMEOUT))
+    return await catalog.list_models(cfg, fresh=body.fresh)
 
 
 @router.put("/llm/{lid}")

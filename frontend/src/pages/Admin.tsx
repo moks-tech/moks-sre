@@ -4,6 +4,7 @@ import { useAuth } from "../auth";
 import { Badge, DataTable, ErrorBox, FormDrawer, FormSection, ListHeader, Loading, PageHead, Time, useLoad } from "../components";
 import { type Chip, FilterPanel } from "../filters";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
+import { ModelPicker, type ModelInfo } from "./ModelPicker";
 
 function useAction() {
   const [error, setError] = useState<unknown>();
@@ -220,7 +221,7 @@ export function Environments() {
       {open && <FormDrawer title={editing ? `Edit ${editing}` : "Add environment"} submit={editing ? "Save" : "Create environment"} busy={a.busy} error={a.error} onSubmit={save} onClose={close}>
         <FormSection title="Cluster">
           <div className="form-grid">
-            <label>Name<input required disabled={!!editing} pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and hyphens" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+            <label>Name<input required disabled={!!editing} pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and hyphens" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value, autoName: false })} /></label>
             <label>Display name<input value={form.display_name} onChange={(e) => setForm({ ...form, display_name: e.target.value })} /></label>
             <label>Cluster type<select value={form.kind} onChange={(e) => setKind(e.target.value)}><option value="minikube">Minikube</option><option value="eks">Amazon EKS</option><option value="kubernetes">Kubernetes (other)</option></select></label>
             <label>Grafana URL<input value={form.grafana_url} onChange={(e) => setForm({ ...form, grafana_url: e.target.value })} placeholder="https://…/grafana" /></label>
@@ -419,30 +420,55 @@ export function Connectors() {
 
 // ---- LLM providers ----------------------------------------------------------------------------
 
-interface Preset { label: string; provider: string; endpoint?: string; key?: string; models?: string[]; prices?: Record<string, [string, string]>; hint: string }
+/** models and embed are suggestions, shown the moment the provider is chosen; the provider's own list replaces them once
+ *  the connection works (pages/ModelPicker.tsx). They are not checked against anyone's account. */
+interface Preset { label: string; provider: string; endpoint?: string; key?: string; models?: string[]; embed?: string[]; prices?: Record<string, [string, string]>; hint: string }
 
 /** A preset only fills in the form. Prices are USD per million tokens, from the provider's list, and worth checking. */
 const LLM_PRESETS: Record<string, Preset> = {
   anthropic: { label: "Anthropic Claude", provider: "anthropic", key: "MOKS_CRED_ANTHROPIC_API_KEY", hint: "Claude has no embedding API, so embeddings need another provider.",
-    models: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
+    models: ["claude-fable-5-2", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
     prices: { "claude-opus-5-5": ["4", "20"], "claude-sonnet-5-5": ["2", "10"], "claude-haiku-5-5": ["0.10", "0.50"] } },
-  openai: { label: "OpenAI", provider: "openai", key: "MOKS_CRED_OPENAI_API_KEY", hint: "Use a model name from your OpenAI account." },
-  google: { label: "Google AI (Gemini)", provider: "gemini", key: "MOKS_CRED_GEMINI_API_KEY", hint: "Uses the Gemini API with an API key." },
+  openai: { label: "OpenAI (GPT)", provider: "openai", key: "MOKS_CRED_OPENAI_API_KEY", models: ["gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-4.1", "gpt-4.1-mini", "gpt-4o", "gpt-4o-mini", "o3", "o4-mini"], embed: ["text-embedding-3-small", "text-embedding-3-large"], hint: "The models your OpenAI account can use are listed once the key reference is set." },
+  google: { label: "Google AI (Gemini)", provider: "gemini", key: "MOKS_CRED_GEMINI_API_KEY", models: ["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"], embed: ["gemini-embedding-001", "text-embedding-004"], hint: "Uses the Gemini API with an API key; its chat and embedding models are listed." },
   azure: { label: "Azure OpenAI", provider: "azure_openai", endpoint: "https://YOUR-RESOURCE.openai.azure.com", key: "MOKS_CRED_AZURE_OPENAI_API_KEY", hint: "Model is your deployment name." },
-  bedrock: { label: "Amazon Bedrock", provider: "bedrock", models: ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"], hint: "Uses the pod's AWS identity, or the keys from scripts/create-runtime-key.sh. Claude models need model access in your account and the bedrock-mantle:CreateInference permission. Enter prices from your AWS pricing." },
-  mistral: { label: "Mistral", provider: "openai", endpoint: "https://api.mistral.ai/v1", key: "MOKS_CRED_MISTRAL_API_KEY", hint: "OpenAI-compatible API." },
-  groq: { label: "Groq", provider: "openai", endpoint: "https://api.groq.com/openai/v1", key: "MOKS_CRED_GROQ_API_KEY", hint: "OpenAI-compatible API." },
-  deepseek: { label: "DeepSeek", provider: "openai", endpoint: "https://api.deepseek.com/v1", key: "MOKS_CRED_DEEPSEEK_API_KEY", hint: "OpenAI-compatible API." },
-  xai: { label: "xAI Grok", provider: "openai", endpoint: "https://api.x.ai/v1", key: "MOKS_CRED_XAI_API_KEY", hint: "OpenAI-compatible API." },
-  together: { label: "Together AI", provider: "openai", endpoint: "https://api.together.xyz/v1", key: "MOKS_CRED_TOGETHER_API_KEY", hint: "OpenAI-compatible API." },
-  fireworks: { label: "Fireworks AI", provider: "openai", endpoint: "https://api.fireworks.ai/inference/v1", key: "MOKS_CRED_FIREWORKS_API_KEY", hint: "OpenAI-compatible API." },
-  openrouter: { label: "OpenRouter", provider: "openai", endpoint: "https://openrouter.ai/api/v1", key: "MOKS_CRED_OPENROUTER_API_KEY", hint: "One key for many providers." },
-  ollama: { label: "Ollama", provider: "ollama", endpoint: "http://ollama.ollama:11434", hint: "Self-hosted; the endpoint is required." },
+  bedrock: { label: "Amazon Bedrock", provider: "bedrock", models: ["anthropic.claude-opus-5-5", "anthropic.claude-sonnet-5-5", "anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0", "us.amazon.nova-pro-v1:0", "us.amazon.nova-lite-v1:0", "us.amazon.nova-micro-v1:0", "us.meta.llama3-3-70b-instruct-v1:0"],
+    embed: ["amazon.titan-embed-text-v2:0", "cohere.embed-english-v3", "cohere.embed-multilingual-v3"], hint: "Uses the pod's AWS identity, or the keys from scripts/create-runtime-key.sh. Claude models need model access in your account and the bedrock-mantle:CreateInference permission. Enter prices from your AWS pricing." },
+  mistral: { label: "Mistral", provider: "openai", endpoint: "https://api.mistral.ai/v1", key: "MOKS_CRED_MISTRAL_API_KEY", models: ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest"], embed: ["mistral-embed"], hint: "OpenAI-compatible API." },
+  groq: { label: "Groq", provider: "openai", endpoint: "https://api.groq.com/openai/v1", key: "MOKS_CRED_GROQ_API_KEY", models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant", "openai/gpt-oss-120b", "openai/gpt-oss-20b"], hint: "OpenAI-compatible API." },
+  deepseek: { label: "DeepSeek", provider: "openai", endpoint: "https://api.deepseek.com/v1", key: "MOKS_CRED_DEEPSEEK_API_KEY", models: ["deepseek-chat", "deepseek-reasoner"], hint: "OpenAI-compatible API." },
+  xai: { label: "xAI Grok", provider: "openai", endpoint: "https://api.x.ai/v1", key: "MOKS_CRED_XAI_API_KEY", models: ["grok-4", "grok-3", "grok-3-mini"], hint: "OpenAI-compatible API." },
+  together: { label: "Together AI", provider: "openai", endpoint: "https://api.together.xyz/v1", key: "MOKS_CRED_TOGETHER_API_KEY", models: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "deepseek-ai/DeepSeek-V3", "Qwen/Qwen2.5-72B-Instruct-Turbo"], hint: "OpenAI-compatible API." },
+  fireworks: { label: "Fireworks AI", provider: "openai", endpoint: "https://api.fireworks.ai/inference/v1", key: "MOKS_CRED_FIREWORKS_API_KEY", models: ["accounts/fireworks/models/llama-v3p3-70b-instruct", "accounts/fireworks/models/deepseek-v3"], hint: "OpenAI-compatible API." },
+  openrouter: { label: "OpenRouter", provider: "openai", endpoint: "https://openrouter.ai/api/v1", key: "MOKS_CRED_OPENROUTER_API_KEY", models: ["anthropic/claude-sonnet-4.5", "openai/gpt-5", "google/gemini-2.5-pro", "meta-llama/llama-3.3-70b-instruct", "deepseek/deepseek-chat"], hint: "One key for hundreds of models from many providers; prices are filled in from OpenRouter's list." },
+  cerebras: { label: "Cerebras", provider: "openai", endpoint: "https://api.cerebras.ai/v1", key: "MOKS_CRED_CEREBRAS_API_KEY", models: ["llama-3.3-70b", "gpt-oss-120b", "qwen-3-32b"], hint: "OpenAI-compatible API." },
+  sambanova: { label: "SambaNova", provider: "openai", endpoint: "https://api.sambanova.ai/v1", key: "MOKS_CRED_SAMBANOVA_API_KEY", models: ["Meta-Llama-3.3-70B-Instruct", "DeepSeek-V3-0324"], hint: "OpenAI-compatible API." },
+  nvidia: { label: "NVIDIA NIM", provider: "openai", endpoint: "https://integrate.api.nvidia.com/v1", key: "MOKS_CRED_NVIDIA_API_KEY", models: ["meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-70b-instruct"], embed: ["nvidia/nv-embedqa-e5-v5"], hint: "Hosted NIM endpoints; OpenAI-compatible API." },
+  huggingface: { label: "Hugging Face Inference", provider: "openai", endpoint: "https://router.huggingface.co/v1", key: "MOKS_CRED_HF_API_KEY", models: ["meta-llama/Llama-3.3-70B-Instruct", "Qwen/Qwen2.5-72B-Instruct", "deepseek-ai/DeepSeek-V3"], hint: "Inference Providers router; OpenAI-compatible API." },
+  moonshot: { label: "Moonshot (Kimi)", provider: "openai", endpoint: "https://api.moonshot.ai/v1", key: "MOKS_CRED_MOONSHOT_API_KEY", models: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"], hint: "OpenAI-compatible API." },
+  qwen: { label: "Alibaba Qwen (Model Studio)", provider: "openai", endpoint: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", key: "MOKS_CRED_DASHSCOPE_API_KEY", models: ["qwen-max", "qwen-plus", "qwen-turbo"], embed: ["text-embedding-v3"], hint: "OpenAI-compatible mode of Model Studio (international endpoint)." },
+  ollama: { label: "Ollama", provider: "ollama", endpoint: "http://ollama.ollama:11434", models: ["llama3.2", "llama3.1:8b", "qwen2.5:7b", "mistral", "gemma3"], embed: ["bge-m3", "nomic-embed-text", "mxbai-embed-large"], hint: "Self-hosted; the endpoint is required. The models pulled on that server are listed." },
   compatible: { label: "Other OpenAI-compatible server", provider: "openai", endpoint: "https://", hint: "vLLM, LiteLLM, LM Studio or any server that speaks the OpenAI chat API." },
 };
 const presetOf = (form: any) => Object.keys(LLM_PRESETS).find((k) => LLM_PRESETS[k].provider === form.provider && (LLM_PRESETS[k].endpoint ?? "") === (form.endpoint ?? "")) ?? (form.provider === "openai" ? "compatible" : Object.keys(LLM_PRESETS).find((k) => LLM_PRESETS[k].provider === form.provider) ?? "compatible");
 
 export { LLM_PRESETS, presetOf };
+
+/** Picking a model fills in its prices (from the provider's list, or the preset's) and, for a new provider, a name. */
+export function chooseModel(form: any, model: string, info?: ModelInfo): any {
+  const preset = presetOf(form);
+  const listed = info?.input_price_per_mtok != null && info?.output_price_per_mtok != null ? [info.input_price_per_mtok, info.output_price_per_mtok] : undefined;
+  const price = listed ?? LLM_PRESETS[preset].prices?.[model];
+  const auto = !form.name || form.autoName;  // a name someone typed is theirs
+  const name = auto ? `${preset}-${model}`.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100) : form.name;
+  return { ...form, model, name, autoName: auto, ...(price ? { input_price_per_mtok: price[0], output_price_per_mtok: price[1] } : {}) };
+}
+
+/** A preset's suggestions as model entries, chat and embedding. */
+export function suggestedModels(preset: string): ModelInfo[] {
+  const p = LLM_PRESETS[preset];
+  return [...(p.models ?? []).map((id) => ({ id, label: id, purpose: "chat" as const })), ...(p.embed ?? []).map((id) => ({ id, label: id, purpose: "embedding" as const }))];
+}
 
 export function LLMProviders() {
   const { confirm: ask, toast } = useFeedback();
@@ -465,7 +491,7 @@ export function LLMProviders() {
     e.preventDefault();
     const body = { ...form, endpoint: form.endpoint || null, region: form.provider === "bedrock" ? form.region : null,
       credential_ref: form.credType === "env" ? { type: "env", name: form.credName } : { type: "none" } };
-    delete body.credType; delete body.credName;
+    delete body.credType; delete body.credName; delete body.autoName;
     if (await a.run(() => api(editing ? `/admin/llm/${editing}` : "/admin/llm", { method: editing ? "PUT" : "POST", body }))) {
       toast(`Saved ${form.name}`);
       close();
@@ -506,14 +532,13 @@ export function LLMProviders() {
           ]} />}
       </div>
       {open && <FormDrawer title={editing ? `Edit ${form.name}` : "Add provider"} submit={editing ? "Save" : "Add provider"} busy={a.busy} error={a.error} onSubmit={save} onClose={close}>
-        <FormSection title="Model" help={LLM_PRESETS[presetOf(form)].hint}>
+        <FormSection title="Provider" help={LLM_PRESETS[presetOf(form)].hint}>
           <div className="form-grid">
-            <label>Provider<select value={presetOf(form)} onChange={(e) => { const p = LLM_PRESETS[e.target.value]; setForm({ ...form, provider: p.provider, endpoint: p.endpoint ?? "", model: "", credType: p.key ? "env" : "none", credName: p.key ?? "" }); }}>{Object.entries(LLM_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}</select></label>
-            <label>Model<input required list="llm-models" value={form.model} onChange={(e) => { const price = LLM_PRESETS[presetOf(form)].prices?.[e.target.value]; setForm({ ...form, model: e.target.value, ...(price ? { input_price_per_mtok: price[0], output_price_per_mtok: price[1] } : {}) }); }} placeholder={form.provider === "bedrock" ? "inference profile or model ID" : "model name"} /></label>
-            <label>Name<input required pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and hyphens" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
+            <label>Provider<select value={presetOf(form)} onChange={(e) => { const p = LLM_PRESETS[e.target.value]; setForm({ ...form, provider: p.provider, endpoint: p.endpoint ?? "", model: "", credType: p.key ? "env" : "none", credName: p.key ?? "",
+              input_price_per_mtok: "0", output_price_per_mtok: "0", ...(form.autoName ? { name: "", autoName: false } : {}) }); }}>{Object.entries(LLM_PRESETS).map(([k, p]) => <option key={k} value={k}>{p.label}</option>)}</select></label>
             <label>Purpose<select value={form.purpose} onChange={(e) => setForm({ ...form, purpose: e.target.value })}><option>chat</option><option>embedding</option></select></label>
+            <label>Name<input required pattern="[a-z0-9][a-z0-9\-]*" title="Lowercase letters, digits and hyphens" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></label>
           </div>
-          <datalist id="llm-models">{LLM_PRESETS[presetOf(form)].models?.map((m) => <option key={m} value={m} />)}</datalist>
           <datalist id="aws-regions">{REGIONS.map((r) => <option key={r} value={r} />)}</datalist>
         </FormSection>
         <FormSection title="Connection">
@@ -527,6 +552,11 @@ export function LLMProviders() {
             <label>Timeout (s)<input type="number" value={form.timeout_seconds} onChange={(e) => setForm({ ...form, timeout_seconds: Number(e.target.value) })} /></label>
             <label>Max output tokens<input type="number" value={form.max_output_tokens} onChange={(e) => setForm({ ...form, max_output_tokens: Number(e.target.value) })} /></label>
           </div>
+        </FormSection>
+        <FormSection title="Model">
+          <ModelPicker provider={form.provider} endpoint={form.endpoint} region={form.region} purpose={form.purpose} value={form.model}
+            credential={form.provider !== "bedrock" && form.credType === "env" ? { type: "env", name: form.credName } : { type: "none" }}
+            suggested={suggestedModels(presetOf(form))} onChange={(model, info) => setForm(chooseModel(form, model, info))} />
         </FormSection>
         <FormSection title="Budget">
           <div className="form-grid">
