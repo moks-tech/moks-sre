@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FeedbackProvider } from "../ui";
-import { Deployment, Features, RuntimeSettings, SettingsLayout, SettingsOverview, showValue } from "./Settings";
+import { Credentials, Deployment, Features, RuntimeSettings, SettingsLayout, SettingsOverview, showValue } from "./Settings";
 
 const auth = vi.hoisted(() => ({ perms: [] as string[] }));
 vi.mock("../auth", () => ({ useAuth: () => ({ can: (p: string) => auth.perms.includes(p) }) }));
@@ -133,5 +133,31 @@ describe("Settings", () => {
     expect(showValue({ kind: "float", unit: "USD" }, null)).toBe("No limit");
     expect(showValue({ kind: "float", unit: "USD" }, 2.5)).toBe("$2.5");
     expect(showValue({ kind: "int", unit: "minutes" }, 15)).toBe("15 minutes");
+  });
+});
+
+describe("Credentials page", () => {
+  it("lists stored credentials without values, offers the import, and sets a deployment credential", async () => {
+    const posted: any[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      const path = String(url).replace(/^.*\/moks\/api/, "").split("?")[0];
+      if (path === "/admin/credentials" && init?.method === "POST") { posted.push(JSON.parse(String(init.body))); return new Response(JSON.stringify({ ref: { type: "stored", id: "x" } }), { status: 201 }); }
+      if (path === "/admin/credentials") return new Response(JSON.stringify({
+        key: { source: "MOKS_SESSION_SECRET", id: "abcd" },
+        credentials: [{ id: "c1", label: "API key for Anthropic", used_by: ["LLM provider chat-llm"], state: "current", updated_at: "2026-11-20T06:00:00Z", updated_by: "a@x" }],
+        environment_references: [{ name: "MOKS_CRED_GRAFANA_TOKEN", set_here: true }],
+        deployment: [{ name: "MOKS_CRED_PINECONE_API_KEY", help: "Pinecone API key", source: "unset", id: null }], count: 1 }), { status: 200 });
+      return new Response("{}", { status: 200 });
+    }));
+    render(<MemoryRouter><FeedbackProvider><Credentials /></FeedbackProvider></MemoryRouter>);
+    expect(await screen.findByText("API key for Anthropic")).toBeTruthy();
+    expect(screen.getByText(/used by LLM provider chat-llm/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Import from Kubernetes Secret" })).toBeTruthy();
+    expect(screen.getByText("MOKS_CRED_GRAFANA_TOKEN")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Set value" }));
+    const d = screen.getByRole("dialog", { name: "Set MOKS_CRED_PINECONE_API_KEY" });
+    fireEvent.change(within(d).getByLabelText("Value"), { target: { value: "pc-key" } });
+    fireEvent.click(within(d).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(posted).toEqual([{ label: "MOKS_CRED_PINECONE_API_KEY", value: "pc-key" }]));
   });
 });

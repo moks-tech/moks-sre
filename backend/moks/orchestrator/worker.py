@@ -64,7 +64,12 @@ async def claim(wid: str, crewai: bool = False) -> Claim | None:
             ) RETURNING id, execution_token, attempts
             """
         ), {"wid": wid, "lease": get_settings().investigation_lease_seconds, "crewai": crewai})).first()
-        return Claim(row[0], row[1], row[2]) if row else None
+    if row is None:
+        return None
+    from .. import credentials
+
+    await credentials.refresh()  # the run may use a credential stored a moment ago
+    return Claim(row[0], row[1], row[2])
 
 
 async def cancel_queued() -> None:

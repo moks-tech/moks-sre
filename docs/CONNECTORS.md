@@ -1,7 +1,8 @@
 # Connectors and tool contracts
 
 Connectors are configured per environment in **Administration → Connectors** (or seeded from
-Helm values). A row holds non-secret JSON config and a credential *reference*. **Test** runs a
+Helm values). A row holds non-secret JSON config and a credential *reference*: a value pasted into the form and
+stored encrypted, or an environment variable or file ([CREDENTIALS.md](CREDENTIALS.md)). **Test** runs a
 real request and stores the outcome, which the Overview shows. Only the first enabled connector
 of each type per environment is used, except PostgreSQL and Redis clusters, which are addressed by name
 ([DATASTORES.md](DATASTORES.md)).
@@ -27,8 +28,8 @@ of each type per environment is used, except PostgreSQL and Redis clusters, whic
 - **Retries:** idempotent reads retry twice on timeouts, connection errors and 5xx, with backoff
   of 0.3 s and 0.9 s. A 429 is not retried, because repeating a rate-limited request extends the
   block: the error carries the wait, and jobs come back after it. Other 4xx are not retried.
-- **Rotation:** a mounted credential file is re-read when it changes. A value in an environment
-  variable changes with the pod. Old clients close two minutes later, so calls in flight finish.
+- **Rotation:** a stored credential that is replaced in Settings, or a mounted credential file that changes, is
+  picked up within seconds. A value in an environment variable changes with the pod. Old clients close two minutes later, so calls in flight finish.
 - **Size:** responses over 8 MB are refused (`too_large`). Results are redacted, then truncated
   structurally to `MOKS_MAX_RESULT_BYTES` (48 KB) with `truncated: true`.
 - **Pagination:** Kubernetes lists page 250 items at a time up to 1,000 per call. Prometheus

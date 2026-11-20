@@ -122,6 +122,9 @@ async def claim(worker_id: str, cls: str | None = None) -> uuid.UUID | None:
     if row is None:
         return None
     JOB_DELAY.labels(row[1]).observe(max(float(row[2]), 0))
+    from . import credentials
+
+    await credentials.refresh()  # the job may use a credential stored a moment ago
     return row[0]
 
 

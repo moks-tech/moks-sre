@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useAuth } from "../auth";
 import { Badge, DataTable, ErrorBox, fmtBytes, FormDrawer, FormSection, Loading, PageHead, Time, useInterval, useLoad, type Env } from "../components";
 import { Dialog, Drawer, Empty, Identifier, useFeedback } from "../ui";
+import { type Cred, CredentialInput, credFromRef, PASTE, saveCred } from "../credentials";
 
 const PHASE: Record<string, "ok" | "warn" | "bad" | "info"> = { Completed: "ok", PartiallyFailed: "warn", Failed: "bad", FailedValidation: "bad", InProgress: "info" };
 const DB_STATUS: Record<string, "ok" | "bad" | "info"> = { success: "ok", failed: "bad", queued: "info", running: "info" };
@@ -11,7 +12,7 @@ const PG_PHASE: Record<string, Tone> = { completed: "ok", failed: "bad", walArch
 const TONE_WORD: Record<Tone, string> = { ok: "healthy", warn: "needs attention", bad: "at risk", info: "checking", neutral: "not set up" };
 type Tone = "ok" | "warn" | "bad" | "info" | "neutral";
 type Load = { data: any; error: unknown; loading: boolean; reload: () => void };
-const REFS = [["access_key_id", "Variable holding the R2 access key id"], ["secret_access_key", "Variable holding the R2 secret access key"], ["sse_key", "Variable holding the encryption key (32 bytes, base64)"], ["repo_password", "Variable holding the volume repository password"]];
+const REFS = [["access_key_id", "R2 access key ID"], ["secret_access_key", "R2 secret access key"], ["sse_key", "Encryption key (32 bytes, base64)"], ["repo_password", "Volume repository password"]];
 
 function parseList(text: string): string[] { return text.split(/[\s,]+/).filter(Boolean); }
 
@@ -396,7 +397,7 @@ export function BackupStorage() {
   }
   return (
     <>
-      <PageHead title="Backup storage" sub="Cloudflare R2 settings. Credentials are names of mounted Secrets, never values, so nothing secret is stored in the database.">
+      <PageHead title="Backup storage" sub="Cloudflare R2 settings. Paste the keys here: MOKS stores them encrypted and never shows them again.">
         {store && <button className="ghost" disabled={testing} onClick={test}>{testing ? "Testing…" : "Test write, read and delete"}</button>}
         {s.data && <button onClick={() => setEditing(true)}>{store ? "Edit settings" : "Set up storage"}</button>}
       </PageHead>
@@ -418,7 +419,7 @@ export function BackupStorage() {
           <h2>Credential references</h2>
           <dl className="kv">{REFS.map(([k, label]) => <div key={k} className="kv-row">
             <dt>{label.replace(/^Variable holding the /, "")}</dt>
-            <dd><span className="mono">{store.credentials?.[k]?.name ?? "—"}</span> {store.credential_status?.[k]?.available ? <Badge kind="ok">available here</Badge> : <Badge kind="warn">not set here</Badge>}</dd>
+            <dd><span className="mono">{store.credentials?.[k]?.type === "stored" ? "stored in MOKS" : store.credentials?.[k]?.name ?? store.credentials?.[k]?.path ?? "—"}</span> {store.credential_status?.[k]?.available ? <Badge kind="ok">available here</Badge> : <Badge kind="warn">not set here</Badge>}</dd>
           </div>)}</dl>
           <div className="small muted">Names of variables in the Kubernetes Secret. The values never pass through MOKS's database or this page.</div>
         </section>
@@ -430,7 +431,7 @@ export function BackupStorage() {
 
 function EditStorage({ store, onClose, onSaved }: { store: any; onClose: () => void; onSaved: () => void }) {
   const [f, setF] = useState({ account_id: store?.account_id ?? "", bucket: store?.bucket ?? "", prefix: store?.prefix ?? "clusters", jurisdiction: store?.jurisdiction ?? "default",
-    names: Object.fromEntries(REFS.map(([k]) => [k, store?.credentials?.[k]?.name ?? `MOKS_CRED_R2_${k.toUpperCase()}`])) as Record<string, string> });
+    creds: Object.fromEntries(REFS.map(([k]) => [k, store?.credentials?.[k] ? credFromRef(store.credentials[k]) : PASTE])) as Record<string, Cred> });
   const [error, setError] = useState<unknown>();
   const [busy, setBusy] = useState(false);
   const set = (patch: Partial<typeof f>) => setF({ ...f, ...patch });
@@ -439,8 +440,10 @@ function EditStorage({ store, onClose, onSaved }: { store: any; onClose: () => v
     setBusy(true);
     setError(null);
     try {
-      await api("/backups/store", { method: "PUT", body: { account_id: f.account_id, bucket: f.bucket, prefix: f.prefix, jurisdiction: f.jurisdiction,
-        credentials: Object.fromEntries(REFS.map(([k]) => [k, { type: "env", name: f.names[k] }])) } });
+      const credentials: Record<string, any> = {};
+      for (const [k, label] of REFS) credentials[k] = await saveCred(f.creds[k], `Backup storage: ${label}`);
+      setF({ ...f, creds: Object.fromEntries(REFS.map(([k]) => [k, credFromRef(credentials[k])])) as Record<string, Cred> });  // a retry reuses what was stored
+      await api("/backups/store", { method: "PUT", body: { account_id: f.account_id, bucket: f.bucket, prefix: f.prefix, jurisdiction: f.jurisdiction, credentials } });
       onSaved();
     } catch (err) { setError(err); setBusy(false); }
   }
@@ -454,10 +457,8 @@ function EditStorage({ store, onClose, onSaved }: { store: any; onClose: () => v
           <label>Jurisdiction<select value={f.jurisdiction} onChange={(e) => set({ jurisdiction: e.target.value })}><option value="default">Default</option><option value="eu">EU</option></select></label>
         </div>
       </FormSection>
-      <FormSection title="Credential references" help="Enter variable names here, not keys. The values go in the Kubernetes Secret, and this page never accepts them.">
-        <div className="form-grid">{REFS.map(([k, label]) => <label key={k}>{label}<input required pattern="MOKS_CRED_[A-Z0-9_]+" title="The name of a variable in the Secret, such as MOKS_CRED_R2_ACCESS_KEY_ID. Never the key itself." className="mono"
-          value={f.names[k]} onChange={(e) => set({ names: { ...f.names, [k]: e.target.value } })} />
-          {store && <span className="small">{store.credential_status?.[k]?.available ? "available here" : "not set here"}</span>}</label>)}</div>
+      <FormSection title="Credentials" help="Paste each value. MOKS stores them encrypted and never shows them again. Keep your own copy of the encryption key and the repository password as well: backups, including MOKS's own database backups, cannot be restored without them.">
+        <div className="form-grid">{REFS.map(([k, label]) => <CredentialInput key={k} label={label} value={f.creds[k]} onChange={(c) => set({ creds: { ...f.creds, [k]: c } })} envPlaceholder={`MOKS_CRED_R2_${k.toUpperCase()}`} />)}</div>
       </FormSection>
     </FormDrawer>
   );

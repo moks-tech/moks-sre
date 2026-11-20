@@ -179,7 +179,10 @@ async def list_models(cfg: LLMConfig, *, fresh: bool = False) -> dict[str, Any]:
     if lister is None:
         return {"models": [], "error": f"MOKS cannot list models for {cfg.provider}", "note": None}
     ref = cfg.credential_ref or {}
-    key = (cfg.provider, (cfg.endpoint or "").rstrip("/"), cfg.region or "", ref.get("type"), ref.get("name"), ref.get("path"))
+    from .. import credentials
+
+    key = (cfg.provider, (cfg.endpoint or "").rstrip("/"), cfg.region or "", ref.get("type"), ref.get("name"), ref.get("path"), ref.get("id"),
+           credentials.version(ref))  # a replaced key may see different models
     hit = _cache.get(key)
     if hit and not fresh and time.monotonic() - hit[0] < CACHE_SECONDS:
         return hit[1]

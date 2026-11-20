@@ -489,7 +489,7 @@ class PineconeBackend:
 
     def __init__(self, api_key: str | None, cloud: str = "aws", region: str = "us-east-1", transport: httpx.AsyncBaseTransport | None = None):
         if not api_key:
-            raise ConnectorError("config", "MOKS_CRED_PINECONE_API_KEY is required for the pinecone backend")
+            raise ConnectorError("config", "the pinecone backend needs its API key: paste it in Settings > Credentials (MOKS_CRED_PINECONE_API_KEY)")
         self.cloud, self.region = cloud, region
         self.client = httpx.AsyncClient(timeout=30, transport=transport, headers={"Api-Key": api_key, "X-Pinecone-Api-Version": self.API_VERSION})
         self._hosts: dict[str, str] = {}

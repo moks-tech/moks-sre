@@ -38,7 +38,7 @@ const MLInsights = page(ml, "MLInsights"), MLAdmin = page(ml, "MLAdmin");
 const CrewAIConsole = lazy(() => import("./pages/CrewAIConsole").then((m) => ({ default: m.CrewAIConsole })));
 const settings = () => import("./pages/Settings");
 const SettingsLayout = page(settings, "SettingsLayout"), SettingsOverview = page(settings, "SettingsOverview"), Features = page(settings, "Features"), RuntimeSettings = page(settings, "RuntimeSettings"),
-  Deployment = page(settings, "Deployment"), CrewAISettingsPage = page(settings, "CrewAISettingsPage"), SettingsNotFound = page(settings, "SettingsNotFound");
+  Deployment = page(settings, "Deployment"), CrewAISettingsPage = page(settings, "CrewAISettingsPage"), Credentials = page(settings, "Credentials"), SettingsNotFound = page(settings, "SettingsNotFound");
 
 /** Explains a page the role cannot use, instead of an empty page and a 403. The backend still decides. */
 function Need({ any, children }: { any: string[] | ((can: Can) => boolean); children: ReactNode }) {
@@ -97,6 +97,7 @@ export default function App() {
           <Route path="runtime" element={<Need any={["admin.settings"]}><RuntimeSettings /></Need>} />
           <Route path="deployment" element={<Need any={["admin.settings"]}><Deployment /></Need>} />
           <Route path="users" element={<Need any={["admin.users"]}><Users /></Need>} />
+          <Route path="credentials" element={<Need any={["admin.settings"]}><Credentials /></Need>} />
           <Route path="environments" element={<Need any={["admin.policies"]}><Environments /></Need>} />
           <Route path="connectors" element={<Need any={["admin.connectors"]}><Connectors /></Need>} />
           <Route path="backup-storage" element={<Need any={["admin.connectors"]}><BackupStorage /></Need>} />

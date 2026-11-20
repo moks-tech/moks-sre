@@ -356,8 +356,9 @@ digest key. Restart the executor afterwards.
 - **EKS:** give `moks-executor` a Pod Identity association (or IRSA) to a role with the policy in
   [examples/secrets-sync/iam-policy.json](examples/secrets-sync/iam-policy.json). Leave `credentials` out of the
   connector config.
-- **Minikube:** an IAM user (or a role it assumes) with the same policy, with its keys in `moks-secret-sync`,
-  referenced from the connector:
+- **Minikube:** an IAM user (or a role it assumes) with the same policy. Paste its keys into the connector form
+  (stored encrypted, [CREDENTIALS.md](CREDENTIALS.md); the API pod can then decrypt them too), or, to keep them
+  from the API, put them in `moks-secret-sync` and reference them from the connector:
   `"credentials": {"access_key_id": {"type": "env", "name": "MOKS_CRED_SECRETS_AWS_ACCESS_KEY_ID"}, "secret_access_key": {"type": "env", "name": "MOKS_CRED_SECRETS_AWS_SECRET_ACCESS_KEY"}}`.
 - **Another account:** set `role_arn` (and `external_id`) on the connector. The role must be in `account_id`.
   See [examples/secrets-sync/cross-account-trust.json](examples/secrets-sync/cross-account-trust.json).

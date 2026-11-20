@@ -32,7 +32,8 @@ NAME = re.compile(r"^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$")
 
 class CredentialRef(BaseModel):
     model_config = ConfigDict(extra="forbid")  # a pasted value has nowhere to go
-    type: Literal["env", "file"]
+    type: Literal["stored", "env", "file"]
+    id: str | None = Field(default=None, pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
     name: str | None = Field(default=None, pattern=r"^MOKS_CRED_[A-Z0-9_]{1,80}$")
     path: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_./-]{1,200}$")
 
@@ -50,8 +51,8 @@ class StoreIn(BaseModel):
         if set(v) != set(velero.CREDENTIAL_KEYS):
             raise ValueError(f"credentials must have exactly {', '.join(velero.CREDENTIAL_KEYS)}")
         for ref in v.values():
-            if (ref.type == "env") != bool(ref.name) or (ref.type == "file") != bool(ref.path):
-                raise ValueError("an env reference needs name, a file reference needs path")
+            if (ref.type == "env") != bool(ref.name) or (ref.type == "file") != bool(ref.path) or (ref.type == "stored") != bool(ref.id):
+                raise ValueError("a stored reference needs id, an env reference needs name, a file reference needs path")
         return v
 
 

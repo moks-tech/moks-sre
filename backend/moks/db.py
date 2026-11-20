@@ -48,6 +48,9 @@ async def get_db() -> AsyncIterator[AsyncSession]:
     Always declare it as Depends(get_db, scope="function") so the commit happens BEFORE the response
     is sent; with the default request scope a client could read before the write is committed
     (e.g. sign in, then get 401 from /auth/me)."""
+    from . import credentials
+
+    await credentials.refresh()  # throttled; another API replica may have just stored a credential this request uses
     async with session_scope() as session:
         yield session
 

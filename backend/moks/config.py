@@ -2,7 +2,8 @@
 
 Only deployment-level settings live here. Connectors, LLM providers, environments and
 role bindings are application data in PostgreSQL, managed through the admin API. Secrets
-are never stored in the database: rows hold *references* (see moks.connectors.credentials).
+are never stored in the database in clear: rows hold *references*, and a pasted value is stored encrypted
+(moks/credentials.py, docs/CREDENTIALS.md).
 """
 from __future__ import annotations
 
@@ -29,6 +30,10 @@ class Settings(BaseSettings):
     # Authentication: oidc | local | dev. dev is refused unless env=development.
     auth_mode: Literal["oidc", "local", "dev"] = "oidc"
     session_secret: str = Field(default="", repr=False)
+    # Encrypts credentials typed into Settings (moks/credentials.py). Empty: derived from session_secret, so changing
+    # that secret then needs the old value here as credentials_key_previous until Settings re-encrypts them.
+    credentials_key: str = Field(default="", repr=False)
+    credentials_key_previous: str = Field(default="", repr=False)
     session_idle_minutes: int = 480
     session_absolute_hours: int = 12
     cookie_secure: bool = True

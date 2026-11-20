@@ -7,6 +7,7 @@ import { useUrlFilters } from "../filters";
 import { fmtBytesMi, fmtCores, recsOf } from "../rightsizing";
 import { Drawer, Empty, Truncate, useFeedback } from "../ui";
 import { RIGHTSIZING_CSV, RightsizingList, rightsizingCsvRows } from "./Rightsizing";
+import { CredentialInput, credFromRef, NO_CRED, saveCred } from "../credentials";
 
 // ---- Knowledge ----------------------------------------------------------------------------------
 
@@ -195,17 +196,19 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
   function startEdit(s: any) {
     setEditing({ id: s.id, name: s.name, github: s.type === "github", web: s.type === "web", urls: (s.config?.urls ?? []).join("\n"), crawl: !!s.config?.crawl, maxPages: String(s.config?.max_pages ?? 50), repository: s.config?.repository, include: (s.config?.include ?? []).join(", "), profiles: s.config?.profiles ?? [], exclude: (s.config?.exclude ?? []).join(", "),
       scope_environment: s.scope_environment, scope_namespace: s.scope_namespace, owner: s.owner ?? "", service: s.service ?? "", enabled: s.enabled,
-      credType: s.credential_ref?.type === "env" ? "env" : "none", credName: s.credential_ref?.name ?? "" });
+      cred: credFromRef(s.credential_ref) });
   }
   async function saveEdit(e: FormEvent) {
     e.preventDefault();
     setError(null);
     const globs = (v: string) => v.split(/[\s,]+/).filter(Boolean);
     try {
+      const credential_ref = editing.github ? await saveCred(editing.cred, `GitHub token for knowledge source ${editing.name}`) : undefined;
+      if (editing.github) setEditing({ ...editing, cred: credFromRef(credential_ref) });
       await api(`/knowledge/sources/${editing.id}`, { method: "PUT", body: { scope_environment: editing.scope_environment, scope_namespace: editing.scope_namespace,
         owner: editing.owner || null, service: editing.service || null, enabled: editing.enabled,
         ...(editing.web ? { urls: parseUrls(editing.urls), crawl: editing.crawl, max_pages: Number(editing.maxPages) } : {}),
-        ...(editing.github ? { include: globs(editing.include), exclude: globs(editing.exclude), profiles: editing.profiles, credential_ref: editing.credType === "env" ? { type: "env", name: editing.credName } : { type: "none" } } : {}) } });
+        ...(editing.github ? { include: globs(editing.include), exclude: globs(editing.exclude), profiles: editing.profiles, credential_ref } : {}) } });
       setEditing(null); list.reload(); onChange();
     } catch (err) { setError(err); }
   }
@@ -262,8 +265,7 @@ function KnowledgeSources({ onChange }: { onChange: () => void }) {
         {editing.github && <div className="form-grid">
           <label>Include globs<input value={editing.include} onChange={(e) => ed("include", e.target.value)} placeholder="default set" /></label>
           <label>Exclude globs<input value={editing.exclude} onChange={(e) => ed("exclude", e.target.value)} /></label>
-          <label>Token<select value={editing.credType} onChange={(e) => ed("credType", e.target.value)}><option value="none">shared token, or none</option><option value="env">env variable</option></select></label>
-          {editing.credType === "env" && <label>Variable<input required pattern="MOKS_CRED_[A-Z0-9_]+" value={editing.credName} onChange={(e) => ed("credName", e.target.value)} placeholder="MOKS_CRED_GITHUB_TOKEN" /></label>}
+          <CredentialInput label="GitHub token" value={editing.cred} onChange={(c) => ed("cred", c)} none="Shared token, or none (public)" files={false} envPlaceholder="MOKS_CRED_GITHUB_TOKEN" />
         </div>}
         {editing.github && <Profiles value={editing.profiles} onChange={(v) => ed("profiles", v)} />}
         <div className="small muted">Indexed documents are kept. A new scope applies straight away; new include or exclude rules apply at the next sync, which removes files that no longer qualify. The value of a token is never entered here: this names the variable that holds it.</div>
@@ -297,7 +299,7 @@ export function suggestSourceName(type: SourceType, repository: string, urls: st
   return raw.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 100);
 }
 
-const NEW_SOURCE = { type: "github" as SourceType, name: "", named: false, repository: "", urls: "", crawl: false, maxPages: "50", credType: "none", credName: "",
+const NEW_SOURCE = { type: "github" as SourceType, name: "", named: false, repository: "", urls: "", crawl: false, maxPages: "50", cred: NO_CRED,
   everyone: false, scope_environment: "", scope_namespace: "*", classification: "internal", profiles: ["documentation", "infrastructure"] as string[],
   include: "", service: "", team: "", review: "", schedule: 1440 };
 
@@ -325,9 +327,11 @@ export function AddSource({ taken, onClose, onAdded }: { taken: string[]; onClos
     setError(null);
     setBusy(true);
     try {
+      const credential_ref = f.type === "github" ? await saveCred(f.cred, `GitHub token for knowledge source ${name}`) : undefined;
+      if (f.type === "github") set({ cred: credFromRef(credential_ref) });
       await api("/knowledge/sources", { method: "POST", body: { name, type: f.type, sync_interval_minutes: f.schedule,
         ...(f.type === "github" ? { repository: f.repository, profiles: f.profiles, include: globs(f.include), service: f.service || null,
-          credential_ref: f.credType === "env" ? { type: "env", name: f.credName } : { type: "none" } } : {}),
+          credential_ref } : {}),
         ...(f.type === "web" ? { urls: parseUrls(f.urls), crawl: f.crawl, max_pages: Number(f.maxPages) } : {}),
         shared_globally: everyone, scope_environment: everyone ? "*" : f.scope_environment || "*", scope_namespace: everyone ? "*" : f.scope_namespace || "*",
         classification: f.classification, team: f.team || null, review_interval_days: f.review ? Number(f.review) : null } });
@@ -357,8 +361,7 @@ export function AddSource({ taken, onClose, onAdded }: { taken: string[]; onClos
       <FormSection title={f.type === "github" ? "Repository" : f.type === "web" ? "Pages" : "Name"}>
         {f.type === "github" && <div className="form-grid">
           <label>Repository<input required autoFocus pattern={REPOSITORY} placeholder="owner/name" title="owner/name, as in github.com/owner/name" value={f.repository} onChange={(e) => set({ repository: e.target.value.trim() })} /></label>
-          <label>Access token<select value={f.credType} onChange={(e) => set({ credType: e.target.value })}><option value="none">None needed (public, or MOKS's shared token)</option><option value="env">From an environment variable</option></select></label>
-          {f.credType === "env" && <label>Variable holding the token<input required pattern="MOKS_CRED_[A-Z0-9_]+" placeholder="MOKS_CRED_GITHUB_TOKEN" value={f.credName} onChange={(e) => set({ credName: e.target.value })} /></label>}
+          <CredentialInput label="Access token" value={f.cred} onChange={(c) => set({ cred: c })} none="None needed (public, or MOKS's shared token)" files={false} envPlaceholder="MOKS_CRED_GITHUB_TOKEN" />
         </div>}
         {f.type === "web" && <WebFields urls={f.urls} crawl={f.crawl} maxPages={f.maxPages} onChange={(c) => set(c)} />}
         <div className="form-grid">

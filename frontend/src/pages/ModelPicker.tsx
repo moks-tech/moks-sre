@@ -7,9 +7,10 @@ interface Listing { models: ModelInfo[]; error: string | null; note: string | nu
 const TYPE = "__type__";
 
 /** Whether the connection is filled in far enough to ask the provider. */
-export function canList(provider: string, endpoint: string, credential: { type: string; name?: string }): boolean {
+export function canList(provider: string, endpoint: string, credential: { type: string; name?: string; id?: string }): boolean {
   if (endpoint && !/^https?:\/\/[^/\s]+/.test(endpoint)) return false;
   if (provider === "ollama" && !endpoint) return false;
+  if (credential.type === "stored") return !!credential.id;
   return credential.type !== "env" || /^MOKS_CRED_[A-Z0-9_]+$/.test(credential.name ?? "");
 }
 
@@ -22,7 +23,7 @@ function optionText(m: ModelInfo): string {
  *  as soon as the connection works, what the provider itself says this credential can use. The purpose being
  *  configured comes first, a long list has a filter, and a name the list lacks can still be typed. */
 export function ModelPicker({ provider, endpoint, region, credential, purpose, value, suggested = [], onChange }: {
-  provider: string; endpoint: string; region: string; credential: { type: string; name?: string }; purpose: string; value: string;
+  provider: string; endpoint: string; region: string; credential: { type: string; name?: string; id?: string }; purpose: string; value: string;
   suggested?: ModelInfo[]; onChange: (model: string, info?: ModelInfo) => void;
 }) {
   const [listing, setListing] = useState<Listing | null>(null);
@@ -31,7 +32,7 @@ export function ModelPicker({ provider, endpoint, region, credential, purpose, v
   const [filter, setFilter] = useState("");
   const seq = useRef(0);
   const ready = canList(provider, endpoint, credential);
-  const key = JSON.stringify([provider, endpoint, provider === "bedrock" ? region : "", credential.type, credential.name ?? ""]);
+  const key = JSON.stringify([provider, endpoint, provider === "bedrock" ? region : "", credential.type, credential.name ?? "", credential.id ?? ""]);
 
   async function load(fresh = false) {
     const n = ++seq.current;

@@ -53,6 +53,7 @@ docs/             Architecture, security/RBAC, connectors, operator guide, testi
 - [Architecture and design](docs/ARCHITECTURE.md): components, `/moks` path handling, investigation loop, data model, Phase 2–4 design
 - [Security, RBAC and policy](docs/SECURITY.md)
 - [Connectors and tool contracts](docs/CONNECTORS.md)
+- [Credentials](docs/CREDENTIALS.md): pasting keys into Settings, encryption, importing from the Kubernetes Secret
 - [Web terminal](docs/TERMINAL.md): isolation, credentials, operation and limits
 - [Operator guide](docs/OPERATOR_GUIDE.md): commands in implementation order, local development, backup/restore
 - [Demo incident lab](lab/README.md)

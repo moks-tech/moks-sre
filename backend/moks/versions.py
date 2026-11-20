@@ -23,10 +23,11 @@ def build() -> dict[str, str]:
 async def report(component: str, version: str | None = None) -> None:
     """`version` replaces MOKS's own: the CrewAI worker reports its crewai version as component "crewai".
     Every long-running process calls this periodically, so it is also where they pick up runtime settings."""
-    from . import runtime_settings
+    from . import credentials, runtime_settings
     from .skills import registry
 
     await runtime_settings.refresh()  # never raises: an unreadable table keeps what was applied last
+    await credentials.refresh()       # likewise
 
     b = build()
     skilled = component not in ("executor", "crewai")  # neither runs skills
