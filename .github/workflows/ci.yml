@@ -37,7 +37,7 @@ jobs:
   # On a pull request this is the gate before merging. On a push to the default branch it runs again on the commit
   # that will be released, because that commit (a merge, or a direct push) is not the one the pull request tested.
   check:
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     services:
       postgres:
@@ -116,7 +116,7 @@ jobs:
   # The default image, built on the architecture and with the commands release uses, so a Dockerfile or dependency
   # change that cannot build, start or pass the scan is found on the pull request and not after the merge.
   image:
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -141,7 +141,7 @@ jobs:
   # fakes; this installs the chart on kind with its NetworkPolicy, RBAC and bundled PostgreSQL, has MOKS investigate
   # a crash-looping lab workload without a model, and has the executor restart a Deployment through an action plan.
   e2e:
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -157,11 +157,11 @@ jobs:
           IMAGE: moks:e2e
         run: scripts/e2e-kind.sh
 
-  # The diagnostic image (arm64, the mk4 runners), its vulnerability scan, and real isolation checks on
+  # The diagnostic image (arm64, like the runners and mk4), its vulnerability scan, and real isolation checks on
   # kind, which runs the same network plugin as mk4. Runs when something the terminal depends on changes.
   terminal:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
@@ -206,7 +206,7 @@ jobs:
   release:
     needs: check   # must have passed on this commit: nothing untested is pushed as latest
     if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     permissions:
       contents: read
@@ -248,7 +248,7 @@ jobs:
   release-crewai:
     needs: [check, crewai]   # the suite on both dependency sets
     if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -293,7 +293,7 @@ jobs:
     # CrewAI worker, the only pod on that image) is not restarted and keeps its last build, and the job says so.
     needs: [release, release-crewai]
     if: ${{ !cancelled() && needs.release.result == 'success' && vars.MK4_DEPLOY == 'true' }}
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     concurrency:
       group: moks-deploy-mk4
@@ -310,7 +310,7 @@ jobs:
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.CF_ACCESS_CLIENT_SECRET }}
       # The CLI holds the token above, so it is checked against the release's cli_checksums.txt. Change both together.
       ARGOCD_VERSION: v3.5.6
-      ARGOCD_SHA256: db9d17b70593d3f86a4dcf08d9ebbb85a42e995426ac5f928b737260656102d3
+      ARGOCD_SHA256: 281aea75a1eaea15e2839f12626e78684f76099f09ffb0b05d35f64344ed1256
     steps:
       - name: Install the argocd CLI
         run: |
@@ -319,7 +319,7 @@ jobs:
             # argocd splits each --header at its first ":" and keeps the rest as is: no space after the colon.
             echo "ARGOCD_OPTS=$ARGOCD_OPTS --header CF-Access-Client-Id:$CF_ACCESS_CLIENT_ID --header CF-Access-Client-Secret:$CF_ACCESS_CLIENT_SECRET" >> "$GITHUB_ENV"
           fi
-          curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/download/$ARGOCD_VERSION/argocd-linux-amd64"
+          curl -fsSL -o /usr/local/bin/argocd "https://github.com/argoproj/argo-cd/releases/download/$ARGOCD_VERSION/argocd-linux-arm64"
           echo "$ARGOCD_SHA256  /usr/local/bin/argocd" | sha256sum --check --strict
           chmod +x /usr/local/bin/argocd
           argocd version --client --short
@@ -369,7 +369,7 @@ jobs:
           echo "::error::https://jithendar.com/moks/api/health does not report ${{ github.sha }}"; exit 1
 
   crewai:
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     services:
       postgres:
@@ -397,7 +397,7 @@ jobs:
           python -m pytest -q
 
   reranker:
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -413,7 +413,7 @@ jobs:
   reranker-image:
     if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     needs: [reranker]
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -466,7 +466,7 @@ jobs:
   embedder-image:
     if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
     needs: [reranker]
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     permissions:
       contents: read
@@ -520,7 +520,7 @@ jobs:
   # Built and pushed on every push to the default branch as moks-terminal:latest. Each new session pulls it.
   terminal-image:
     if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-    runs-on: mk4
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 25
     permissions:
       contents: read
